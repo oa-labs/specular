@@ -8,8 +8,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.ui.Modifier
 import androidx.navigation.compose.rememberNavController
-import com.reflect.android.ui.navigation.ReflectNavGraph
-import com.reflect.android.ui.theme.ReflectTheme
+import com.reflect.android.ui.navigation.SpecularNavGraph
+import com.reflect.android.ui.theme.SpecularTheme
 import dagger.hilt.android.AndroidEntryPoint
 
 @AndroidEntryPoint
@@ -17,10 +17,10 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            ReflectTheme {
+            SpecularTheme {
                 Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
                     val navController = rememberNavController()
-                    ReflectNavGraph(navController = navController)
+                    SpecularNavGraph(navController = navController)
                 }
             }
         }

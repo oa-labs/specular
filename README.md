@@ -1,4 +1,4 @@
-# Reflect for Android
+# Specular for Android
 
 GMS-free, local-first Markdown notes synced via GitHub — companion to [team-reflect/reflect-open](https://github.com/team-reflect/reflect-open).
 
@@ -7,8 +7,10 @@ See [`docs/reflect-contract.md`](docs/reflect-contract.md) for the GitHub repo f
 ## Project
 
 - `specular/` is the Android project root (this directory).
-- Package: `com.reflect.android`
-- minSdk 26, target 35, Compose + Material 3 + Reflect accent `#D97706`, no Play Services (`gmsFree` flavor).
+- Package: `com.specular.android`
+- minSdk 26, target 35, Compose + Material 3 + amber accent (`#D97706`), no Play Services (`gmsFree` flavor).
+
+**Note:** Specular is an Android application that works with a Reflect backend (via GitHub sync).
 
 ## Build
 
@@ -35,7 +37,7 @@ SDK at `/opt/android-sdk` (`local.properties` already set). JDK 17+ required.
 ```
 app/src/main/java/com/reflect/android/
   ui/           Compose screens (List, Detail, Editor + camera/gallery → assets/, Search, Settings, Onboarding)
-  ui/theme/     ReflectTheme (light/dark, accent #D97706 on neutral #1A1A1E)
+  ui/theme/     SpecularTheme (light/dark, accent #D97706 on neutral #1A1A1E)
   domain/model/ Note, NoteListItem
   data/local/   Room (notes + FTS), FileStore (filesDir/notes/), FrontmatterParser
   data/remote/  GitHubApi (Retrofit + Moshi, no GMS), GitHubAuth (EncryptedSharedPreferences)

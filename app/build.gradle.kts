@@ -8,11 +8,11 @@ plugins {
 }
 
 android {
-    namespace = "com.reflect.android"
+    namespace = "com.specular.android"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.reflect.android"
+        applicationId = "com.specular.android"
         minSdk = 26
         targetSdk = 35
         versionCode = 1

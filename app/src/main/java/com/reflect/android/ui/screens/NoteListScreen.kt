@@ -19,6 +19,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavController
 import com.reflect.android.ui.navigation.Screen
 
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun NoteListScreen(navController: NavController, vm: NoteListViewModel = hiltViewModel()) {
@@ -28,7 +29,7 @@ fun NoteListScreen(navController: NavController, vm: NoteListViewModel = hiltVie
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Reflect") },
+                title = { Text("Specular") },
                 actions = {
                     if (isSyncing) CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
                     IconButton(onClick = { vm.sync() }) { Icon(Icons.Default.Refresh, "Sync") }

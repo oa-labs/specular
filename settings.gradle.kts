@@ -14,5 +14,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "Reflect"
+rootProject.name = "specular"
 include(":app")

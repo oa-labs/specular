@@ -4,7 +4,7 @@ import android.content.Context
 import androidx.room.Room
 import androidx.work.WorkManager
 import com.reflect.android.data.local.FileStore
-import com.reflect.android.data.local.ReflectDatabase
+import com.reflect.android.data.local.SpecularDatabase
 import com.reflect.android.data.remote.GitHubApi
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
@@ -43,12 +43,12 @@ object AppModule {
             .create(GitHubApi::class.java)
 
     @Provides @Singleton
-    fun provideDatabase(@ApplicationContext context: Context): ReflectDatabase =
-        Room.databaseBuilder(context, ReflectDatabase::class.java, "reflect.db")
+    fun provideDatabase(@ApplicationContext context: Context): SpecularDatabase =
+        Room.databaseBuilder(context, SpecularDatabase::class.java, "reflect.db")
             .fallbackToDestructiveMigration()
             .build()
 
-    @Provides fun provideNoteDao(db: ReflectDatabase) = db.noteDao()
+    @Provides fun provideNoteDao(db: SpecularDatabase) = db.noteDao()
 
     @Provides @Singleton
     fun provideFileStore(@ApplicationContext context: Context) = FileStore(context)

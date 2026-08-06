@@ -8,6 +8,6 @@ import androidx.room.RoomDatabase
     version = 1,
     exportSchema = false
 )
-abstract class ReflectDatabase : RoomDatabase() {
+abstract class SpecularDatabase : RoomDatabase() {
     abstract fun noteDao(): NoteDao
 }

@@ -6,29 +6,29 @@ import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 
 private val LightColors = lightColorScheme(
-    primary = ReflectAccent,
-    onPrimary = ReflectOnAccent,
-    primaryContainer = ReflectAccentDark,
-    secondary = ReflectNeutral,
-    onSecondary = ReflectOnNeutral,
-    surface = ReflectSurface,
-    onSurface = ReflectNeutral,
-    surfaceVariant = ReflectSurfaceVariant,
-    error = ReflectError
+    primary = SpecularAccent,
+    onPrimary = SpecularOnAccent,
+    primaryContainer = SpecularAccentDark,
+    secondary = SpecularNeutral,
+    onSecondary = SpecularOnNeutral,
+    surface = SpecularSurface,
+    onSurface = SpecularNeutral,
+    surfaceVariant = SpecularSurfaceVariant,
+    error = SpecularError
 )
 
 private val DarkColors = darkColorScheme(
-    primary = ReflectAccent,
-    onPrimary = ReflectOnAccent,
-    primaryContainer = ReflectAccentDark,
-    secondary = ReflectNeutral,
-    surface = ReflectNeutral,
-    onSurface = ReflectSurface,
-    error = ReflectError
+    primary = SpecularAccent,
+    onPrimary = SpecularOnAccent,
+    primaryContainer = SpecularAccentDark,
+    secondary = SpecularNeutral,
+    surface = SpecularNeutral,
+    onSurface = SpecularSurface,
+    error = SpecularError
 )
 
 @Composable
-fun ReflectTheme(
+fun SpecularTheme(
     darkTheme: Boolean = false,
     content: @Composable () -> Unit
 ) {

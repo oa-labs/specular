@@ -1,3 +1,3 @@
-# Keep reflect models
--keep class com.reflect.android.** { *; }
+# Keep Specular models
+-keep class com.specular.android.** { *; }
 -dontwarn io.noties.markwon.**

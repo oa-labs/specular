@@ -2,11 +2,11 @@ package com.reflect.android.ui.theme
 
 import androidx.compose.ui.graphics.Color
 
-val ReflectAccent = Color(0xFFD97706)
-val ReflectAccentDark = Color(0xFFB45309)
-val ReflectNeutral = Color(0xFF1A1A1E)
-val ReflectSurface = Color(0xFFFFFBEB)
-val ReflectSurfaceVariant = Color(0xFFF3F4F6)
-val ReflectError = Color(0xFFB3261E)
-val ReflectOnAccent = Color.White
-val ReflectOnNeutral = Color.White
+val SpecularAccent = Color(0xFFD97706)
+val SpecularAccentDark = Color(0xFFB45309)
+val SpecularNeutral = Color(0xFF1A1A1E)
+val SpecularSurface = Color(0xFFFFFBEB)
+val SpecularSurfaceVariant = Color(0xFFF3F4F6)
+val SpecularError = Color(0xFFB3261E)
+val SpecularOnAccent = Color.White
+val SpecularOnNeutral = Color.White
