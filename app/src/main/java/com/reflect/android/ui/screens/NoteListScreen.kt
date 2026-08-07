@@ -62,7 +62,10 @@ fun NoteListScreen(navController: NavController, vm: NoteListViewModel = hiltVie
 
             if (notes.isEmpty()) {
                 Box(modifier = Modifier.fillMaxSize().weight(1f), contentAlignment = androidx.compose.ui.Alignment.Center) {
-                    Column(horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally) {
+                    Column(
+                        modifier = Modifier.padding(horizontal = 24.dp),
+                        horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally
+                    ) {
                         Text("No notes yet", style = MaterialTheme.typography.headlineSmall)
                         Text(
                             "Pull to sync from your GitHub repository or tap + to create one.",
