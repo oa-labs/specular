@@ -34,7 +34,7 @@ class NoteRepository @Inject constructor(
                 id = e.id,
                 title = e.title,
                 path = e.path,
-                snippet = e.snippet,
+                snippet = FrontmatterParser.snippetOrEmpty(e.body, e.snippet),
                 isDaily = e.isDaily,
                 isDirty = e.isDirty,
                 isConflict = e.isConflict
@@ -58,7 +58,7 @@ class NoteRepository @Inject constructor(
                 rawMarkdown = raw,
                 body = parsed.body,
                 aliases = parsed.aliases.toString(),
-                snippet = parsed.snippet,
+                snippet = FrontmatterParser.snippetOrEmpty(parsed.body, parsed.snippet),
                 isDaily = path.startsWith("daily/")
             ) ?: NoteEntity(
                 id = id,
@@ -67,7 +67,7 @@ class NoteRepository @Inject constructor(
                 rawMarkdown = raw,
                 body = parsed.body,
                 aliases = parsed.aliases.toString(),
-                snippet = parsed.snippet,
+                snippet = FrontmatterParser.snippetOrEmpty(parsed.body, parsed.snippet),
                 isDaily = path.startsWith("daily/"),
                 lastRemoteSha = null,
                 isDirty = false,
@@ -87,7 +87,7 @@ class NoteRepository @Inject constructor(
             path = e.path,
             rawMarkdown = e.rawMarkdown,
             bodyMarkdown = e.body,
-            snippet = e.snippet,
+            snippet = FrontmatterParser.snippetOrEmpty(e.body, e.snippet),
             aliases = e.aliases.removeSurrounding("[", "]").split(",").map { it.trim().removeSurrounding("\"") }.filter { it.isNotEmpty() },
             isDaily = e.isDaily,
             lastRemoteSha = e.lastRemoteSha,
@@ -154,7 +154,7 @@ class NoteRepository @Inject constructor(
     fun search(query: String): Flow<List<NoteListItem>> {
         return if (query.length >= 2) {
             dao.searchLike(query).map { list ->
-                list.map { e -> NoteListItem(e.id, e.title, e.path, e.snippet, e.isDaily, e.isDirty, e.isConflict) }
+                list.map { e -> NoteListItem(e.id, e.title, e.path, FrontmatterParser.snippetOrEmpty(e.body, e.snippet), e.isDaily, e.isDirty, e.isConflict) }
             }
         } else {
             observeNotes()
@@ -163,7 +163,6 @@ class NoteRepository @Inject constructor(
 
     /** Generates and persists a snippet. Existing snippets are kept unless [force] is true. */
     suspend fun generateSnippet(id: String, force: Boolean = false): Boolean = withContext(Dispatchers.IO) {
-        val config = aiSettings.config.value ?: return@withContext false
         val entity = dao.getById(id) ?: return@withContext false
         val parsed = FrontmatterParser.parse(entity.path, entity.rawMarkdown)
         if (!force && !parsed.snippet.isNullOrBlank()) {
@@ -171,10 +170,13 @@ class NoteRepository @Inject constructor(
             return@withContext false
         }
 
-        val content = parsed.body
-            .replaceFirst(Regex("^#\\s+.+(?:\\r?\\n|$)"), "")
-            .trim()
-        val snippet = snippetGenerator.generate(config, content)
+        val content = FrontmatterParser.aiSnippetContent(parsed.body)
+        val snippet = if (FrontmatterParser.isEmptySnippetContent(content)) {
+            FrontmatterParser.EMPTY_NOTE_SNIPPET
+        } else {
+            val config = aiSettings.config.value ?: return@withContext false
+            snippetGenerator.generate(config, content)
+        }
         val raw = FrontmatterParser.upsertSnippet(entity.path, entity.rawMarkdown, snippet)
         fileStore.write(entity.path, raw)
         dao.upsert(

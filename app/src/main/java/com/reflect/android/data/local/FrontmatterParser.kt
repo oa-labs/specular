@@ -15,6 +15,8 @@ package com.specular.android.data.local
  */
 object FrontmatterParser {
 
+    const val EMPTY_NOTE_SNIPPET = "Empty Note"
+
     data class Parsed(
         val id: String?,
         val aliases: List<String>,
@@ -28,11 +30,38 @@ object FrontmatterParser {
     private val idRegex = Regex("""^\s*id:\s*(\S+)\s*$""", RegexOption.MULTILINE)
     private val titleRegex = Regex("""^#\s+(.+)$""", RegexOption.MULTILINE)
     private val snippetRegex = Regex("""^\s*snippet:\s*(.*?)\s*$""", RegexOption.MULTILINE)
+    private val typeLineRegex = Regex("^(?:[-*+]\\s+)?Type:\\s*(?:#[\\w-]+\\s*)+$", RegexOption.IGNORE_CASE)
 
     /** Returns the stable local identity used when a legacy file has no id metadata. */
     fun identityFor(path: String, id: String?): String =
         id?.trim()?.takeIf { it.isNotEmpty() }
             ?: if (path.startsWith("daily/")) path else path.removeSuffix(".md")
+
+    /** Removes the title before content is sent to the snippet generator. */
+    fun snippetContent(body: String): String =
+        body.replaceFirst(Regex("^#\\s+.+(?:\\r?\\n|$)"), "").trim()
+
+    /** Removes generated type metadata before content is sent to the AI provider. */
+    fun aiSnippetContent(body: String): String =
+        snippetContent(body).lineSequence()
+            .filterNot { typeLineRegex.matches(it.trim()) }
+            .joinToString("\n")
+            .trim()
+
+    /**
+     * Reflect writes a type line for some notes. A note containing only that
+     * generated metadata has no subject for an AI preview to summarize.
+     */
+    fun isEmptySnippetContent(content: String): Boolean {
+        return content.lineSequence()
+            .map(String::trim)
+            .filter(String::isNotEmpty)
+            .none { !typeLineRegex.matches(it) }
+    }
+
+    fun snippetOrEmpty(body: String, snippet: String?): String? =
+        snippet?.takeIf { it.isNotBlank() }
+            ?: EMPTY_NOTE_SNIPPET.takeIf { isEmptySnippetContent(snippetContent(body)) }
 
     /** Adds or replaces only the id field in an existing frontmatter block. */
     fun upsertIdInFrontmatter(frontmatter: String, id: String): String {

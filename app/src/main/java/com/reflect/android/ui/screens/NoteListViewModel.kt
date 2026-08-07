@@ -30,6 +30,9 @@ class NoteListViewModel @Inject constructor(
     private val _isSyncing = MutableStateFlow(false)
     val isSyncing: StateFlow<Boolean> = _isSyncing
 
+    private val _syncMessage = MutableStateFlow<String?>(null)
+    val syncMessage: StateFlow<String?> = _syncMessage
+
     private val snippetJobs = mutableSetOf<String>()
 
     init {
@@ -59,6 +62,7 @@ class NoteListViewModel @Inject constructor(
 
     fun sync() {
         _isSyncing.value = true
+        _syncMessage.value = null
         val req = OneTimeWorkRequestBuilder<SyncWorker>().build()
         workManager.enqueue(req)
 
@@ -66,6 +70,12 @@ class NoteListViewModel @Inject constructor(
             workManager.getWorkInfoByIdFlow(req.id).collect { info ->
                 if (info?.state?.isFinished == true) {
                     _isSyncing.value = false
+                    _syncMessage.value = if (info.state == WorkInfo.State.FAILED) {
+                        info.outputData.getString(SyncWorker.ERROR_MESSAGE)
+                            ?: "Sync failed. Please check your GitHub settings and try again."
+                    } else {
+                        null
+                    }
                 }
             }
         }

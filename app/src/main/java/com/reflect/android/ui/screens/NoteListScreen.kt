@@ -26,6 +26,7 @@ import com.specular.android.ui.screens.NoteListViewModel
 fun NoteListScreen(navController: NavController, vm: NoteListViewModel = hiltViewModel()) {
     val notes by vm.notes.collectAsState()
     val isSyncing by vm.isSyncing.collectAsState()
+    val syncMessage by vm.syncMessage.collectAsState()
 
     Scaffold(
         topBar = {
@@ -45,38 +46,53 @@ fun NoteListScreen(navController: NavController, vm: NoteListViewModel = hiltVie
             }
         }
     ) { padding ->
-        if (notes.isEmpty()) {
-            Box(modifier = Modifier.fillMaxSize().padding(padding), contentAlignment = androidx.compose.ui.Alignment.Center) {
-                Column(horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally) {
-                    Text("No notes yet", style = MaterialTheme.typography.headlineSmall)
+        Column(modifier = Modifier.fillMaxSize().padding(padding)) {
+            syncMessage?.let { message ->
+                Card(
+                    modifier = Modifier.fillMaxWidth().padding(16.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)
+                ) {
                     Text(
-                        "Pull to sync from your GitHub repository or tap + to create one.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        modifier = Modifier.padding(top = 8.dp)
+                        message,
+                        modifier = Modifier.padding(12.dp),
+                        color = MaterialTheme.colorScheme.onErrorContainer
                     )
-                    if (isSyncing) {
-                        CircularProgressIndicator(modifier = Modifier.padding(top = 16.dp))
-                    }
                 }
             }
-        } else {
-            LazyColumn(modifier = Modifier.fillMaxSize().padding(padding)) {
-                items(notes, key = { it.id }) { item ->
-                    ListItem(
-                        headlineContent = { Text(item.title) },
-                        supportingContent = {
-                            if (!item.snippet.isNullOrBlank()) Text(item.snippet, maxLines = 2)
-                        },
-                        trailingContent = {
-                            Row {
-                                if (item.isDirty) Badge { Text("•") }
-                                if (item.isConflict) Badge(containerColor = MaterialTheme.colorScheme.error) { Text("!") }
-                                if (item.isDaily) Text(" daily", style = MaterialTheme.typography.labelSmall)
-                            }
-                        },
-                        modifier = Modifier.clickable { navController.navigate(Screen.Detail.routeFor(item.id)) }
-                    )
-                    HorizontalDivider()
+
+            if (notes.isEmpty()) {
+                Box(modifier = Modifier.fillMaxSize().weight(1f), contentAlignment = androidx.compose.ui.Alignment.Center) {
+                    Column(horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally) {
+                        Text("No notes yet", style = MaterialTheme.typography.headlineSmall)
+                        Text(
+                            "Pull to sync from your GitHub repository or tap + to create one.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            modifier = Modifier.padding(top = 8.dp)
+                        )
+                        if (isSyncing) {
+                            CircularProgressIndicator(modifier = Modifier.padding(top = 16.dp))
+                        }
+                    }
+                }
+            } else {
+                LazyColumn(modifier = Modifier.fillMaxSize().weight(1f)) {
+                    items(notes, key = { it.id }) { item ->
+                        ListItem(
+                            headlineContent = { Text(item.title) },
+                            supportingContent = {
+                                if (!item.snippet.isNullOrBlank()) Text(item.snippet, maxLines = 2)
+                            },
+                            trailingContent = {
+                                Row {
+                                    if (item.isDirty) Badge { Text("•") }
+                                    if (item.isConflict) Badge(containerColor = MaterialTheme.colorScheme.error) { Text("!") }
+                                    if (item.isDaily) Text(" daily", style = MaterialTheme.typography.labelSmall)
+                                }
+                            },
+                            modifier = Modifier.clickable { navController.navigate(Screen.Detail.routeFor(item.id)) }
+                        )
+                        HorizontalDivider()
+                    }
                 }
             }
         }

@@ -19,11 +19,67 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.mockito.Mockito.mock
+import org.mockito.Mockito.never
 import org.mockito.Mockito.verify
+import org.mockito.Mockito.verifyNoInteractions
 import org.mockito.Mockito.`when`
 import java.util.Base64
 
 class SyncEngineTest {
+    @Test
+    fun pullDoesNotOverwriteDirtyNoteWhenRemoteShaIsUnchanged() = runTest {
+        val api = mock(GitHubApi::class.java)
+        val auth = mock(GitHubAuth::class.java)
+        val fileStore = mock(FileStore::class.java)
+        val upserted = mutableListOf<NoteEntity>()
+        val local = NoteEntity(
+            id = "01local-note",
+            title = "Local note",
+            path = "local.md",
+            rawMarkdown = "# Local edit",
+            body = "# Local edit",
+            aliases = "[]",
+            isDaily = false,
+            lastRemoteSha = "same-sha",
+            isDirty = true
+        )
+        val dao = object : NoteDao {
+            override fun observeAll(): Flow<List<NoteEntity>> = emptyFlow()
+            override suspend fun getById(id: String): NoteEntity? = null
+            override suspend fun getByPath(path: String): NoteEntity? = local
+            override suspend fun getDirty(): List<NoteEntity> = listOf(local)
+            override suspend fun upsert(entity: NoteEntity) { upserted += entity }
+            override suspend fun upsertAll(entities: List<NoteEntity>) { upserted += entities }
+            override suspend fun deleteById(id: String) = Unit
+            override fun searchFts(query: String): Flow<List<NoteEntity>> = emptyFlow()
+            override fun searchLike(q: String): Flow<List<NoteEntity>> = emptyFlow()
+            override suspend fun markDirty(id: String, dirty: Boolean, sha: String?) = Unit
+        }
+
+        `when`(auth.authHeader()).thenReturn("Bearer token")
+        `when`(auth.repoOwner).thenReturn("owner")
+        `when`(auth.repoName).thenReturn("repo")
+        `when`(api.getRepo("owner", "repo", "Bearer token"))
+            .thenReturn(RepoResponse(1L, "repo", "owner/repo", false, "main", Owner("owner")))
+        `when`(api.getRef("owner", "repo", "main", "Bearer token"))
+            .thenReturn(RefResponse("refs/heads/main", RefObject("commit-sha", "commit")))
+        `when`(api.getTree("owner", "repo", "commit-sha", "Bearer token", 1))
+            .thenReturn(
+                TreeResponse(
+                    sha = "tree-sha",
+                    tree = listOf(TreeEntry("local.md", "100644", "blob", "same-sha")),
+                    truncated = false
+                )
+            )
+
+        val result = SyncEngine(api, auth, dao, fileStore).pull()
+
+        assertTrue(result is SyncEngine.Result.Success)
+        assertTrue(upserted.isEmpty())
+        verify(api, never()).getContent("owner", "repo", "local.md", "Bearer token", "main")
+        verifyNoInteractions(fileStore)
+    }
+
     @Test
     fun pullIndexesRemoteMarkdownInRoom() = runTest {
         val api = mock(GitHubApi::class.java)

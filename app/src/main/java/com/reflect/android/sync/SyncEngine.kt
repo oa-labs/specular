@@ -1,5 +1,6 @@
 package com.specular.android.sync
 
+import android.util.Log
 import com.specular.android.data.local.FileStore
 import com.specular.android.data.local.FrontmatterParser
 import com.specular.android.data.local.NoteDao
@@ -10,6 +11,8 @@ import com.specular.android.data.remote.PutContentRequest
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.util.Base64
+import retrofit2.HttpException
+import java.io.IOException
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -45,7 +48,9 @@ class SyncEngine @Inject constructor(
             for (entry in tree.tree) {
                 if (entry.type != "blob" || !entry.path.endsWith(".md")) continue
                 val local = dao.getByPath(entry.path)
-                if (local?.lastRemoteSha == entry.sha && !local.isDirty) continue
+                // A matching remote SHA means the remote has not changed. Keep a dirty
+                // local copy intact so the subsequent push can publish it.
+                if (local?.lastRemoteSha == entry.sha) continue
 
                 val contentResponse = api.getContent(owner, repo, entry.path, header, ref = branch)
                 val raw = contentResponse.content?.let { b64 ->
@@ -66,7 +71,7 @@ class SyncEngine @Inject constructor(
                             rawMarkdown = raw,
                             body = parsed.body,
                             aliases = parsed.aliases.toString(),
-                            snippet = parsed.snippet,
+                            snippet = FrontmatterParser.snippetOrEmpty(parsed.body, parsed.snippet),
                             isDaily = conflictPath.startsWith("daily/"),
                             lastRemoteSha = entry.sha,
                             isConflict = true
@@ -85,7 +90,7 @@ class SyncEngine @Inject constructor(
                         rawMarkdown = raw,
                         body = parsed.body,
                         aliases = parsed.aliases.toString(),
-                        snippet = parsed.snippet,
+                        snippet = FrontmatterParser.snippetOrEmpty(parsed.body, parsed.snippet),
                         isDaily = entry.path.startsWith("daily/"),
                         lastRemoteSha = entry.sha,
                         isDirty = false,
@@ -106,6 +111,7 @@ class SyncEngine @Inject constructor(
         val branch = api.getRepo(owner, repo, header).default_branch
         val dirty = dao.getDirty()
         if (dirty.isEmpty()) return@withContext Result.Success
+        var failedPushes = 0
         for (e in dirty) {
             val raw = fileStore.read(e.path) ?: e.rawMarkdown
             val b64 = Base64.getEncoder().encodeToString(raw.toByteArray(Charsets.UTF_8))
@@ -123,12 +129,21 @@ class SyncEngine @Inject constructor(
                 fileStore.write(e.path, raw)
                 dao.upsert(e.copy(lastRemoteSha = newSha, isDirty = false, isConflict = false))
             } catch (ex: Exception) {
+                failedPushes++
+                logPushFailure(e.path, ex)
                 // 409/422 means sha mismatch — leave dirty for next pull to create conflict
-                if (ex.message?.contains("409") == true || ex.message?.contains("422") == true) {
+                val statusCode = (ex as? HttpException)?.code()
+                if (statusCode == 409 || statusCode == 422) {
                     continue
                 }
-                return@withContext Result.Error(ex.message ?: ex.toString())
+                return@withContext Result.Error(userFacingPushError(ex))
             }
+        }
+        if (failedPushes > 0) {
+            return@withContext Result.Error(
+                "Some notes could not be pushed because the remote changed. " +
+                    "Review the conflict copies and try syncing again."
+            )
         }
         Result.Success
     }
@@ -138,5 +153,33 @@ class SyncEngine @Inject constructor(
         if (pullResult is Result.Error) return pullResult
         if (pullResult is Result.NotConfigured) return pullResult
         return push()
+    }
+
+    private fun logPushFailure(path: String, error: Exception) {
+        val httpError = error as? HttpException
+        val status = httpError?.code()?.toString() ?: "unknown"
+        val responseBody = httpError?.response()?.errorBody()?.string()
+            ?.replace(Regex("\\s+"), " ")
+            ?.take(2000)
+        Log.e(
+            TAG,
+            "GitHub PUT failed path=$path status=$status response=${responseBody ?: "<none>"}",
+            error
+        )
+    }
+
+    private fun userFacingPushError(error: Exception): String {
+        return when {
+            (error as? HttpException)?.code() == 401 || (error as? HttpException)?.code() == 403 ->
+                "Unable to push notes to GitHub. Check that your PAT has Contents: Read and write permission for this repository."
+            error is IOException ->
+                "Unable to reach GitHub to push notes. Check your internet connection and try again."
+            else ->
+                "Unable to push notes to GitHub. Check your PAT permissions and try again."
+        }
+    }
+
+    companion object {
+        private const val TAG = "SyncEngine"
     }
 }

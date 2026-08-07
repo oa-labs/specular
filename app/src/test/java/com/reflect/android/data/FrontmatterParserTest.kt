@@ -21,6 +21,37 @@ id: 01kxp66n18p7vt6b5rsmd1taqy
         assertEquals("Barry Kaufman", p.title)
     }
 
+    @Test fun typeOnlyNoteGetsEmptySnippetWithoutNeedingAi() {
+        val raw = """
+            ---
+            id: 01kxp66mygrnkxxq3wy79v1b1k
+            ---
+            # jackie@pennywise.tax
+
+            - Type: #person
+        """.trimIndent()
+
+        val p = FrontmatterParser.parse("jackie-pennywise-tax.md", raw)
+
+        assertEquals(
+            FrontmatterParser.EMPTY_NOTE_SNIPPET,
+            FrontmatterParser.snippetOrEmpty(p.body, p.snippet)
+        )
+        assertTrue(FrontmatterParser.isEmptySnippetContent(FrontmatterParser.snippetContent(p.body)))
+    }
+
+    @Test fun removesTypeMetadataBeforeAiSnippetGeneration() {
+        val body = "# A person\n\n- Type: #person\n\nMet at the conference."
+
+        assertEquals("Met at the conference.", FrontmatterParser.aiSnippetContent(body))
+    }
+
+    @Test fun substantiveNoteIsNotClassifiedAsEmpty() {
+        val body = "# A person\n\n- Type: #person\n\nMet at the conference."
+
+        assertEquals(null, FrontmatterParser.snippetOrEmpty(body, null))
+    }
+
     @Test fun parsesAliases() {
         val raw = """
 ---
