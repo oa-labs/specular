@@ -161,12 +161,12 @@ class NoteRepository @Inject constructor(
         }
     }
 
-    /** Generates and persists one missing snippet. Returns false when no work was done. */
-    suspend fun generateSnippet(id: String): Boolean = withContext(Dispatchers.IO) {
+    /** Generates and persists a snippet. Existing snippets are kept unless [force] is true. */
+    suspend fun generateSnippet(id: String, force: Boolean = false): Boolean = withContext(Dispatchers.IO) {
         val config = aiSettings.config.value ?: return@withContext false
         val entity = dao.getById(id) ?: return@withContext false
         val parsed = FrontmatterParser.parse(entity.path, entity.rawMarkdown)
-        if (!parsed.snippet.isNullOrBlank()) {
+        if (!force && !parsed.snippet.isNullOrBlank()) {
             if (entity.snippet != parsed.snippet) dao.upsert(entity.copy(snippet = parsed.snippet))
             return@withContext false
         }

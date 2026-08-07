@@ -6,6 +6,7 @@ import com.specular.android.data.repo.NoteRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -44,6 +45,13 @@ class EditorViewModel @Inject constructor(private val repo: NoteRepository) : Vi
                     repo.createNote(_title.value.ifBlank { "Untitled" }, _body.value).id
                 } else {
                     repo.updateNote(editingId!!, newTitle = _title.value, newBody = _body.value).id
+                }
+                try {
+                    repo.generateSnippet(id, force = true)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                    // The edit is already saved; snippet generation can be retried later.
                 }
                 onDone(id)
             } finally { _saving.value = false }

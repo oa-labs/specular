@@ -11,10 +11,13 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -58,6 +61,27 @@ fun NoteDetailScreen(
             }
         } else {
             Column(modifier = Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()).padding(16.dp)) {
+                val isRegenerating by vm.isRegenerating.collectAsState()
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = n.snippet ?: "No snippet available",
+                        fontStyle = FontStyle.Italic,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.weight(1f)
+                    )
+                    if (isRegenerating) {
+                        CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                    } else {
+                        IconButton(onClick = { vm.regenerateSnippet(id) }) {
+                            Icon(Icons.Default.Refresh, contentDescription = "Regenerate snippet")
+                        }
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
                 if (n.isConflict) {
                     Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)) {
                         Text("Conflict — this note has a conflicting copy. Resolve in editor.", modifier = Modifier.padding(12.dp))
@@ -65,13 +89,19 @@ fun NoteDetailScreen(
                     Spacer(Modifier.height(12.dp))
                 }
                 // Render markdown in chunks so inline images can continue to use Coil.
+                // The title is already shown in the app bar; avoid rendering the note's
+                // leading H1 a second time while leaving the stored markdown unchanged.
+                val displayMarkdown = n.bodyMarkdown.replaceFirst(
+                    Regex("""^\s*#\s+[^\r\n]+(?:\r?\n|$)"""),
+                    ""
+                )
                 val imagePattern = Regex("""!\[(.*?)\]\((.*?)\)""")
-                val matches = imagePattern.findAll(n.bodyMarkdown).toList()
+                val matches = imagePattern.findAll(displayMarkdown).toList()
                 var cursor = 0
                 var taskOffset = 0
 
                 matches.forEach { match ->
-                    val markdownBeforeImage = n.bodyMarkdown.substring(cursor, match.range.first)
+                    val markdownBeforeImage = displayMarkdown.substring(cursor, match.range.first)
                     MarkdownText(markdownBeforeImage, taskOffset) { taskIndex -> vm.toggleTask(id, taskIndex) }
                     taskOffset += countTaskItems(markdownBeforeImage)
 
@@ -88,7 +118,7 @@ fun NoteDetailScreen(
                     cursor = match.range.last + 1
                 }
 
-                val markdownAfterImages = n.bodyMarkdown.substring(cursor)
+                val markdownAfterImages = displayMarkdown.substring(cursor)
                 MarkdownText(markdownAfterImages, taskOffset) { taskIndex -> vm.toggleTask(id, taskIndex) }
             }
         }
