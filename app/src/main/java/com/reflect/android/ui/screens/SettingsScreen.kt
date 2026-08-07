@@ -13,6 +13,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.navigation.NavController
 import com.specular.android.data.remote.GitHubAuth
+import com.specular.android.sync.SyncEngine
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -34,12 +35,9 @@ fun SettingsScreen(navController: NavController, vm: SettingsViewModel = hiltVie
     var repoInput by remember(repo) { mutableStateOf(repo ?: "") }
 
     val snackbarHostState = remember { SnackbarHostState() }
-    val scope = rememberCoroutineScope()
-
     LaunchedEffect(statusMessage) {
         statusMessage?.let { msg ->
             snackbarHostState.showSnackbar(msg)
-            vm.clearStatus()
         }
     }
 
@@ -170,7 +168,8 @@ fun SettingsScreen(navController: NavController, vm: SettingsViewModel = hiltVie
 
 @HiltViewModel
 class SettingsViewModel @Inject constructor(
-    private val auth: GitHubAuth
+    private val auth: GitHubAuth,
+    private val syncEngine: SyncEngine
 ) : ViewModel() {
 
     private val _token = MutableStateFlow(auth.token)
@@ -213,7 +212,18 @@ class SettingsViewModel @Inject constructor(
 
             try {
                 val result = auth.testConnection()
-                _statusMessage.value = result
+                _statusMessage.value = "$result. Syncing notes..."
+                when (val syncResult = syncEngine.sync()) {
+                    is SyncEngine.Result.Success -> {
+                        _statusMessage.value = "$result. Notes synced. Return to Notes."
+                    }
+                    is SyncEngine.Result.NotConfigured -> {
+                        _statusMessage.value = "Connection succeeded, but sync is not configured."
+                    }
+                    is SyncEngine.Result.Error -> {
+                        _statusMessage.value = "Connection succeeded, but sync failed: ${syncResult.message}"
+                    }
+                }
             } catch (e: Exception) {
                 val message = when (e) {
                     is IllegalArgumentException -> e.message ?: "Invalid configuration"

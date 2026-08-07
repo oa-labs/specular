@@ -35,8 +35,6 @@ class NoteListViewModel @Inject constructor(
             workManager.getWorkInfoByIdFlow(req.id).collect { info ->
                 if (info?.state?.isFinished == true) {
                     _isSyncing.value = false
-                    // Force reload from database after sync completes
-                    repo.importFromFiles()
                 }
             }
         }

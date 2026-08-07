@@ -1,8 +1,8 @@
-package com.reflect.android.data
+package com.specular.android.data
 
-import com.reflect.android.data.local.FrontmatterParser
-import kotlin.test.assertEquals
-import kotlin.test.assertNotNull
+import com.specular.android.data.local.FrontmatterParser
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Test
 
 class FrontmatterParserTest {

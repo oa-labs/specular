@@ -42,10 +42,18 @@ class NoteRepository @Inject constructor(
      */
     suspend fun importFromFiles() {
         val files = fileStore.listAllMarkdown()
-        val entities = files.mapNotNull { (path, raw) ->
+        val entities = files.map { (path, raw) ->
             val parsed = FrontmatterParser.parse(path, raw)
             val id = parsed.id ?: path.replace(".md", "")
-            NoteEntity(
+            val existing = dao.getByPath(path) ?: dao.getById(id)
+            existing?.copy(
+                title = parsed.title.ifBlank { path.removeSuffix(".md") },
+                path = path,
+                rawMarkdown = raw,
+                body = parsed.body,
+                aliases = parsed.aliases.toString(),
+                isDaily = path.startsWith("daily/")
+            ) ?: NoteEntity(
                 id = id,
                 title = parsed.title.ifBlank { path.removeSuffix(".md") },
                 path = path,
@@ -53,7 +61,7 @@ class NoteRepository @Inject constructor(
                 body = parsed.body,
                 aliases = parsed.aliases.toString(),
                 isDaily = path.startsWith("daily/"),
-                lastRemoteSha = null, // will be updated on next full sync
+                lastRemoteSha = null,
                 isDirty = false,
                 isConflict = false
             )
