@@ -54,8 +54,16 @@ class MainActivity : ComponentActivity() {
 
                     SpecularNavGraph(
                         navController = navController,
-                        startDestination = lastOpenedNoteId?.let(Screen.Detail::routeFor) ?: Screen.List.route
+                        startDestination = Screen.List.route
                     )
+
+                    // Keep the list beneath a restored note so the system back gesture
+                    // returns home instead of finishing the activity immediately.
+                    LaunchedEffect(lastOpenedNoteId) {
+                        lastOpenedNoteId?.let { noteId ->
+                            navController.navigate(Screen.Detail.routeFor(noteId))
+                        }
+                    }
                 }
             }
         }

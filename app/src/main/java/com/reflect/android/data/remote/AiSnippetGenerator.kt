@@ -33,7 +33,7 @@ class AiSnippetGenerator @Inject constructor(
     }
 
     companion object {
-        const val PROMPT = "Provide a high-level phrase (under 7 words) summarizing the core subject of the content below for a UI list preview. Do not include specific data points (such as emails, dates, or phone numbers) and do not reference the note itself."
+        const val PROMPT = "Provide a high-level phrase (under 7 words) summarizing the core subject of the content below for a UI list preview. Do not include specific data points (such as emails, dates, or phone numbers) and do not reference the note itself, note tags or the note type."
         private const val MAX_WORDS = 6
     }
 }
