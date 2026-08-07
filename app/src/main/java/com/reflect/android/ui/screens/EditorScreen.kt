@@ -1,4 +1,4 @@
-package com.reflect.android.ui.screens
+package com.specular.android.ui.screens
 
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult

@@ -1,4 +1,4 @@
-package com.reflect.android
+package com.specular.android
 
 import android.app.Application
 import androidx.hilt.work.HiltWorkerFactory

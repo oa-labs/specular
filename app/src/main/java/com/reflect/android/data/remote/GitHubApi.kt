@@ -1,6 +1,7 @@
-package com.reflect.android.data.remote
+package com.specular.android.data.remote
 
 import retrofit2.http.*
+import com.specular.android.data.remote.PutContentRequest
 
 /**
  * GitHub REST + Git Data API for file-per-note sync.

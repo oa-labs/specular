@@ -1,15 +1,15 @@
-package com.reflect.android.ui.navigation
+package com.specular.android.ui.navigation
 
 import androidx.compose.runtime.Composable
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
-import com.reflect.android.ui.screens.NoteListScreen
-import com.reflect.android.ui.screens.NoteDetailScreen
-import com.reflect.android.ui.screens.EditorScreen
-import com.reflect.android.ui.screens.SearchScreen
-import com.reflect.android.ui.screens.SettingsScreen
-import com.reflect.android.ui.screens.OnboardingScreen
+import com.specular.android.ui.screens.NoteListScreen
+import com.specular.android.ui.screens.NoteDetailScreen
+import com.specular.android.ui.screens.EditorScreen
+import com.specular.android.ui.screens.SearchScreen
+import com.specular.android.ui.screens.SettingsScreen
+import com.specular.android.ui.screens.OnboardingScreen
 
 sealed class Screen(val route: String) {
     data object List : Screen("list")

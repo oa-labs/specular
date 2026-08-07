@@ -1,11 +1,11 @@
-package com.reflect.android.di
+package com.specular.android.di
 
 import android.content.Context
 import androidx.room.Room
 import androidx.work.WorkManager
-import com.reflect.android.data.local.FileStore
-import com.reflect.android.data.local.SpecularDatabase
-import com.reflect.android.data.remote.GitHubApi
+import com.specular.android.data.local.FileStore
+import com.specular.android.data.local.SpecularDatabase
+import com.specular.android.data.remote.GitHubApi
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import dagger.Module

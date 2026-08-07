@@ -1,4 +1,4 @@
-package com.reflect.android.ui
+package com.specular.android.ui
 
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -8,8 +8,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.ui.Modifier
 import androidx.navigation.compose.rememberNavController
-import com.reflect.android.ui.navigation.SpecularNavGraph
-import com.reflect.android.ui.theme.SpecularTheme
+import com.specular.android.ui.navigation.SpecularNavGraph
+import com.specular.android.ui.theme.SpecularTheme
 import dagger.hilt.android.AndroidEntryPoint
 
 @AndroidEntryPoint

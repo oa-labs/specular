@@ -1,4 +1,4 @@
-package com.reflect.android.data.local
+package com.specular.android.data.local
 
 /**
  * Parses Reflect markdown per contract in docs/reflect-contract.md.

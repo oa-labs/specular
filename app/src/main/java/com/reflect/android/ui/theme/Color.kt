@@ -1,4 +1,4 @@
-package com.reflect.android.ui.theme
+package com.specular.android.ui.theme
 
 import androidx.compose.ui.graphics.Color
 

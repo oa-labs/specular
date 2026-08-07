@@ -1,4 +1,4 @@
-package com.reflect.android.sync
+package com.specular.android.sync
 
 import android.content.Context
 import androidx.hilt.work.HiltWorker

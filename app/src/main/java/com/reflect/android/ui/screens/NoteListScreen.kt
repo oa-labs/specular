@@ -1,4 +1,4 @@
-package com.reflect.android.ui.screens
+package com.specular.android.ui.screens
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -17,7 +17,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavController
-import com.reflect.android.ui.navigation.Screen
+import com.specular.android.ui.navigation.Screen
+import com.specular.android.ui.screens.NoteListViewModel
 
 
 @OptIn(ExperimentalMaterial3Api::class)

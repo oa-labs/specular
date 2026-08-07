@@ -1,4 +1,4 @@
-package com.reflect.android.ui.screens
+package com.specular.android.ui.screens
 
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
@@ -6,7 +6,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
-import com.reflect.android.ui.navigation.Screen
+import com.specular.android.ui.navigation.Screen
 
 @Composable
 fun OnboardingScreen(navController: NavController) {

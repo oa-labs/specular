@@ -1,14 +1,14 @@
-package com.reflect.android.data.repo
+package com.specular.android.data.repo
 
 import android.util.Base64
-import com.reflect.android.data.local.FileStore
-import com.reflect.android.data.local.FrontmatterParser
-import com.reflect.android.data.local.NoteDao
-import com.reflect.android.data.local.NoteEntity
-import com.reflect.android.data.remote.GitHubApi
-import com.reflect.android.data.remote.GitHubAuth
-import com.reflect.android.domain.model.Note
-import com.reflect.android.domain.model.NoteListItem
+import com.specular.android.data.local.FileStore
+import com.specular.android.data.local.FrontmatterParser
+import com.specular.android.data.local.NoteDao
+import com.specular.android.data.local.NoteEntity
+import com.specular.android.data.remote.GitHubApi
+import com.specular.android.data.remote.GitHubAuth
+import com.specular.android.domain.model.Note
+import com.specular.android.domain.model.NoteListItem
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import java.util.UUID

@@ -1,9 +1,9 @@
-package com.reflect.android.ui.screens
+package com.specular.android.ui.screens
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.reflect.android.data.repo.NoteRepository
-import com.reflect.android.domain.model.NoteListItem
+import com.specular.android.data.repo.NoteRepository
+import com.specular.android.domain.model.NoteListItem
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow

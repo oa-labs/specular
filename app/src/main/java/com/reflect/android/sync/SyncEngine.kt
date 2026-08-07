@@ -1,13 +1,13 @@
-package com.reflect.android.sync
+package com.specular.android.sync
 
 import android.util.Base64
-import com.reflect.android.data.local.FileStore
-import com.reflect.android.data.local.FrontmatterParser
-import com.reflect.android.data.local.NoteDao
-import com.reflect.android.data.local.NoteEntity
-import com.reflect.android.data.remote.GitHubApi
-import com.reflect.android.data.remote.GitHubAuth
-import com.reflect.android.data.remote.PutContentRequest
+import com.specular.android.data.local.FileStore
+import com.specular.android.data.local.FrontmatterParser
+import com.specular.android.data.local.NoteDao
+import com.specular.android.data.local.NoteEntity
+import com.specular.android.data.remote.GitHubApi
+import com.specular.android.data.remote.GitHubAuth
+import com.specular.android.data.remote.PutContentRequest
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import javax.inject.Inject

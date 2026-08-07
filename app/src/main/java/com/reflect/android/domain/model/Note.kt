@@ -1,4 +1,4 @@
-package com.reflect.android.domain.model
+package com.specular.android.domain.model
 
 /**
  * Domain model — canonical identity is [id] (ULID from frontmatter).

@@ -1,4 +1,4 @@
-package com.reflect.android.data.remote
+package com.specular.android.data.remote
 
 import android.content.Context
 import android.content.SharedPreferences

@@ -1,4 +1,4 @@
-package com.reflect.android.data.local
+package com.specular.android.data.local
 
 import androidx.room.Database
 import androidx.room.RoomDatabase
