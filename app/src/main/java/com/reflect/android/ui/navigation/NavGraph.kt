@@ -1,5 +1,6 @@
 package com.specular.android.ui.navigation
 
+import android.net.Uri
 import androidx.compose.runtime.Composable
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
@@ -15,10 +16,10 @@ sealed class Screen(val route: String) {
     data object List : Screen("list")
     data object Search : Screen("search")
     data object Detail : Screen("detail/{id}") {
-        fun routeFor(id: String) = "detail/$id"
+        fun routeFor(id: String) = "detail/${Uri.encode(id)}"
     }
     data object Editor : Screen("editor/{id}") {
-        fun routeFor(id: String) = "editor/$id"
+        fun routeFor(id: String) = "editor/${Uri.encode(id)}"
         fun routeForNew() = "editor/__new__"
     }
     data object Settings : Screen("settings")
