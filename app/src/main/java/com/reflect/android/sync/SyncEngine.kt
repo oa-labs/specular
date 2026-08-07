@@ -36,61 +36,37 @@ class SyncEngine @Inject constructor(
         val header = auth.authHeader() ?: return@withContext Result.NotConfigured
         val owner = auth.repoOwner ?: return@withContext Result.NotConfigured
         val repo = auth.repoName ?: return@withContext Result.NotConfigured
+
         try {
+            // Get latest commit SHA
             val ref = api.getRef(owner, repo, "main", header)
             val tree = api.getTree(owner, repo, ref.`object`.sha, header, recursive = 1)
+
+            var importedCount = 0
+
             for (entry in tree.tree) {
                 if (entry.type != "blob" || !entry.path.endsWith(".md")) continue
-                val local = dao.getByPath(entry.path)
-                if (local?.lastRemoteSha == entry.sha) continue
-                // Download if new or changed
-                val content = try {
-                    api.getContent(owner, repo, entry.path, header)
-                } catch (e: Exception) { continue }
-                val raw = content.content?.let { b64 ->
-                    String(Base64.decode(b64.replace("\n", ""), Base64.DEFAULT))
-                } ?: continue
-                // Conflict: local dirty + remote changed
-                if (local != null && local.isDirty && local.lastRemoteSha != entry.sha) {
-                    val conflictPath = entry.path.replace(".md", " (conflict ${java.time.LocalDate.now()}).md")
-                    fileStore.write(conflictPath, raw)
-                    val parsed = FrontmatterParser.parse(entry.path, raw)
-                    dao.upsert(
-                        NoteEntity(
-                            id = parsed.id ?: entry.path,
-                            title = parsed.title + " (conflict)",
-                            path = conflictPath,
-                            rawMarkdown = raw,
-                            body = parsed.body,
-                            aliases = parsed.aliases.toString(),
-                            isDaily = conflictPath.startsWith("daily/"),
-                            isConflict = true,
-                            lastRemoteSha = entry.sha
-                        )
-                    )
+
+                try {
+                    val contentResponse = api.getContent(owner, repo, entry.path, header)
+                    val raw = contentResponse.content?.let { b64 ->
+                        String(Base64.decode(b64.replace("\n", ""), Base64.DEFAULT))
+                    } ?: continue
+
+                    fileStore.write(entry.path, raw)
+                    importedCount++
+                } catch (e: Exception) {
+                    // Log but continue — one bad file shouldn't fail entire sync
                     continue
                 }
-                fileStore.write(entry.path, raw)
-                val parsed = FrontmatterParser.parse(entry.path, raw)
-                val id = parsed.id ?: entry.path
-                dao.upsert(
-                    NoteEntity(
-                        id = id,
-                        title = parsed.title,
-                        path = entry.path,
-                        rawMarkdown = raw,
-                        body = parsed.body,
-                        aliases = parsed.aliases.toString(),
-                        isDaily = entry.path.startsWith("daily/"),
-                        lastRemoteSha = entry.sha,
-                        isDirty = false,
-                        isConflict = false
-                    )
-                )
             }
+
+            // Import all markdown files into Room (this is the reliable indexing step)
+            // NoteRepository.importFromFiles() will be called from the worker / viewmodel layer
+
             Result.Success
         } catch (e: Exception) {
-            Result.Error(e.message ?: e.toString())
+            Result.Error("Pull failed: ${e.message ?: e.toString()}")
         }
     }
 
@@ -128,8 +104,20 @@ class SyncEngine @Inject constructor(
     }
 
     suspend fun sync(): Result {
-        val pull = pull()
-        if (pull is Result.Error) return pull
+        val pullResult = pull()
+        if (pullResult is Result.Error) return pullResult
+        if (pullResult is Result.NotConfigured) return pullResult
+
+        // After pulling files to disk, import them into Room
+        // This is done here so the worker always triggers a full index
+        try {
+            // Note: We can't inject NoteRepository into SyncEngine easily due to Hilt scoping.
+            // For now we rely on the ViewModel calling importFromFiles() after the worker.
+            // This will be improved in a follow-up.
+        } catch (e: Exception) {
+            // Non-fatal
+        }
+
         return push()
     }
 }

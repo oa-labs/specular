@@ -36,6 +36,33 @@ class NoteRepository @Inject constructor(
         }
     }
 
+    /**
+     * Import all local markdown files into the database.
+     * This is the reliable way to populate notes after a pull.
+     */
+    suspend fun importFromFiles() {
+        val files = fileStore.listAllMarkdown()
+        val entities = files.mapNotNull { (path, raw) ->
+            val parsed = FrontmatterParser.parse(path, raw)
+            val id = parsed.id ?: path.replace(".md", "")
+            NoteEntity(
+                id = id,
+                title = parsed.title.ifBlank { path.removeSuffix(".md") },
+                path = path,
+                rawMarkdown = raw,
+                body = parsed.body,
+                aliases = parsed.aliases.toString(),
+                isDaily = path.startsWith("daily/"),
+                lastRemoteSha = null, // will be updated on next full sync
+                isDirty = false,
+                isConflict = false
+            )
+        }
+        if (entities.isNotEmpty()) {
+            dao.upsertAll(entities)
+        }
+    }
+
     suspend fun getNote(id: String): Note? {
         val e = dao.getById(id) ?: return null
         return Note(
@@ -112,22 +139,5 @@ class NoteRepository @Inject constructor(
         }
     }
 
-    suspend fun importFromFiles() {
-        val files = fileStore.listAllMarkdown()
-        val entities = files.mapNotNull { (path, raw) ->
-            val parsed = FrontmatterParser.parse(path, raw)
-            val id = parsed.id ?: return@mapNotNull null
-            NoteEntity(
-                id = id,
-                title = parsed.title,
-                path = path,
-                rawMarkdown = raw,
-                body = parsed.body,
-                aliases = parsed.aliases.toString(),
-                isDaily = path.startsWith("daily/"),
-                lastRemoteSha = null
-            )
-        }
-        dao.upsertAll(entities)
-    }
+
 }

@@ -30,10 +30,14 @@ class NoteListViewModel @Inject constructor(
         _isSyncing.value = true
         val req = OneTimeWorkRequestBuilder<SyncWorker>().build()
         workManager.enqueue(req)
-        // observe work — simplified
+
         viewModelScope.launch {
             workManager.getWorkInfoByIdFlow(req.id).collect { info ->
-                if (info?.state?.isFinished == true) _isSyncing.value = false
+                if (info?.state?.isFinished == true) {
+                    _isSyncing.value = false
+                    // Force reload from database after sync completes
+                    repo.importFromFiles()
+                }
             }
         }
     }

@@ -4,9 +4,12 @@ import android.content.Context
 import android.content.SharedPreferences
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
+import com.specular.android.data.remote.GitHubApi
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
+import retrofit2.HttpException
+import java.io.IOException
 
 /**
  * Stores GitHub token in EncryptedSharedPreferences (excluded from backup).
@@ -14,7 +17,8 @@ import javax.inject.Singleton
  */
 @Singleton
 class GitHubAuth @Inject constructor(
-    @ApplicationContext private val context: Context
+    @ApplicationContext private val context: Context,
+    private val api: GitHubApi
 ) {
     private val masterKey by lazy {
         MasterKey.Builder(context)
@@ -50,6 +54,32 @@ class GitHubAuth @Inject constructor(
     fun authHeader(): String? = token?.let { "Bearer $it" }
 
     fun isConfigured(): Boolean = token != null && repoOwner != null && repoName != null
+
+    /**
+     * Tests whether the current token + repo combination works.
+     * Returns success message or throws descriptive exception.
+     */
+    suspend fun testConnection(): String {
+        val header = authHeader() ?: throw IllegalStateException("No token configured")
+        val owner = repoOwner ?: throw IllegalStateException("No repo owner configured")
+        val repo = repoName ?: throw IllegalStateException("No repo name configured")
+
+        try {
+            val repoInfo = api.getRepo(owner, repo, header)
+            return "Successfully connected to ${repoInfo.full_name} (${if (repoInfo.private) "private" else "public"})"
+        } catch (e: HttpException) {
+            when (e.code()) {
+                401 -> throw IllegalArgumentException("Invalid or expired token. Please check your PAT.")
+                403 -> throw IllegalArgumentException("Permission denied. Make sure your PAT has 'Contents: read & write' scope.")
+                404 -> throw IllegalArgumentException("Repository not found. Check owner and repo name.")
+                else -> throw IllegalArgumentException("GitHub API error (${e.code()}): ${e.message()}")
+            }
+        } catch (e: IOException) {
+            throw IllegalStateException("Network error. Please check your internet connection.")
+        } catch (e: Exception) {
+            throw IllegalStateException("Test failed: ${e.message ?: e.toString()}")
+        }
+    }
 
     fun clear() {
         prefs.edit().clear().apply()

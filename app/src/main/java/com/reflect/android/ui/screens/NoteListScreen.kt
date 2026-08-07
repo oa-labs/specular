@@ -47,7 +47,17 @@ fun NoteListScreen(navController: NavController, vm: NoteListViewModel = hiltVie
     ) { padding ->
         if (notes.isEmpty()) {
             Box(modifier = Modifier.fillMaxSize().padding(padding), contentAlignment = androidx.compose.ui.Alignment.Center) {
-                Text("No notes yet — pull to sync or create one.", style = MaterialTheme.typography.bodyMedium)
+                Column(horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally) {
+                    Text("No notes yet", style = MaterialTheme.typography.headlineSmall)
+                    Text(
+                        "Pull to sync from your GitHub repository or tap + to create one.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.padding(top = 8.dp)
+                    )
+                    if (isSyncing) {
+                        CircularProgressIndicator(modifier = Modifier.padding(top = 16.dp))
+                    }
+                }
             }
         } else {
             LazyColumn(modifier = Modifier.fillMaxSize().padding(padding)) {
