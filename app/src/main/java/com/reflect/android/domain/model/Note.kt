@@ -30,5 +30,6 @@ data class NoteListItem(
     val snippet: String?,
     val isDaily: Boolean,
     val isDirty: Boolean,
-    val isConflict: Boolean
+    val isConflict: Boolean,
+    val updatedAt: Long = 0L
 )

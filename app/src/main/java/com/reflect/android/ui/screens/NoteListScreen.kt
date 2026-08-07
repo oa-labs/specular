@@ -5,7 +5,9 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Sort
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
@@ -13,6 +15,9 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -25,6 +30,8 @@ import com.specular.android.ui.screens.NoteListViewModel
 @Composable
 fun NoteListScreen(navController: NavController, vm: NoteListViewModel = hiltViewModel()) {
     val notes by vm.notes.collectAsState()
+    val sort by vm.sort.collectAsState()
+    var sortMenuExpanded by remember { mutableStateOf(false) }
     val isSyncing by vm.isSyncing.collectAsState()
     val syncMessage by vm.syncMessage.collectAsState()
 
@@ -33,6 +40,40 @@ fun NoteListScreen(navController: NavController, vm: NoteListViewModel = hiltVie
             TopAppBar(
                 title = { Text("Specular") },
                 actions = {
+                    Box {
+                        IconButton(onClick = { sortMenuExpanded = true }) {
+                            Icon(Icons.AutoMirrored.Filled.Sort, "Sort notes")
+                        }
+                        DropdownMenu(
+                            expanded = sortMenuExpanded,
+                            onDismissRequest = { sortMenuExpanded = false }
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("Last updated") },
+                                onClick = {
+                                    vm.setSort(NoteSort.LAST_UPDATED)
+                                    sortMenuExpanded = false
+                                },
+                                trailingIcon = {
+                                    if (sort == NoteSort.LAST_UPDATED) {
+                                        Icon(Icons.Default.Check, contentDescription = null)
+                                    }
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Alphabetical") },
+                                onClick = {
+                                    vm.setSort(NoteSort.ALPHABETICAL)
+                                    sortMenuExpanded = false
+                                },
+                                trailingIcon = {
+                                    if (sort == NoteSort.ALPHABETICAL) {
+                                        Icon(Icons.Default.Check, contentDescription = null)
+                                    }
+                                }
+                            )
+                        }
+                    }
                     if (isSyncing) CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
                     IconButton(onClick = { vm.sync() }) { Icon(Icons.Default.Refresh, "Sync") }
                     IconButton(onClick = { navController.navigate(Screen.Search.route) }) { Icon(Icons.Default.Search, "Search") }

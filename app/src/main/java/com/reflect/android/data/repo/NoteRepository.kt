@@ -43,7 +43,8 @@ class NoteRepository @Inject constructor(
                 snippet = FrontmatterParser.snippetOrEmpty(e.body, e.snippet),
                 isDaily = e.isDaily,
                 isDirty = e.isDirty,
-                isConflict = e.isConflict
+                isConflict = e.isConflict,
+                updatedAt = e.updatedAt
             )
         }
     }
@@ -160,7 +161,18 @@ class NoteRepository @Inject constructor(
     fun search(query: String): Flow<List<NoteListItem>> {
         return if (query.length >= 2) {
             dao.searchLike(query).map { list ->
-                list.map { e -> NoteListItem(e.id, e.title, e.path, FrontmatterParser.snippetOrEmpty(e.body, e.snippet), e.isDaily, e.isDirty, e.isConflict) }
+                list.map { e ->
+                    NoteListItem(
+                        id = e.id,
+                        title = e.title,
+                        path = e.path,
+                        snippet = FrontmatterParser.snippetOrEmpty(e.body, e.snippet),
+                        isDaily = e.isDaily,
+                        isDirty = e.isDirty,
+                        isConflict = e.isConflict,
+                        updatedAt = e.updatedAt
+                    )
+                }
             }
         } else {
             observeNotes()

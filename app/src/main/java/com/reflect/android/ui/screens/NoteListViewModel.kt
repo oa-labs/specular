@@ -16,7 +16,25 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.CancellationException
 import androidx.work.WorkManager
+import java.util.Locale
 import javax.inject.Inject
+
+enum class NoteSort {
+    LAST_UPDATED,
+    ALPHABETICAL
+}
+
+internal fun sortNotes(notes: List<NoteListItem>, sort: NoteSort): List<NoteListItem> = when (sort) {
+    NoteSort.LAST_UPDATED -> notes.sortedWith(
+        compareByDescending<NoteListItem> { it.updatedAt }
+            .thenBy { it.title.lowercase(Locale.ROOT) }
+            .thenBy { it.path }
+    )
+    NoteSort.ALPHABETICAL -> notes.sortedWith(
+        compareBy<NoteListItem> { it.title.lowercase(Locale.ROOT) }
+            .thenBy { it.path }
+    )
+}
 
 @HiltViewModel
 class NoteListViewModel @Inject constructor(
@@ -24,7 +42,12 @@ class NoteListViewModel @Inject constructor(
     private val workManager: WorkManager,
     private val aiSettings: AiProviderSettings
 ) : ViewModel() {
-    val notes: StateFlow<List<NoteListItem>> = repo.observeNotes()
+    private val _sort = MutableStateFlow(NoteSort.LAST_UPDATED)
+    val sort: StateFlow<NoteSort> = _sort
+
+    val notes: StateFlow<List<NoteListItem>> = combine(repo.observeNotes(), _sort) { notes, sort ->
+        sortNotes(notes, sort)
+    }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     private val _isSyncing = MutableStateFlow(false)
@@ -79,5 +102,9 @@ class NoteListViewModel @Inject constructor(
                 }
             }
         }
+    }
+
+    fun setSort(sort: NoteSort) {
+        _sort.value = sort
     }
 }
