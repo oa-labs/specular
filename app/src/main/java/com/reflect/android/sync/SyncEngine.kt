@@ -5,6 +5,7 @@ import com.specular.android.data.local.FileStore
 import com.specular.android.data.local.FrontmatterParser
 import com.specular.android.data.local.NoteDao
 import com.specular.android.data.local.NoteEntity
+import com.specular.android.data.local.NoteStoreLock
 import com.specular.android.data.remote.GitHubApi
 import com.specular.android.data.remote.GitHubAuth
 import com.specular.android.data.remote.PutContentRequest
@@ -27,7 +28,8 @@ class SyncEngine @Inject constructor(
     private val api: GitHubApi,
     private val auth: GitHubAuth,
     private val dao: NoteDao,
-    private val fileStore: FileStore
+    private val fileStore: FileStore,
+    private val noteStoreLock: NoteStoreLock = NoteStoreLock()
 ) {
     sealed class Result {
         data object Success : Result()
@@ -35,15 +37,25 @@ class SyncEngine @Inject constructor(
         data object NotConfigured : Result()
     }
 
-    suspend fun pull(): Result = withContext(Dispatchers.IO) {
+    suspend fun pull(): Result = noteStoreLock.withLock { pullLocked() }
+
+    private suspend fun pullLocked(): Result = withContext(Dispatchers.IO) {
         val header = auth.authHeader() ?: return@withContext Result.NotConfigured
         val owner = auth.repoOwner ?: return@withContext Result.NotConfigured
         val repo = auth.repoName ?: return@withContext Result.NotConfigured
 
+        logInfo("Pull started repository=$owner/$repo")
         try {
-            val branch = api.getRepo(owner, repo, header).default_branch
-            val ref = api.getRef(owner, repo, branch, header)
-            val tree = api.getTree(owner, repo, ref.`object`.sha, header, recursive = 1)
+            val branch = runSyncStage("pull:get repository") {
+                api.getRepo(owner, repo, header).default_branch
+            }
+            val ref = runSyncStage("pull:get branch ref branch=$branch") {
+                api.getRef(owner, repo, branch, header)
+            }
+            val tree = runSyncStage("pull:get tree") {
+                api.getTree(owner, repo, ref.`object`.sha, header, recursive = 1)
+            }
+            logDebug("Pull tree loaded markdownCandidates=${tree.tree.count { it.type == "blob" && it.path.endsWith(".md") }}")
 
             for (entry in tree.tree) {
                 if (entry.type != "blob" || !entry.path.endsWith(".md")) continue
@@ -52,7 +64,9 @@ class SyncEngine @Inject constructor(
                 // local copy intact so the subsequent push can publish it.
                 if (local?.lastRemoteSha == entry.sha) continue
 
-                val contentResponse = api.getContent(owner, repo, entry.path, header, ref = branch)
+                val contentResponse = runSyncStage("pull:download path=${entry.path}") {
+                    api.getContent(owner, repo, entry.path, header, ref = branch)
+                }
                 val raw = contentResponse.content?.let { b64 ->
                     String(Base64.getDecoder().decode(b64.replace("\n", "")), Charsets.UTF_8)
                 } ?: continue
@@ -61,111 +75,163 @@ class SyncEngine @Inject constructor(
                 if (local != null && local.isDirty && local.lastRemoteSha != entry.sha) {
                     val conflictPath = entry.path.removeSuffix(".md") +
                         " (conflict ${java.time.LocalDate.now()}).md"
-                    fileStore.write(conflictPath, raw)
+                    runSyncStage("pull:write conflict path=$conflictPath") {
+                        fileStore.write(conflictPath, raw)
+                        val parsed = FrontmatterParser.parse(entry.path, raw)
+                        dao.upsert(
+                            NoteEntity(
+                                id = "${FrontmatterParser.identityFor(entry.path, parsed.id)}:conflict:${entry.sha}",
+                                title = parsed.title + " (conflict)",
+                                path = conflictPath,
+                                rawMarkdown = raw,
+                                body = parsed.body,
+                                aliases = parsed.aliases.toString(),
+                                snippet = FrontmatterParser.snippetOrEmpty(parsed.body, parsed.snippet),
+                                isDaily = conflictPath.startsWith("daily/"),
+                                lastRemoteSha = entry.sha,
+                                isConflict = true
+                            )
+                        )
+                    }
+                    continue
+                }
+
+                runSyncStage("pull:persist path=${entry.path}") {
+                    fileStore.write(entry.path, raw)
                     val parsed = FrontmatterParser.parse(entry.path, raw)
                     dao.upsert(
                         NoteEntity(
-                            id = "${FrontmatterParser.identityFor(entry.path, parsed.id)}:conflict:${entry.sha}",
-                            title = parsed.title + " (conflict)",
-                            path = conflictPath,
+                            id = FrontmatterParser.identityFor(entry.path, parsed.id),
+                            title = parsed.title,
+                            path = entry.path,
                             rawMarkdown = raw,
                             body = parsed.body,
                             aliases = parsed.aliases.toString(),
                             snippet = FrontmatterParser.snippetOrEmpty(parsed.body, parsed.snippet),
-                            isDaily = conflictPath.startsWith("daily/"),
+                            isDaily = entry.path.startsWith("daily/"),
                             lastRemoteSha = entry.sha,
-                            isConflict = true
+                            isDirty = false,
+                            isConflict = false
                         )
                     )
-                    continue
                 }
-
-                fileStore.write(entry.path, raw)
-                val parsed = FrontmatterParser.parse(entry.path, raw)
-                dao.upsert(
-                    NoteEntity(
-                        id = FrontmatterParser.identityFor(entry.path, parsed.id),
-                        title = parsed.title,
-                        path = entry.path,
-                        rawMarkdown = raw,
-                        body = parsed.body,
-                        aliases = parsed.aliases.toString(),
-                        snippet = FrontmatterParser.snippetOrEmpty(parsed.body, parsed.snippet),
-                        isDaily = entry.path.startsWith("daily/"),
-                        lastRemoteSha = entry.sha,
-                        isDirty = false,
-                        isConflict = false
-                    )
-                )
             }
+            logInfo("Pull completed")
             Result.Success
         } catch (e: Exception) {
-            Result.Error("Pull failed: ${e.message ?: e.toString()}")
+            logSyncFailure("pull", e)
+            Result.Error(userFacingSyncError("pull", e))
         }
     }
 
-    suspend fun push(): Result = withContext(Dispatchers.IO) {
+    suspend fun push(): Result = noteStoreLock.withLock { pushLocked() }
+
+    private suspend fun pushLocked(): Result = withContext(Dispatchers.IO) {
         val header = auth.authHeader() ?: return@withContext Result.NotConfigured
         val owner = auth.repoOwner ?: return@withContext Result.NotConfigured
         val repo = auth.repoName ?: return@withContext Result.NotConfigured
-        val branch = api.getRepo(owner, repo, header).default_branch
-        val dirty = dao.getDirty()
-        if (dirty.isEmpty()) return@withContext Result.Success
-        var failedPushes = 0
-        for (e in dirty) {
-            val raw = fileStore.read(e.path) ?: e.rawMarkdown
-            val b64 = Base64.getEncoder().encodeToString(raw.toByteArray(Charsets.UTF_8))
-            try {
-                val resp = api.putContent(
-                    owner, repo, e.path, header,
-                    PutContentRequest(
-                        message = "Update ${e.title}",
-                        content = b64,
-                        sha = e.lastRemoteSha,
-                        branch = branch
-                    )
-                )
-                val newSha = resp.content?.sha
-                fileStore.write(e.path, raw)
-                dao.upsert(e.copy(lastRemoteSha = newSha, isDirty = false, isConflict = false))
-            } catch (ex: Exception) {
-                failedPushes++
-                logPushFailure(e.path, ex)
-                // 409/422 means sha mismatch — leave dirty for next pull to create conflict
-                val statusCode = (ex as? HttpException)?.code()
-                if (statusCode == 409 || statusCode == 422) {
-                    continue
-                }
-                return@withContext Result.Error(userFacingPushError(ex))
+        logInfo("Push started repository=$owner/$repo")
+        try {
+            val branch = runSyncStage("push:get repository") {
+                api.getRepo(owner, repo, header).default_branch
             }
+            val dirty = runSyncStage("push:load dirty notes") { dao.getDirty() }
+            if (dirty.isEmpty()) {
+                logInfo("Push skipped: no dirty notes")
+                return@withContext Result.Success
+            }
+            logDebug("Push queued notes=${dirty.size}")
+            var failedPushes = 0
+            for (e in dirty) {
+                val raw = runSyncStage("push:read local path=${e.path}") {
+                    fileStore.read(e.path) ?: e.rawMarkdown
+                }
+                val b64 = Base64.getEncoder().encodeToString(raw.toByteArray(Charsets.UTF_8))
+                try {
+                    logDebug("Push uploading path=${e.path}")
+                    val resp = api.putContent(
+                        owner, repo, e.path, header,
+                        PutContentRequest(
+                            message = "Update ${e.title}",
+                            content = b64,
+                            sha = e.lastRemoteSha,
+                            branch = branch
+                        )
+                    )
+                    val newSha = resp.content?.sha
+                    runSyncStage("push:persist success path=${e.path}") {
+                        fileStore.write(e.path, raw)
+                        dao.upsert(e.copy(lastRemoteSha = newSha, isDirty = false, isConflict = false))
+                    }
+                } catch (ex: Exception) {
+                    failedPushes++
+                    logPushFailure(e.path, ex)
+                    // 409/422 means sha mismatch — leave dirty for next pull to create conflict
+                    val statusCode = (ex as? HttpException)?.code()
+                    if (statusCode == 409 || statusCode == 422) {
+                        continue
+                    }
+                    return@withContext Result.Error(userFacingPushError(ex))
+                }
+            }
+            if (failedPushes > 0) {
+                return@withContext Result.Error(
+                    "Some notes could not be pushed because the remote changed. " +
+                        "Review the conflict copies and try syncing again."
+                )
+            }
+            logInfo("Push completed")
+            Result.Success
+        } catch (e: Exception) {
+            logSyncFailure("push", e)
+            Result.Error(userFacingSyncError("push", e))
         }
-        if (failedPushes > 0) {
-            return@withContext Result.Error(
-                "Some notes could not be pushed because the remote changed. " +
-                    "Review the conflict copies and try syncing again."
-            )
-        }
-        Result.Success
     }
 
-    suspend fun sync(): Result {
-        val pullResult = pull()
-        if (pullResult is Result.Error) return pullResult
-        if (pullResult is Result.NotConfigured) return pullResult
-        return push()
+    suspend fun sync(): Result = noteStoreLock.withLock {
+        logInfo("Sync started")
+        val pullResult = pullLocked()
+        if (pullResult is Result.Error || pullResult is Result.NotConfigured) {
+            logWarn("Sync stopped after pull result=$pullResult")
+            return@withLock pullResult
+        }
+        val pushResult = pushLocked()
+        logInfo("Sync completed result=$pushResult")
+        pushResult
     }
 
     private fun logPushFailure(path: String, error: Exception) {
+        logSyncFailure("push:upload path=$path", error)
+    }
+
+    private fun logSyncFailure(stage: String, error: Exception) {
         val httpError = error as? HttpException
         val status = httpError?.code()?.toString() ?: "unknown"
         val responseBody = httpError?.response()?.errorBody()?.string()
             ?.replace(Regex("\\s+"), " ")
             ?.take(2000)
-        Log.e(
-            TAG,
-            "GitHub PUT failed path=$path status=$status response=${responseBody ?: "<none>"}",
-            error
-        )
+        logError("Sync failed stage=$stage status=$status response=${responseBody ?: "<none>"}", error)
+    }
+
+    private suspend fun <T> runSyncStage(stage: String, operation: suspend () -> T): T {
+        logDebug("Sync stage=$stage")
+        return try {
+            operation()
+        } catch (e: Exception) {
+            logSyncFailure(stage, e)
+            throw e
+        }
+    }
+
+    private fun userFacingSyncError(operation: String, error: Exception): String {
+        return when {
+            (error as? HttpException)?.code() == 401 || (error as? HttpException)?.code() == 403 ->
+                "Unable to access GitHub during $operation. Check that your PAT has access to this repository."
+            error is IOException ->
+                "Unable to reach GitHub during $operation. Check your internet connection and try again."
+            else ->
+                "Sync failed during $operation. Check the GitHub settings and try again."
+        }
     }
 
     private fun userFacingPushError(error: Exception): String {
@@ -178,6 +244,14 @@ class SyncEngine @Inject constructor(
                 "Unable to push notes to GitHub. Check your PAT permissions and try again."
         }
     }
+
+    private fun logDebug(message: String) = runCatching { Log.d(TAG, message) }
+
+    private fun logInfo(message: String) = runCatching { Log.i(TAG, message) }
+
+    private fun logWarn(message: String) = runCatching { Log.w(TAG, message) }
+
+    private fun logError(message: String, error: Throwable) = runCatching { Log.e(TAG, message, error) }
 
     companion object {
         private const val TAG = "SyncEngine"

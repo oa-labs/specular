@@ -5,6 +5,7 @@ import com.specular.android.data.local.FileStore
 import com.specular.android.data.local.FrontmatterParser
 import com.specular.android.data.local.NoteDao
 import com.specular.android.data.local.NoteEntity
+import com.specular.android.data.local.NoteStoreLock
 import com.specular.android.data.remote.GitHubApi
 import com.specular.android.data.remote.GitHubAuth
 import com.specular.android.data.remote.AiProviderSettings
@@ -26,8 +27,13 @@ class NoteRepository @Inject constructor(
     private val githubApi: GitHubApi,
     private val auth: GitHubAuth,
     private val aiSettings: AiProviderSettings,
-    private val snippetGenerator: AiSnippetGenerator
+    private val snippetGenerator: AiSnippetGenerator,
+    private val noteStoreLock: NoteStoreLock
 ) {
+    private data class SnippetGenerationInput(
+        val entity: NoteEntity,
+        val content: String
+    )
     fun observeNotes(): Flow<List<NoteListItem>> = dao.observeAll().map { list ->
         list.map { e ->
             NoteListItem(
@@ -163,31 +169,41 @@ class NoteRepository @Inject constructor(
 
     /** Generates and persists a snippet. Existing snippets are kept unless [force] is true. */
     suspend fun generateSnippet(id: String, force: Boolean = false): Boolean = withContext(Dispatchers.IO) {
-        val entity = dao.getById(id) ?: return@withContext false
-        val parsed = FrontmatterParser.parse(entity.path, entity.rawMarkdown)
-        if (!force && !parsed.snippet.isNullOrBlank()) {
-            if (entity.snippet != parsed.snippet) dao.upsert(entity.copy(snippet = parsed.snippet))
-            return@withContext false
-        }
+        val input = noteStoreLock.withLock {
+            val entity = dao.getById(id) ?: return@withLock null
+            val parsed = FrontmatterParser.parse(entity.path, entity.rawMarkdown)
+            if (!force && !parsed.snippet.isNullOrBlank()) {
+                if (entity.snippet != parsed.snippet) dao.upsert(entity.copy(snippet = parsed.snippet))
+                return@withLock null
+            }
+            SnippetGenerationInput(entity, FrontmatterParser.aiSnippetContent(parsed.body))
+        } ?: return@withContext false
 
-        val content = FrontmatterParser.aiSnippetContent(parsed.body)
-        val snippet = if (FrontmatterParser.isEmptySnippetContent(content)) {
+        val snippet = if (FrontmatterParser.isEmptySnippetContent(input.content)) {
             FrontmatterParser.EMPTY_NOTE_SNIPPET
         } else {
             val config = aiSettings.config.value ?: return@withContext false
-            snippetGenerator.generate(config, content)
+            snippetGenerator.generate(config, input.content)
         }
-        val raw = FrontmatterParser.upsertSnippet(entity.path, entity.rawMarkdown, snippet)
-        fileStore.write(entity.path, raw)
-        dao.upsert(
-            entity.copy(
-                rawMarkdown = raw,
-                snippet = snippet,
-                isDirty = true,
-                updatedAt = System.currentTimeMillis()
+
+        noteStoreLock.withLock {
+            val current = dao.getById(id) ?: return@withLock false
+            if (current.path != input.entity.path || current.rawMarkdown != input.entity.rawMarkdown) {
+                // Sync or an editor save won the race; never write a snippet to a stale path.
+                return@withLock false
+            }
+            val raw = FrontmatterParser.upsertSnippet(current.path, current.rawMarkdown, snippet)
+            fileStore.write(current.path, raw)
+            dao.upsert(
+                current.copy(
+                    rawMarkdown = raw,
+                    snippet = snippet,
+                    isDirty = true,
+                    updatedAt = System.currentTimeMillis()
+                )
             )
-        )
-        true
+            true
+        }
     }
 
 
