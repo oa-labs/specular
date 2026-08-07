@@ -119,6 +119,7 @@ dependencies {
 
     // Markdown rendering (Markwon for Compose fallback uses coil)
     implementation("io.noties.markwon:core:4.6.2")
+    implementation("io.noties.markwon:ext-tasklist:4.6.2")
 
     // Security — encrypted prefs for GitHub token
     implementation("androidx.security:security-crypto:1.1.0-alpha06")

@@ -1,5 +1,8 @@
 package com.specular.android.ui.screens
 
+import android.text.method.LinkMovementMethod
+import android.util.TypedValue
+import android.widget.TextView
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -9,10 +12,14 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavController
 import coil.compose.AsyncImage
+import io.noties.markwon.Markwon
+import io.noties.markwon.ext.tasklist.TaskListPlugin
 import com.specular.android.ui.navigation.Screen
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -49,20 +56,57 @@ fun NoteDetailScreen(navController: NavController, id: String, vm: NoteDetailVie
                     }
                     Spacer(Modifier.height(12.dp))
                 }
-                // Simple markdown preview — split on image syntax for inline asset preview
-                val parts = Regex("""!\[(.*?)\]\((.*?)\)""").split(n.bodyMarkdown)
-                val matches = Regex("""!\[(.*?)\]\((.*?)\)""").findAll(n.bodyMarkdown).toList()
-                Text(n.bodyMarkdown, style = MaterialTheme.typography.bodyMedium)
-                // Show inline images from assets/ via Coil (file:// or https)
-                matches.forEach { m ->
-                    val alt = m.groupValues[1]
-                    val url = m.groupValues[2]
-                    if (url.startsWith("assets/") || url.startsWith("http")) {
+                // Render markdown in chunks so inline images can continue to use Coil.
+                val imagePattern = Regex("""!\[(.*?)\]\((.*?)\)""")
+                val matches = imagePattern.findAll(n.bodyMarkdown).toList()
+                var cursor = 0
+
+                matches.forEach { match ->
+                    MarkdownText(n.bodyMarkdown.substring(cursor, match.range.first))
+
+                    val alt = match.groupValues[1]
+                    val url = match.groupValues[2]
+                    if (url.startsWith("assets/") || url.startsWith("http") || url.startsWith("file:")) {
                         Spacer(Modifier.height(8.dp))
                         AsyncImage(model = url, contentDescription = alt, modifier = Modifier.fillMaxWidth())
+                    } else {
+                        // Keep unsupported image destinations readable without displaying syntax.
+                        MarkdownText(alt.ifBlank { "Image" })
                     }
+
+                    cursor = match.range.last + 1
                 }
+
+                MarkdownText(n.bodyMarkdown.substring(cursor))
             }
         }
     }
+}
+
+@Composable
+private fun MarkdownText(markdown: String) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val markwon = remember(context) {
+        Markwon.builder(context)
+            .usePlugin(TaskListPlugin.create(context))
+            .build()
+    }
+    val textColor = MaterialTheme.colorScheme.onBackground.toArgb()
+
+    AndroidView(
+        modifier = Modifier.fillMaxWidth(),
+        factory = {
+            TextView(it).apply {
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
+                setTextColor(textColor)
+                movementMethod = LinkMovementMethod.getInstance()
+                linksClickable = true
+                setPadding(0, 0, 0, 0)
+            }
+        },
+        update = { textView ->
+            textView.setTextColor(textColor)
+            markwon.setMarkdown(textView, markdown)
+        }
+    )
 }
