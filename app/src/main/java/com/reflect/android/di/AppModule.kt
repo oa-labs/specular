@@ -6,6 +6,7 @@ import androidx.work.WorkManager
 import com.specular.android.data.local.FileStore
 import com.specular.android.data.local.SpecularDatabase
 import com.specular.android.data.remote.GitHubApi
+import com.specular.android.data.remote.AiProviderApi
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import dagger.Module
@@ -43,8 +44,18 @@ object AppModule {
             .create(GitHubApi::class.java)
 
     @Provides @Singleton
+    fun provideAiProviderApi(moshi: Moshi, okHttp: OkHttpClient): AiProviderApi =
+        Retrofit.Builder()
+            .baseUrl("https://example.com/")
+            .client(okHttp)
+            .addConverterFactory(MoshiConverterFactory.create(moshi))
+            .build()
+            .create(AiProviderApi::class.java)
+
+    @Provides @Singleton
     fun provideDatabase(@ApplicationContext context: Context): SpecularDatabase =
         Room.databaseBuilder(context, SpecularDatabase::class.java, "reflect.db")
+            .addMigrations(SpecularDatabase.MIGRATION_1_2)
             .fallbackToDestructiveMigration()
             .build()
 

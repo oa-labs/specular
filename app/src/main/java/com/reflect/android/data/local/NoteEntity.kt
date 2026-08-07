@@ -13,6 +13,7 @@ data class NoteEntity(
     val rawMarkdown: String,
     val body: String,
     val aliases: String, // JSON array string
+    val snippet: String? = null,
     val isDaily: Boolean,
     val lastRemoteSha: String?,
     val isDirty: Boolean = false,

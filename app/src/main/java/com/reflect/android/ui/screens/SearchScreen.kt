@@ -43,7 +43,9 @@ fun SearchScreen(navController: NavController, vm: SearchViewModel = hiltViewMod
             items(results, key = { it.id }) { item ->
                 ListItem(
                     headlineContent = { Text(item.title) },
-                    supportingContent = { Text(item.snippet, maxLines = 2) },
+                    supportingContent = {
+                        if (!item.snippet.isNullOrBlank()) Text(item.snippet, maxLines = 2)
+                    },
                     modifier = Modifier.clickable { navController.navigate(Screen.Detail.routeFor(item.id)) }
                 )
                 HorizontalDivider()

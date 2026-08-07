@@ -1,6 +1,8 @@
 package com.specular.android.ui.screens
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material3.*
@@ -8,11 +10,13 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.navigation.NavController
 import com.specular.android.data.remote.GitHubAuth
+import com.specular.android.data.remote.AiProviderSettings
 import com.specular.android.sync.SyncEngine
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -27,12 +31,18 @@ fun SettingsScreen(navController: NavController, vm: SettingsViewModel = hiltVie
     val token by vm.token.collectAsState()
     val owner by vm.owner.collectAsState()
     val repo by vm.repo.collectAsState()
+    val aiUrl by vm.aiUrl.collectAsState()
+    val aiApiKey by vm.aiApiKey.collectAsState()
+    val aiModelId by vm.aiModelId.collectAsState()
     val isTesting by vm.isTesting.collectAsState()
     val statusMessage by vm.statusMessage.collectAsState()
 
     var tokenInput by remember(token) { mutableStateOf(token ?: "") }
     var ownerInput by remember(owner) { mutableStateOf(owner ?: "") }
     var repoInput by remember(repo) { mutableStateOf(repo ?: "") }
+    var aiUrlInput by remember(aiUrl) { mutableStateOf(aiUrl ?: "") }
+    var aiApiKeyInput by remember(aiApiKey) { mutableStateOf(aiApiKey ?: "") }
+    var aiModelIdInput by remember(aiModelId) { mutableStateOf(aiModelId ?: "") }
 
     val snackbarHostState = remember { SnackbarHostState() }
     LaunchedEffect(statusMessage) {
@@ -58,11 +68,12 @@ fun SettingsScreen(navController: NavController, vm: SettingsViewModel = hiltVie
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
-                .padding(16.dp),
+                .padding(16.dp)
+                .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             Text(
-                "GitHub Sync — github.com only, no telemetry",
+                "GitHub Sync and AI snippets — no telemetry",
                 style = MaterialTheme.typography.labelMedium
             )
 
@@ -92,7 +103,9 @@ fun SettingsScreen(navController: NavController, vm: SettingsViewModel = hiltVie
 
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(
-                    onClick = { vm.save(tokenInput, ownerInput, repoInput) },
+                    onClick = {
+                        vm.save(tokenInput, ownerInput, repoInput, aiUrlInput, aiApiKeyInput, aiModelIdInput)
+                    },
                     modifier = Modifier.weight(1f),
                     enabled = !isTesting
                 ) {
@@ -108,12 +121,48 @@ fun SettingsScreen(navController: NavController, vm: SettingsViewModel = hiltVie
                 }
             }
 
+            HorizontalDivider()
+            Text("AI snippets", style = MaterialTheme.typography.titleMedium)
+            Text(
+                "Configure an OpenAI-compatible chat-completions URL. Snippets are saved as markdown metadata and generated only for notes that do not already have one.",
+                style = MaterialTheme.typography.bodySmall
+            )
+
+            OutlinedTextField(
+                value = aiUrlInput,
+                onValueChange = { aiUrlInput = it },
+                label = { Text("AI provider URL") },
+                placeholder = { Text("https://api.example.com/v1/chat/completions") },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true
+            )
+
+            OutlinedTextField(
+                value = aiApiKeyInput,
+                onValueChange = { aiApiKeyInput = it },
+                label = { Text("AI API key") },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                visualTransformation = PasswordVisualTransformation()
+            )
+
+            OutlinedTextField(
+                value = aiModelIdInput,
+                onValueChange = { aiModelIdInput = it },
+                label = { Text("AI model id") },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true
+            )
+
             OutlinedButton(
                 onClick = {
                     vm.clear()
                     tokenInput = ""
                     ownerInput = ""
                     repoInput = ""
+                    aiUrlInput = ""
+                    aiApiKeyInput = ""
+                    aiModelIdInput = ""
                 },
                 modifier = Modifier.fillMaxWidth()
             ) {
@@ -153,7 +202,7 @@ fun SettingsScreen(navController: NavController, vm: SettingsViewModel = hiltVie
             }
 
             Text(
-                "Token is stored securely. Use a fine-grained PAT with 'Contents: read & write' permissions. After saving, the app will test the connection and return to the note list if successful.",
+                "Credentials are stored securely. Use a fine-grained PAT with 'Contents: read & write' permissions. AI requests send note content to the provider URL you configure.",
                 style = MaterialTheme.typography.bodySmall
             )
 
@@ -169,7 +218,8 @@ fun SettingsScreen(navController: NavController, vm: SettingsViewModel = hiltVie
 @HiltViewModel
 class SettingsViewModel @Inject constructor(
     private val auth: GitHubAuth,
-    private val syncEngine: SyncEngine
+    private val syncEngine: SyncEngine,
+    private val aiSettings: AiProviderSettings
 ) : ViewModel() {
 
     private val _token = MutableStateFlow(auth.token)
@@ -181,6 +231,15 @@ class SettingsViewModel @Inject constructor(
     private val _repo = MutableStateFlow(auth.repoName)
     val repo: StateFlow<String?> = _repo.asStateFlow()
 
+    private val _aiUrl = MutableStateFlow(aiSettings.config.value?.url)
+    val aiUrl: StateFlow<String?> = _aiUrl.asStateFlow()
+
+    private val _aiApiKey = MutableStateFlow(aiSettings.config.value?.apiKey)
+    val aiApiKey: StateFlow<String?> = _aiApiKey.asStateFlow()
+
+    private val _aiModelId = MutableStateFlow(aiSettings.config.value?.modelId)
+    val aiModelId: StateFlow<String?> = _aiModelId.asStateFlow()
+
     private val _isTesting = MutableStateFlow(false)
     val isTesting: StateFlow<Boolean> = _isTesting.asStateFlow()
 
@@ -189,14 +248,29 @@ class SettingsViewModel @Inject constructor(
 
     fun isConfigured(): Boolean = auth.isConfigured()
 
-    fun save(tokenInput: String, ownerInput: String, repoInput: String) {
+    fun save(
+        tokenInput: String,
+        ownerInput: String,
+        repoInput: String,
+        aiUrlInput: String,
+        aiApiKeyInput: String,
+        aiModelIdInput: String
+    ) {
         auth.token = tokenInput.ifBlank { null }
         auth.repoOwner = ownerInput.ifBlank { null }
         auth.repoName = repoInput.ifBlank { null }
+        if (aiUrlInput.isBlank() && aiApiKeyInput.isBlank() && aiModelIdInput.isBlank()) {
+            aiSettings.clear()
+        } else {
+            aiSettings.save(aiUrlInput, aiApiKeyInput, aiModelIdInput)
+        }
 
         _token.value = auth.token
         _owner.value = auth.repoOwner
         _repo.value = auth.repoName
+        _aiUrl.value = aiSettings.config.value?.url
+        _aiApiKey.value = aiSettings.config.value?.apiKey
+        _aiModelId.value = aiSettings.config.value?.modelId
 
         _statusMessage.value = if (auth.isConfigured()) {
             "Settings saved. Tap 'Test Connection' to verify."
@@ -242,6 +316,10 @@ class SettingsViewModel @Inject constructor(
         _token.value = null
         _owner.value = null
         _repo.value = null
+        aiSettings.clear()
+        _aiUrl.value = null
+        _aiApiKey.value = null
+        _aiModelId.value = null
         _statusMessage.value = "Configuration cleared"
     }
 

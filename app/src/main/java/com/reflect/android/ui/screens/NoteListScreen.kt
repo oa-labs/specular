@@ -64,7 +64,9 @@ fun NoteListScreen(navController: NavController, vm: NoteListViewModel = hiltVie
                 items(notes, key = { it.id }) { item ->
                     ListItem(
                         headlineContent = { Text(item.title) },
-                        supportingContent = { Text(item.snippet, maxLines = 2) },
+                        supportingContent = {
+                            if (!item.snippet.isNullOrBlank()) Text(item.snippet, maxLines = 2)
+                        },
                         trailingContent = {
                             Row {
                                 if (item.isDirty) Badge { Text("•") }

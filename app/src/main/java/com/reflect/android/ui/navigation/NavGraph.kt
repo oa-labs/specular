@@ -26,8 +26,11 @@ sealed class Screen(val route: String) {
 }
 
 @Composable
-fun SpecularNavGraph(navController: NavHostController) {
-    NavHost(navController = navController, startDestination = Screen.List.route) {
+fun SpecularNavGraph(
+    navController: NavHostController,
+    startDestination: String = Screen.List.route
+) {
+    NavHost(navController = navController, startDestination = startDestination) {
         composable(Screen.List.route) { NoteListScreen(navController) }
         composable(Screen.Search.route) { SearchScreen(navController) }
         composable(Screen.Detail.route) { backStack ->

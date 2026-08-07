@@ -66,6 +66,7 @@ class SyncEngine @Inject constructor(
                             rawMarkdown = raw,
                             body = parsed.body,
                             aliases = parsed.aliases.toString(),
+                            snippet = parsed.snippet,
                             isDaily = conflictPath.startsWith("daily/"),
                             lastRemoteSha = entry.sha,
                             isConflict = true
@@ -84,6 +85,7 @@ class SyncEngine @Inject constructor(
                         rawMarkdown = raw,
                         body = parsed.body,
                         aliases = parsed.aliases.toString(),
+                        snippet = parsed.snippet,
                         isDaily = entry.path.startsWith("daily/"),
                         lastRemoteSha = entry.sha,
                         isDirty = false,

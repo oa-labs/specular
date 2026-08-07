@@ -3,6 +3,7 @@ package com.specular.android.data
 import com.specular.android.data.local.FrontmatterParser
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class FrontmatterParserTest {
@@ -37,6 +38,25 @@ aliases:
         val raw = "- Try out Quill\n"
         val p = FrontmatterParser.parse("daily/2026-07-28.md", raw)
         assertEquals("daily/2026-07-28.md", p.id)
+    }
+
+    @Test fun parsesAndUpsertsSnippetWithoutDroppingMetadata() {
+        val raw = """
+            ---
+            id: 01snippet
+            custom: retained
+            ---
+            # A title
+
+            Body text.
+        """.trimIndent()
+
+        val withSnippet = FrontmatterParser.upsertSnippet("note.md", raw, "Project planning")
+        val parsed = FrontmatterParser.parse("note.md", withSnippet)
+
+        assertEquals("Project planning", parsed.snippet)
+        assertEquals("A title", parsed.title)
+        assertTrue(withSnippet.contains("custom: retained"))
     }
 
     @Test fun generateRoundTrip() {

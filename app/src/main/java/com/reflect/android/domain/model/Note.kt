@@ -10,6 +10,7 @@ data class Note(
     val path: String, // e.g. "barry-kaufman.md" or "daily/2026-07-28.md" or "notes/how-to-use-reflect.md"
     val rawMarkdown: String,
     val bodyMarkdown: String, // without frontmatter
+    val snippet: String? = null,
     val aliases: List<String> = emptyList(),
     val createdAt: Long? = null,
     val updatedAt: Long? = null,
@@ -26,7 +27,7 @@ data class NoteListItem(
     val id: String,
     val title: String,
     val path: String,
-    val snippet: String,
+    val snippet: String?,
     val isDaily: Boolean,
     val isDirty: Boolean,
     val isConflict: Boolean

@@ -1,6 +1,8 @@
 package com.specular.android.ui.screens
 
 import android.text.method.LinkMovementMethod
+import android.text.Spannable
+import android.text.style.ClickableSpan
 import android.util.TypedValue
 import android.widget.TextView
 import androidx.compose.foundation.layout.*
@@ -20,11 +22,17 @@ import androidx.navigation.NavController
 import coil.compose.AsyncImage
 import io.noties.markwon.Markwon
 import io.noties.markwon.ext.tasklist.TaskListPlugin
+import io.noties.markwon.ext.tasklist.TaskListSpan
 import com.specular.android.ui.navigation.Screen
+import android.view.View
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun NoteDetailScreen(navController: NavController, id: String, vm: NoteDetailViewModel = hiltViewModel()) {
+fun NoteDetailScreen(
+    navController: NavController,
+    id: String,
+    vm: NoteDetailViewModel = hiltViewModel()
+) {
     LaunchedEffect(id) { vm.load(id) }
     val note by vm.note.collectAsState()
 
@@ -60,9 +68,12 @@ fun NoteDetailScreen(navController: NavController, id: String, vm: NoteDetailVie
                 val imagePattern = Regex("""!\[(.*?)\]\((.*?)\)""")
                 val matches = imagePattern.findAll(n.bodyMarkdown).toList()
                 var cursor = 0
+                var taskOffset = 0
 
                 matches.forEach { match ->
-                    MarkdownText(n.bodyMarkdown.substring(cursor, match.range.first))
+                    val markdownBeforeImage = n.bodyMarkdown.substring(cursor, match.range.first)
+                    MarkdownText(markdownBeforeImage, taskOffset) { taskIndex -> vm.toggleTask(id, taskIndex) }
+                    taskOffset += countTaskItems(markdownBeforeImage)
 
                     val alt = match.groupValues[1]
                     val url = match.groupValues[2]
@@ -71,20 +82,21 @@ fun NoteDetailScreen(navController: NavController, id: String, vm: NoteDetailVie
                         AsyncImage(model = url, contentDescription = alt, modifier = Modifier.fillMaxWidth())
                     } else {
                         // Keep unsupported image destinations readable without displaying syntax.
-                        MarkdownText(alt.ifBlank { "Image" })
+                        MarkdownText(alt.ifBlank { "Image" }, taskOffset) { }
                     }
 
                     cursor = match.range.last + 1
                 }
 
-                MarkdownText(n.bodyMarkdown.substring(cursor))
+                val markdownAfterImages = n.bodyMarkdown.substring(cursor)
+                MarkdownText(markdownAfterImages, taskOffset) { taskIndex -> vm.toggleTask(id, taskIndex) }
             }
         }
     }
 }
 
 @Composable
-private fun MarkdownText(markdown: String) {
+private fun MarkdownText(markdown: String, taskOffset: Int, onTaskClick: (Int) -> Unit) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val markwon = remember(context) {
         Markwon.builder(context)
@@ -107,6 +119,30 @@ private fun MarkdownText(markdown: String) {
         update = { textView ->
             textView.setTextColor(textColor)
             markwon.setMarkdown(textView, markdown)
+
+            val rendered = textView.text as? Spannable ?: return@AndroidView
+            rendered.getSpans(0, rendered.length, TaskListSpan::class.java)
+                .sortedBy { rendered.getSpanStart(it) }
+                .forEachIndexed { localIndex, taskSpan ->
+                    val start = rendered.getSpanStart(taskSpan)
+                    val end = rendered.getSpanEnd(taskSpan)
+                    if (start >= 0 && end > start) {
+                        rendered.setSpan(
+                            object : ClickableSpan() {
+                                override fun onClick(widget: View) {
+                                    onTaskClick(taskOffset + localIndex)
+                                }
+
+                                override fun updateDrawState(ds: android.text.TextPaint) {
+                                    // Keep task text styled as normal Markdown, without an underline.
+                                }
+                            },
+                            start,
+                            end,
+                            Spannable.SPAN_EXCLUSIVE_EXCLUSIVE
+                        )
+                    }
+                }
         }
     )
 }
