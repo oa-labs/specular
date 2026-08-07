@@ -20,8 +20,29 @@ import kotlinx.coroutines.flow.collectLatest
 fun SearchScreen(navController: NavController, vm: SearchViewModel = hiltViewModel()) {
     var query by remember { mutableStateOf("") }
     val results by vm.results.collectAsState()
+    val snackbarHostState = remember { SnackbarHostState() }
+    val savedStateHandle = navController.currentBackStackEntry?.savedStateHandle
+
+    LaunchedEffect(savedStateHandle) {
+        savedStateHandle ?: return@LaunchedEffect
+        savedStateHandle.getStateFlow<String?>(DELETED_NOTE_ID, null).collect { id ->
+            if (id == null) return@collect
+            val title = savedStateHandle.get<String>(DELETED_NOTE_TITLE).orEmpty()
+            savedStateHandle[DELETED_NOTE_ID] = null
+            savedStateHandle[DELETED_NOTE_TITLE] = null
+            if (snackbarHostState.showSnackbar(
+                    message = if (title.isBlank()) "Note deleted" else "Deleted $title",
+                    actionLabel = "Undo",
+                    withDismissAction = true
+                ) == SnackbarResult.ActionPerformed
+            ) {
+                vm.undoDelete(id)
+            }
+        }
+    }
 
     Scaffold(
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
                 title = {

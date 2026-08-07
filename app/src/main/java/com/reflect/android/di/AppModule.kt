@@ -56,6 +56,8 @@ object AppModule {
     fun provideDatabase(@ApplicationContext context: Context): SpecularDatabase =
         Room.databaseBuilder(context, SpecularDatabase::class.java, "reflect.db")
             .addMigrations(SpecularDatabase.MIGRATION_1_2)
+            .addMigrations(SpecularDatabase.MIGRATION_2_3)
+            .addMigrations(SpecularDatabase.MIGRATION_3_4)
             .fallbackToDestructiveMigration()
             .build()
 

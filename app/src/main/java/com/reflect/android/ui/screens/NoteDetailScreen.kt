@@ -12,6 +12,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
@@ -27,6 +29,7 @@ import io.noties.markwon.Markwon
 import io.noties.markwon.ext.tasklist.TaskListPlugin
 import io.noties.markwon.ext.tasklist.TaskListSpan
 import com.specular.android.ui.navigation.Screen
+import com.specular.android.data.local.countTodoItems
 import android.view.View
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -38,6 +41,18 @@ fun NoteDetailScreen(
 ) {
     LaunchedEffect(id) { vm.load(id) }
     val note by vm.note.collectAsState()
+    var showActions by remember { mutableStateOf(false) }
+    var showDeleteConfirmation by remember { mutableStateOf(false) }
+
+    LaunchedEffect(vm) {
+        vm.deletedNotes.collect { deleted ->
+            navController.previousBackStackEntry?.savedStateHandle?.apply {
+                set(DELETED_NOTE_ID, deleted.id)
+                set(DELETED_NOTE_TITLE, deleted.title)
+            }
+            navController.popBackStack()
+        }
+    }
 
     Scaffold(
         topBar = {
@@ -49,6 +64,24 @@ fun NoteDetailScreen(
                 actions = {
                     IconButton(onClick = { navController.navigate(Screen.Editor.routeFor(id)) }) {
                         Icon(Icons.Default.Edit, "Edit")
+                    }
+                    Box {
+                        IconButton(onClick = { showActions = true }) {
+                            Icon(Icons.Default.MoreVert, "More actions")
+                        }
+                        DropdownMenu(
+                            expanded = showActions,
+                            onDismissRequest = { showActions = false }
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("Delete note") },
+                                onClick = {
+                                    showActions = false
+                                    showDeleteConfirmation = true
+                                },
+                                leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null) }
+                            )
+                        }
                     }
                 }
             )
@@ -103,7 +136,7 @@ fun NoteDetailScreen(
                 matches.forEach { match ->
                     val markdownBeforeImage = displayMarkdown.substring(cursor, match.range.first)
                     MarkdownText(markdownBeforeImage, taskOffset) { taskIndex -> vm.toggleTask(id, taskIndex) }
-                    taskOffset += countTaskItems(markdownBeforeImage)
+                    taskOffset += countTodoItems(markdownBeforeImage)
 
                     val alt = match.groupValues[1]
                     val url = match.groupValues[2]
@@ -122,6 +155,27 @@ fun NoteDetailScreen(
                 MarkdownText(markdownAfterImages, taskOffset) { taskIndex -> vm.toggleTask(id, taskIndex) }
             }
         }
+    }
+
+    if (showDeleteConfirmation) {
+        AlertDialog(
+            onDismissRequest = { showDeleteConfirmation = false },
+            title = { Text("Delete note?") },
+            text = {
+                Text("This removes \"${note?.title.orEmpty()}\" from this device and GitHub the next time you sync.")
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showDeleteConfirmation = false
+                        vm.deleteNote(id)
+                    }
+                ) { Text("Delete", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteConfirmation = false }) { Text("Cancel") }
+            }
+        )
     }
 }
 

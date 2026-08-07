@@ -17,6 +17,8 @@ data class NoteEntity(
     val isDaily: Boolean,
     val lastRemoteSha: String?,
     val isDirty: Boolean = false,
+    /** Hidden locally while its GitHub Contents API deletion is waiting to sync. */
+    val isPendingDeletion: Boolean = false,
     val isConflict: Boolean = false,
     val updatedAt: Long = System.currentTimeMillis()
 )

@@ -104,6 +104,10 @@ class NoteListViewModel @Inject constructor(
         }
     }
 
+    fun undoDelete(id: String) {
+        viewModelScope.launch { repo.undoDeleteNote(id) }
+    }
+
     fun setSort(sort: NoteSort) {
         _sort.value = sort
     }

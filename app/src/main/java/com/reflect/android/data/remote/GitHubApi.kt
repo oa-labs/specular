@@ -28,7 +28,9 @@ interface GitHubApi {
         @Body body: PutContentRequest
     ): PutContentResponse
 
-    @DELETE("repos/{owner}/{repo}/contents/{path}")
+    // GitHub's Contents delete endpoint requires the target SHA in a JSON body.
+    // Retrofit's @DELETE annotation disallows bodies, so use @HTTP explicitly.
+    @HTTP(method = "DELETE", path = "repos/{owner}/{repo}/contents/{path}", hasBody = true)
     suspend fun deleteContent(
         @Path("owner") owner: String,
         @Path("repo") repo: String,

@@ -20,4 +20,8 @@ class SearchViewModel @Inject constructor(private val repo: NoteRepository) : Vi
             repo.search(q).collect { _results.value = it }
         }
     }
+
+    fun undoDelete(id: String) {
+        viewModelScope.launch { repo.undoDeleteNote(id) }
+    }
 }

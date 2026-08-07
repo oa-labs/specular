@@ -6,9 +6,11 @@ import com.specular.android.data.local.FrontmatterParser
 import com.specular.android.data.local.NoteDao
 import com.specular.android.data.local.NoteEntity
 import com.specular.android.data.local.NoteStoreLock
+import com.specular.android.data.local.TodoIndex
 import com.specular.android.data.remote.GitHubApi
 import com.specular.android.data.remote.GitHubAuth
 import com.specular.android.data.remote.PutContentRequest
+import com.specular.android.data.remote.DeleteContentRequest
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.util.Base64
@@ -29,7 +31,8 @@ class SyncEngine @Inject constructor(
     private val auth: GitHubAuth,
     private val dao: NoteDao,
     private val fileStore: FileStore,
-    private val noteStoreLock: NoteStoreLock = NoteStoreLock()
+    private val noteStoreLock: NoteStoreLock = NoteStoreLock(),
+    private val todoIndex: TodoIndex = TodoIndex()
 ) {
     sealed class Result {
         data object Success : Result()
@@ -60,6 +63,9 @@ class SyncEngine @Inject constructor(
             for (entry in tree.tree) {
                 if (entry.type != "blob" || !entry.path.endsWith(".md")) continue
                 val local = dao.getByPath(entry.path)
+                // A locally requested deletion is authoritative until its remote
+                // operation completes. Do not revive it during the pull phase.
+                if (local?.isPendingDeletion == true) continue
                 // A matching remote SHA means the remote has not changed. Keep a dirty
                 // local copy intact so the subsequent push can publish it.
                 if (local?.lastRemoteSha == entry.sha) continue
@@ -78,8 +84,7 @@ class SyncEngine @Inject constructor(
                     runSyncStage("pull:write conflict path=$conflictPath") {
                         fileStore.write(conflictPath, raw)
                         val parsed = FrontmatterParser.parse(entry.path, raw)
-                        dao.upsert(
-                            NoteEntity(
+                        val entity = NoteEntity(
                                 id = "${FrontmatterParser.identityFor(entry.path, parsed.id)}:conflict:${entry.sha}",
                                 title = parsed.title + " (conflict)",
                                 path = conflictPath,
@@ -91,7 +96,7 @@ class SyncEngine @Inject constructor(
                                 lastRemoteSha = entry.sha,
                                 isConflict = true
                             )
-                        )
+                        dao.upsertNoteAndReplaceTodos(entity, todoIndex.extract(entity.id, entity.body))
                     }
                     continue
                 }
@@ -99,8 +104,7 @@ class SyncEngine @Inject constructor(
                 runSyncStage("pull:persist path=${entry.path}") {
                     fileStore.write(entry.path, raw)
                     val parsed = FrontmatterParser.parse(entry.path, raw)
-                    dao.upsert(
-                        NoteEntity(
+                    val entity = NoteEntity(
                             id = FrontmatterParser.identityFor(entry.path, parsed.id),
                             title = parsed.title,
                             path = entry.path,
@@ -113,7 +117,7 @@ class SyncEngine @Inject constructor(
                             isDirty = false,
                             isConflict = false
                         )
-                    )
+                    dao.upsertNoteAndReplaceTodos(entity, todoIndex.extract(entity.id, entity.body))
                 }
             }
             logInfo("Pull completed")
@@ -135,13 +139,58 @@ class SyncEngine @Inject constructor(
             val branch = runSyncStage("push:get repository") {
                 api.getRepo(owner, repo, header).default_branch
             }
+            val pendingDeletions = runSyncStage("push:load pending deletions") {
+                dao.getPendingDeletions()
+            }
             val dirty = runSyncStage("push:load dirty notes") { dao.getDirty() }
-            if (dirty.isEmpty()) {
+                .filterNot { it.isPendingDeletion }
+            if (dirty.isEmpty() && pendingDeletions.isEmpty()) {
                 logInfo("Push skipped: no dirty notes")
                 return@withContext Result.Success
             }
-            logDebug("Push queued notes=${dirty.size}")
+            logDebug("Push queued notes=${dirty.size} deletions=${pendingDeletions.size}")
             var failedPushes = 0
+            for (e in pendingDeletions) {
+                // A note created and deleted before its first push has no remote
+                // counterpart, so completing its local deletion is sufficient.
+                if (e.lastRemoteSha == null) {
+                    runSyncStage("push:discard unsynced deletion path=${e.path}") {
+                        fileStore.delete(e.path)
+                        dao.deleteNoteAndTodos(e.id)
+                    }
+                    continue
+                }
+                try {
+                    logDebug("Push deleting path=${e.path}")
+                    api.deleteContent(
+                        owner, repo, e.path, header,
+                        DeleteContentRequest(
+                            message = "Delete ${e.title}",
+                            sha = e.lastRemoteSha,
+                            branch = branch
+                        )
+                    )
+                    runSyncStage("push:persist deletion path=${e.path}") {
+                        fileStore.delete(e.path)
+                        dao.deleteNoteAndTodos(e.id)
+                    }
+                } catch (ex: Exception) {
+                    // A 404 means another client already removed this file. Treat it
+                    // as a completed deletion; other failures remain pending to retry.
+                    if ((ex as? HttpException)?.code() == 404) {
+                        runSyncStage("push:complete already-deleted path=${e.path}") {
+                            fileStore.delete(e.path)
+                            dao.deleteNoteAndTodos(e.id)
+                        }
+                        continue
+                    }
+                    failedPushes++
+                    logPushFailure(e.path, ex)
+                    val statusCode = (ex as? HttpException)?.code()
+                    if (statusCode == 409 || statusCode == 422) continue
+                    return@withContext Result.Error(userFacingPushError(ex))
+                }
+            }
             for (e in dirty) {
                 val raw = runSyncStage("push:read local path=${e.path}") {
                     fileStore.read(e.path) ?: e.rawMarkdown

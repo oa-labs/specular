@@ -11,8 +11,11 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Checklist
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
@@ -31,28 +34,64 @@ import com.specular.android.ui.screens.NoteListViewModel
 fun NoteListScreen(navController: NavController, vm: NoteListViewModel = hiltViewModel()) {
     val notes by vm.notes.collectAsState()
     val sort by vm.sort.collectAsState()
-    var sortMenuExpanded by remember { mutableStateOf(false) }
     val isSyncing by vm.isSyncing.collectAsState()
     val syncMessage by vm.syncMessage.collectAsState()
+    val snackbarHostState = remember { SnackbarHostState() }
+    val savedStateHandle = navController.currentBackStackEntry?.savedStateHandle
+    var overflowExpanded by remember { mutableStateOf(false) }
+
+    LaunchedEffect(savedStateHandle) {
+        savedStateHandle ?: return@LaunchedEffect
+        savedStateHandle.getStateFlow<String?>(DELETED_NOTE_ID, null).collect { id ->
+            if (id == null) return@collect
+            val title = savedStateHandle.get<String>(DELETED_NOTE_TITLE).orEmpty()
+            savedStateHandle[DELETED_NOTE_ID] = null
+            savedStateHandle[DELETED_NOTE_TITLE] = null
+            if (snackbarHostState.showSnackbar(
+                    message = if (title.isBlank()) "Note deleted" else "Deleted $title",
+                    actionLabel = "Undo",
+                    withDismissAction = true
+                ) == SnackbarResult.ActionPerformed
+            ) {
+                vm.undoDelete(id)
+            }
+        }
+    }
 
     Scaffold(
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
                 title = { Text("Specular") },
                 actions = {
+                    IconButton(onClick = { navController.navigate(Screen.Todos.route) }) {
+                        Icon(Icons.Default.Checklist, "View todos")
+                    }
+                    IconButton(onClick = { navController.navigate(Screen.Search.route) }) { Icon(Icons.Default.Search, "Search") }
+                    IconButton(onClick = { navController.navigate(Screen.Settings.route) }) { Icon(Icons.Default.Settings, "Settings") }
+                    if (isSyncing) CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
                     Box {
-                        IconButton(onClick = { sortMenuExpanded = true }) {
-                            Icon(Icons.AutoMirrored.Filled.Sort, "Sort notes")
+                        IconButton(onClick = { overflowExpanded = true }) {
+                            Icon(Icons.Default.MoreVert, "More actions")
                         }
                         DropdownMenu(
-                            expanded = sortMenuExpanded,
-                            onDismissRequest = { sortMenuExpanded = false }
+                            expanded = overflowExpanded,
+                            onDismissRequest = { overflowExpanded = false }
                         ) {
+                            DropdownMenuItem(
+                                text = { Text("Sync") },
+                                onClick = {
+                                    overflowExpanded = false
+                                    vm.sync()
+                                },
+                                leadingIcon = { Icon(Icons.Default.Refresh, contentDescription = null) }
+                            )
+                            HorizontalDivider()
                             DropdownMenuItem(
                                 text = { Text("Last updated") },
                                 onClick = {
                                     vm.setSort(NoteSort.LAST_UPDATED)
-                                    sortMenuExpanded = false
+                                    overflowExpanded = false
                                 },
                                 trailingIcon = {
                                     if (sort == NoteSort.LAST_UPDATED) {
@@ -64,7 +103,7 @@ fun NoteListScreen(navController: NavController, vm: NoteListViewModel = hiltVie
                                 text = { Text("Alphabetical") },
                                 onClick = {
                                     vm.setSort(NoteSort.ALPHABETICAL)
-                                    sortMenuExpanded = false
+                                    overflowExpanded = false
                                 },
                                 trailingIcon = {
                                     if (sort == NoteSort.ALPHABETICAL) {
@@ -74,10 +113,6 @@ fun NoteListScreen(navController: NavController, vm: NoteListViewModel = hiltVie
                             )
                         }
                     }
-                    if (isSyncing) CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
-                    IconButton(onClick = { vm.sync() }) { Icon(Icons.Default.Refresh, "Sync") }
-                    IconButton(onClick = { navController.navigate(Screen.Search.route) }) { Icon(Icons.Default.Search, "Search") }
-                    IconButton(onClick = { navController.navigate(Screen.Settings.route) }) { Icon(Icons.Default.Settings, "Settings") }
                 }
             )
         },
@@ -142,3 +177,6 @@ fun NoteListScreen(navController: NavController, vm: NoteListViewModel = hiltVie
         }
     }
 }
+
+internal const val DELETED_NOTE_ID = "deleted_note_id"
+internal const val DELETED_NOTE_TITLE = "deleted_note_title"
