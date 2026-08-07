@@ -14,6 +14,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.CancellationException
 import androidx.work.WorkManager
 import javax.inject.Inject
 
@@ -41,6 +42,11 @@ class NoteListViewModel @Inject constructor(
                             launch {
                                 try {
                                     repo.generateSnippet(note.id)
+                                } catch (e: CancellationException) {
+                                    throw e
+                                } catch (_: Exception) {
+                                    // A malformed/legacy note or an unavailable provider must not
+                                    // take down the note list. It remains eligible for a later retry.
                                 } finally {
                                     snippetJobs.remove(note.id)
                                 }

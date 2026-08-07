@@ -40,6 +40,52 @@ aliases:
         assertEquals("daily/2026-07-28.md", p.id)
     }
 
+    @Test fun legacyListNoteWithoutMetadataIsSafeToParse() {
+        val raw = """
+            - Try out Quill for meeting recordings - https://github.com/digimata/quill
+            - And maybe parrot for voice to text - https://github.com/digimata/parrot
+        """.trimIndent()
+
+        val p = FrontmatterParser.parse("meeting-recording-tools.md", raw)
+
+        assertEquals(null, p.id)
+        assertEquals("Meeting Recording Tools", p.title)
+        assertEquals(raw, p.body)
+        assertEquals("meeting-recording-tools", FrontmatterParser.identityFor("meeting-recording-tools.md", p.id))
+    }
+
+    @Test fun addsMissingIdWithoutDroppingExistingMetadata() {
+        val frontmatter = """
+            aliases:
+              - Recording tools
+            custom: retained
+        """.trimIndent()
+
+        val updated = FrontmatterParser.upsertIdInFrontmatter(frontmatter, "meeting-recording-tools")
+
+        assertTrue(updated.startsWith("id: meeting-recording-tools\n"))
+        assertTrue(updated.contains("aliases:"))
+        assertTrue(updated.contains("custom: retained"))
+    }
+
+    @Test fun snippetWriteRepairsMissingIdInExistingFrontmatter() {
+        val raw = """
+            ---
+            aliases:
+              - Recording tools
+            ---
+            - Try out Quill
+            - And maybe parrot
+        """.trimIndent()
+
+        val updated = FrontmatterParser.upsertSnippet("meeting-recording-tools.md", raw, "Voice transcription tools")
+        val parsed = FrontmatterParser.parse("meeting-recording-tools.md", updated)
+
+        assertEquals("meeting-recording-tools", parsed.id)
+        assertEquals("Voice transcription tools", parsed.snippet)
+        assertTrue(updated.contains("aliases:"))
+    }
+
     @Test fun parsesAndUpsertsSnippetWithoutDroppingMetadata() {
         val raw = """
             ---

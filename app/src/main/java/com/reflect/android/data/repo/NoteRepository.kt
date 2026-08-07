@@ -50,7 +50,7 @@ class NoteRepository @Inject constructor(
         val files = fileStore.listAllMarkdown()
         val entities = files.map { (path, raw) ->
             val parsed = FrontmatterParser.parse(path, raw)
-            val id = parsed.id ?: path.replace(".md", "")
+            val id = FrontmatterParser.identityFor(path, parsed.id)
             val existing = dao.getByPath(path) ?: dao.getById(id)
             existing?.copy(
                 title = parsed.title.ifBlank { path.removeSuffix(".md") },
@@ -125,8 +125,10 @@ class NoteRepository @Inject constructor(
         val title = newTitle ?: parsed.title
         val body = newBody ?: parsed.body
         // Re-generate file — keep id stable
-        val frontmatter = parsed.rawFrontmatter?.let { "---\n$it\n---\n" }
-            ?: FrontmatterParser.generateFrontmatter(parsed.id ?: id, parsed.aliases, parsed.snippet)
+        val stableId = FrontmatterParser.identityFor(e.path, parsed.id ?: id)
+        val frontmatter = parsed.rawFrontmatter?.let {
+            "---\n${FrontmatterParser.upsertIdInFrontmatter(it, stableId)}\n---\n"
+        } ?: FrontmatterParser.generateFrontmatter(stableId, parsed.aliases, parsed.snippet)
         val raw = frontmatter + body.let { if (it.startsWith("# ")) it else "# $title\n\n$it" }
         // If title changed, keep path stable for now (rename is explicit op)
         fileStore.write(e.path, raw)

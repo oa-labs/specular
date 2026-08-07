@@ -60,7 +60,7 @@ class SyncEngine @Inject constructor(
                     val parsed = FrontmatterParser.parse(entry.path, raw)
                     dao.upsert(
                         NoteEntity(
-                            id = "${parsed.id ?: entry.path}:conflict:${entry.sha}",
+                            id = "${FrontmatterParser.identityFor(entry.path, parsed.id)}:conflict:${entry.sha}",
                             title = parsed.title + " (conflict)",
                             path = conflictPath,
                             rawMarkdown = raw,
@@ -79,7 +79,7 @@ class SyncEngine @Inject constructor(
                 val parsed = FrontmatterParser.parse(entry.path, raw)
                 dao.upsert(
                     NoteEntity(
-                        id = parsed.id ?: entry.path,
+                        id = FrontmatterParser.identityFor(entry.path, parsed.id),
                         title = parsed.title,
                         path = entry.path,
                         rawMarkdown = raw,

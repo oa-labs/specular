@@ -29,6 +29,22 @@ object FrontmatterParser {
     private val titleRegex = Regex("""^#\s+(.+)$""", RegexOption.MULTILINE)
     private val snippetRegex = Regex("""^\s*snippet:\s*(.*?)\s*$""", RegexOption.MULTILINE)
 
+    /** Returns the stable local identity used when a legacy file has no id metadata. */
+    fun identityFor(path: String, id: String?): String =
+        id?.trim()?.takeIf { it.isNotEmpty() }
+            ?: if (path.startsWith("daily/")) path else path.removeSuffix(".md")
+
+    /** Adds or replaces only the id field in an existing frontmatter block. */
+    fun upsertIdInFrontmatter(frontmatter: String, id: String): String {
+        val replacement = "id: $id"
+        val lines = frontmatter.lines()
+        return if (lines.any { idRegex.matches(it) }) {
+            lines.joinToString("\n") { line -> if (idRegex.matches(line)) replacement else line }
+        } else {
+            (listOf(replacement) + lines).joinToString("\n")
+        }
+    }
+
     fun parse(path: String, raw: String): Parsed {
         val trimmed = raw.trimStart()
         if (trimmed.startsWith("---")) {
@@ -118,8 +134,10 @@ object FrontmatterParser {
                 val frontmatterStart = offset + 3
                 val frontmatterEnd = offset + end
                 val frontmatter = raw.substring(frontmatterStart, frontmatterEnd)
+                val frontmatterId = idRegex.find(frontmatter)?.groupValues?.get(1)
+                val frontmatterWithId = upsertIdInFrontmatter(frontmatter, identityFor(path, frontmatterId))
                 val replacement = "snippet: ${encodeScalar(snippet)}"
-                val updatedFrontmatter = frontmatter
+                val updatedFrontmatter = frontmatterWithId
                     .lineSequence()
                     .map { line -> if (snippetRegex.matches(line)) replacement else line }
                     .toList()
