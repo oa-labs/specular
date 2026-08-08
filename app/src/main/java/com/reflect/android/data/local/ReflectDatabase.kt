@@ -7,7 +7,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 
 @Database(
     entities = [NoteEntity::class, NoteFts::class, TodoEntity::class, TodoIndexState::class],
-    version = 4,
+    version = 5,
     exportSchema = false
 )
 abstract class SpecularDatabase : RoomDatabase() {
@@ -44,6 +44,13 @@ abstract class SpecularDatabase : RoomDatabase() {
                         "id INTEGER NOT NULL, isReady INTEGER NOT NULL, PRIMARY KEY(id))"
                 )
                 db.execSQL("INSERT OR REPLACE INTO todo_index_state (id, isReady) VALUES (0, 0)")
+            }
+        }
+
+        val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE notes ADD COLUMN pendingRenameFromPath TEXT")
+                db.execSQL("ALTER TABLE notes ADD COLUMN pendingRenameFromSha TEXT")
             }
         }
     }

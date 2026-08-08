@@ -29,6 +29,18 @@ class FileStore @Inject constructor(
 
     fun delete(path: String): Boolean = resolve(path).delete()
 
+    /** Moves a repository-relative file, falling back to a copy when needed. */
+    fun move(fromPath: String, toPath: String): Boolean {
+        if (fromPath == toPath) return true
+        val source = resolve(fromPath)
+        if (!source.exists()) return false
+        val destination = resolve(toPath)
+        if (destination.exists()) return false
+        if (source.renameTo(destination)) return true
+        source.copyTo(destination)
+        return source.delete()
+    }
+
     fun listAllMarkdown(): List<Pair<String, String>> {
         if (!root.exists()) return emptyList()
         return root.walkTopDown()

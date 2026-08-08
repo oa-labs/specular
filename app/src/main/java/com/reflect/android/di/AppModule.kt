@@ -58,6 +58,7 @@ object AppModule {
             .addMigrations(SpecularDatabase.MIGRATION_1_2)
             .addMigrations(SpecularDatabase.MIGRATION_2_3)
             .addMigrations(SpecularDatabase.MIGRATION_3_4)
+            .addMigrations(SpecularDatabase.MIGRATION_4_5)
             .fallbackToDestructiveMigration()
             .build()
 

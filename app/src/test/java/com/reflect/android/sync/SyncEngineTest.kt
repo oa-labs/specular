@@ -3,8 +3,13 @@ package com.specular.android.sync
 import com.specular.android.data.local.FileStore
 import com.specular.android.data.local.NoteDao
 import com.specular.android.data.local.NoteEntity
+import com.specular.android.data.local.NoteStoreLock
 import com.specular.android.data.local.TodoEntity
 import com.specular.android.data.local.TodoIndexState
+import com.specular.android.data.local.TodoIndex
+import com.specular.android.data.repo.NoteRepository
+import com.specular.android.data.remote.AiProviderSettings
+import com.specular.android.data.remote.AiSnippetGenerator
 import com.specular.android.data.remote.ContentResponse
 import com.specular.android.data.remote.DeleteContentRequest
 import com.specular.android.data.remote.GitHubApi
@@ -53,8 +58,10 @@ class SyncEngineTest {
             override fun observeAll(): Flow<List<NoteEntity>> = emptyFlow()
             override suspend fun getById(id: String): NoteEntity? = null
             override suspend fun getByPath(path: String): NoteEntity? = local
+            override suspend fun getByPathIgnoringCase(path: String): NoteEntity? = local
             override suspend fun getDirty(): List<NoteEntity> = listOf(local)
             override suspend fun getPendingDeletions(): List<NoteEntity> = emptyList()
+            override suspend fun getPendingRenames(): List<NoteEntity> = emptyList()
             override suspend fun getAllForTodoIndex(): List<NoteEntity> = emptyList()
             override suspend fun upsert(entity: NoteEntity) { upserted += entity }
             override suspend fun upsertAll(entities: List<NoteEntity>) { upserted += entities }
@@ -104,8 +111,10 @@ class SyncEngineTest {
             override fun observeAll(): Flow<List<NoteEntity>> = emptyFlow()
             override suspend fun getById(id: String): NoteEntity? = null
             override suspend fun getByPath(path: String): NoteEntity? = null
+            override suspend fun getByPathIgnoringCase(path: String): NoteEntity? = null
             override suspend fun getDirty(): List<NoteEntity> = emptyList()
             override suspend fun getPendingDeletions(): List<NoteEntity> = emptyList()
+            override suspend fun getPendingRenames(): List<NoteEntity> = emptyList()
             override suspend fun getAllForTodoIndex(): List<NoteEntity> = emptyList()
             override suspend fun upsert(entity: NoteEntity) { upserted += entity }
             override suspend fun upsertAll(entities: List<NoteEntity>) { upserted += entities }
@@ -189,8 +198,10 @@ class SyncEngineTest {
             override fun observeAll(): Flow<List<NoteEntity>> = emptyFlow()
             override suspend fun getById(id: String): NoteEntity? = pending
             override suspend fun getByPath(path: String): NoteEntity? = pending
+            override suspend fun getByPathIgnoringCase(path: String): NoteEntity? = pending
             override suspend fun getDirty(): List<NoteEntity> = emptyList()
             override suspend fun getPendingDeletions(): List<NoteEntity> = listOf(pending)
+            override suspend fun getPendingRenames(): List<NoteEntity> = emptyList()
             override suspend fun getAllForTodoIndex(): List<NoteEntity> = emptyList()
             override suspend fun upsert(entity: NoteEntity) = Unit
             override suspend fun upsertAll(entities: List<NoteEntity>) = Unit
@@ -228,5 +239,221 @@ class SyncEngineTest {
         )
         verify(fileStore).delete("deleted.md")
         assertEquals(listOf("01deleted-note"), deletedIds)
+    }
+
+    @Test
+    fun pullRemovesCleanLocalNoteDeletedRemotely() = runTest {
+        val api = mock(GitHubApi::class.java)
+        val auth = mock(GitHubAuth::class.java)
+        val fileStore = mock(FileStore::class.java)
+        val local = testNote(id = "01deleted", path = "gone.md", sha = "old-sha")
+        val dao = MemoryNoteDao(local)
+        configurePull(api, auth, emptyList())
+
+        val result = SyncEngine(api, auth, dao, fileStore).pull()
+
+        assertTrue(result is SyncEngine.Result.Success)
+        assertTrue(dao.entities().isEmpty())
+        verify(fileStore).delete("gone.md")
+    }
+
+    @Test
+    fun pullPreservesDirtyLocalNoteAsConflictWhenDeletedRemotely() = runTest {
+        val api = mock(GitHubApi::class.java)
+        val auth = mock(GitHubAuth::class.java)
+        val fileStore = mock(FileStore::class.java)
+        val local = testNote(
+            id = "01dirty", path = "gone.md", sha = "old-sha", dirty = true,
+            raw = "---\nid: 01dirty\n---\n# Local edit\n\nKeep this"
+        )
+        val dao = MemoryNoteDao(local)
+        `when`(fileStore.read("gone.md")).thenReturn(local.rawMarkdown)
+        configurePull(api, auth, emptyList())
+
+        val result = SyncEngine(api, auth, dao, fileStore).pull()
+
+        assertTrue(result is SyncEngine.Result.Success)
+        val conflict = dao.entities().single()
+        assertTrue(conflict.isConflict)
+        assertTrue(conflict.isDirty)
+        assertTrue(conflict.path.startsWith("gone (conflict "))
+        assertTrue(conflict.rawMarkdown.contains("# Local edit"))
+        verify(fileStore).delete("gone.md")
+    }
+
+    @Test
+    fun pullReconcilesCleanRemoteRenameByStableId() = runTest {
+        val api = mock(GitHubApi::class.java)
+        val auth = mock(GitHubAuth::class.java)
+        val fileStore = mock(FileStore::class.java)
+        val local = testNote(id = "01same", path = "old-name.md", sha = "old-sha")
+        val dao = MemoryNoteDao(local)
+        val remoteRaw = "---\nid: 01same\n---\n# Renamed\n\nRemote content"
+        configurePull(api, auth, listOf(TreeEntry("renamed.md", "100644", "blob", "new-sha")))
+        `when`(api.getContent("owner", "repo", "renamed.md", "Bearer token", "main"))
+            .thenReturn(content("renamed.md", "new-sha", remoteRaw))
+
+        val result = SyncEngine(api, auth, dao, fileStore).pull()
+
+        assertTrue(result is SyncEngine.Result.Success)
+        val note = dao.entities().single()
+        assertEquals("01same", note.id)
+        assertEquals("renamed.md", note.path)
+        assertEquals("new-sha", note.lastRemoteSha)
+        verify(fileStore).delete("old-name.md")
+        verify(fileStore).write("renamed.md", remoteRaw)
+    }
+
+    @Test
+    fun pullPreservesConcurrentLocalEditWhenRemoteRenamesSameId() = runTest {
+        val api = mock(GitHubApi::class.java)
+        val auth = mock(GitHubAuth::class.java)
+        val fileStore = mock(FileStore::class.java)
+        val local = testNote(
+            id = "01same", path = "old-name.md", sha = "old-sha", dirty = true,
+            raw = "---\nid: 01same\n---\n# Local edit\n\nLocal content"
+        )
+        val dao = MemoryNoteDao(local)
+        `when`(fileStore.read("old-name.md")).thenReturn(local.rawMarkdown)
+        val remoteRaw = "---\nid: 01same\n---\n# Renamed remotely\n\nRemote content"
+        configurePull(api, auth, listOf(TreeEntry("renamed.md", "100644", "blob", "new-sha")))
+        `when`(api.getContent("owner", "repo", "renamed.md", "Bearer token", "main"))
+            .thenReturn(content("renamed.md", "new-sha", remoteRaw))
+
+        val result = SyncEngine(api, auth, dao, fileStore).pull()
+
+        assertTrue(result is SyncEngine.Result.Success)
+        val remote = dao.entities().single { it.id == "01same" }
+        val conflict = dao.entities().single { it.isConflict }
+        assertEquals("renamed.md", remote.path)
+        assertTrue(!remote.isDirty)
+        assertTrue(conflict.isDirty)
+        assertTrue(conflict.path.startsWith("old-name (conflict "))
+        assertTrue(conflict.rawMarkdown.contains("Local content"))
+    }
+
+    @Test
+    fun pullTurnsConcurrentSamePathEditIntoPushableConflict() = runTest {
+        val api = mock(GitHubApi::class.java)
+        val auth = mock(GitHubAuth::class.java)
+        val fileStore = mock(FileStore::class.java)
+        val local = testNote(
+            id = "01same", path = "same.md", sha = "old-sha", dirty = true,
+            raw = "---\nid: 01same\n---\n# Local\n\nLocal content"
+        )
+        val dao = MemoryNoteDao(local)
+        `when`(fileStore.read("same.md")).thenReturn(local.rawMarkdown)
+        val remoteRaw = "---\nid: 01same\n---\n# Remote\n\nRemote content"
+        configurePull(api, auth, listOf(TreeEntry("same.md", "100644", "blob", "new-sha")))
+        `when`(api.getContent("owner", "repo", "same.md", "Bearer token", "main"))
+            .thenReturn(content("same.md", "new-sha", remoteRaw))
+
+        val result = SyncEngine(api, auth, dao, fileStore).pull()
+
+        assertTrue(result is SyncEngine.Result.Success)
+        assertEquals("new-sha", dao.entities().single { it.id == "01same" }.lastRemoteSha)
+        val conflict = dao.entities().single { it.isConflict }
+        assertTrue(conflict.isDirty)
+        assertTrue(conflict.rawMarkdown.contains("Local content"))
+    }
+
+    @Test
+    fun userRenameCreatesDestinationThenQueuesOldRemotePathForDeletion() = runTest {
+        val original = testNote(id = "01rename", path = "old.md", sha = "old-sha")
+        val dao = MemoryNoteDao(original)
+        val fileStore = mock(FileStore::class.java)
+        `when`(fileStore.read("old.md")).thenReturn(original.rawMarkdown)
+        `when`(fileStore.move("old.md", "new.md")).thenReturn(true)
+        val repository = NoteRepository(
+            dao,
+            fileStore,
+            mock(GitHubApi::class.java),
+            mock(GitHubAuth::class.java),
+            mock(AiProviderSettings::class.java),
+            mock(AiSnippetGenerator::class.java),
+            NoteStoreLock(),
+            TodoIndex()
+        )
+
+        val renamed = repository.renameNote("01rename", "new.md")
+
+        assertEquals("new.md", renamed.path)
+        val queued = dao.entities().single()
+        assertTrue(queued.isDirty)
+        assertEquals(null, queued.lastRemoteSha)
+        assertEquals("old.md", queued.pendingRenameFromPath)
+        assertEquals("old-sha", queued.pendingRenameFromSha)
+        verify(fileStore).move("old.md", "new.md")
+    }
+
+    private suspend fun configurePull(api: GitHubApi, auth: GitHubAuth, entries: List<TreeEntry>) {
+        `when`(auth.authHeader()).thenReturn("Bearer token")
+        `when`(auth.repoOwner).thenReturn("owner")
+        `when`(auth.repoName).thenReturn("repo")
+        `when`(api.getRepo("owner", "repo", "Bearer token"))
+            .thenReturn(RepoResponse(1L, "repo", "owner/repo", false, "main", Owner("owner")))
+        `when`(api.getRef("owner", "repo", "main", "Bearer token"))
+            .thenReturn(RefResponse("refs/heads/main", RefObject("commit-sha", "commit")))
+        `when`(api.getTree("owner", "repo", "commit-sha", "Bearer token", 1))
+            .thenReturn(TreeResponse("tree-sha", entries, false))
+    }
+
+    private fun content(path: String, sha: String, raw: String) = ContentResponse(
+        name = path,
+        path = path,
+        sha = sha,
+        content = Base64.getEncoder().encodeToString(raw.toByteArray()),
+        encoding = "base64",
+        type = "file"
+    )
+
+    private fun testNote(
+        id: String,
+        path: String,
+        sha: String?,
+        dirty: Boolean = false,
+        raw: String = "# Note"
+    ) = NoteEntity(
+        id = id,
+        title = "Note",
+        path = path,
+        rawMarkdown = raw,
+        body = raw,
+        aliases = "[]",
+        isDaily = false,
+        lastRemoteSha = sha,
+        isDirty = dirty
+    )
+
+    private class MemoryNoteDao(vararg initial: NoteEntity) : NoteDao {
+        private val notes = initial.associateByTo(linkedMapOf()) { it.id }
+
+        fun entities(): List<NoteEntity> = notes.values.toList()
+
+        override fun observeAll(): Flow<List<NoteEntity>> = emptyFlow()
+        override suspend fun getById(id: String): NoteEntity? = notes[id]
+        override suspend fun getByPath(path: String): NoteEntity? = notes.values.firstOrNull { it.path == path }
+        override suspend fun getByPathIgnoringCase(path: String): NoteEntity? =
+            notes.values.firstOrNull { it.path.equals(path, ignoreCase = true) }
+        override suspend fun getDirty(): List<NoteEntity> = notes.values.filter { it.isDirty }
+        override suspend fun getPendingDeletions(): List<NoteEntity> = notes.values.filter { it.isPendingDeletion }
+        override suspend fun getPendingRenames(): List<NoteEntity> =
+            notes.values.filter { it.pendingRenameFromPath != null }
+        override suspend fun getAllForTodoIndex(): List<NoteEntity> = notes.values.toList()
+        override suspend fun upsert(entity: NoteEntity) { notes[entity.id] = entity }
+        override suspend fun upsertAll(entities: List<NoteEntity>) {
+            for (entity in entities) upsert(entity)
+        }
+        override suspend fun deleteById(id: String) { notes.remove(id) }
+        override suspend fun deleteTodosForNote(noteId: String) = Unit
+        override suspend fun upsertTodos(todos: List<TodoEntity>) = Unit
+        override suspend fun todoIndexReady(): Boolean? = true
+        override suspend fun setTodoIndexState(state: TodoIndexState) = Unit
+        override suspend fun clearTodos() = Unit
+        override fun observeTodosByCompletion(completed: Boolean): PagingSource<Int, TodoListItem> = error("unused")
+        override fun observeAllTodos(): PagingSource<Int, TodoListItem> = error("unused")
+        override fun searchFts(query: String): Flow<List<NoteEntity>> = emptyFlow()
+        override fun searchLike(q: String): Flow<List<NoteEntity>> = emptyFlow()
+        override suspend fun markDirty(id: String, dirty: Boolean, sha: String?) = Unit
     }
 }

@@ -143,6 +143,38 @@ class NoteRepository @Inject constructor(
         return noteStoreLock.withLock { updateNoteLocked(id, newTitle, newBody) }
     }
 
+    /**
+     * Renames a note on-device immediately. The sync engine later creates the
+     * new GitHub path and deletes the old one, preserving the stable Reflect id.
+     */
+    suspend fun renameNote(id: String, newPath: String): Note {
+        return noteStoreLock.withLock {
+            val note = dao.getById(id) ?: error("Note $id not found")
+            require(!note.isPendingDeletion) { "A deleted note cannot be renamed" }
+            val target = normalizeMarkdownPath(newPath)
+            if (target == note.path) return@withLock getNote(id)!!
+            val occupant = dao.getByPath(target)
+            require(occupant == null || occupant.id == id) { "A note already uses $target" }
+
+            val raw = fileStore.read(note.path) ?: note.rawMarkdown
+            check(fileStore.move(note.path, target)) { "Unable to move ${note.path}" }
+            val oldRemotePath = note.pendingRenameFromPath ?: note.path
+            val oldRemoteSha = note.pendingRenameFromSha ?: note.lastRemoteSha
+            val renamed = note.copy(
+                path = target,
+                rawMarkdown = raw,
+                // New paths must be created without a sha, even when the old
+                // path had already been synced.
+                lastRemoteSha = null,
+                isDirty = true,
+                pendingRenameFromPath = oldRemotePath.takeIf { oldRemoteSha != null },
+                pendingRenameFromSha = oldRemoteSha
+            )
+            persistIndexed(renamed)
+            getNote(id)!!
+        }
+    }
+
     private suspend fun updateNoteLocked(id: String, newTitle: String? = null, newBody: String? = null): Note {
         val e = dao.getById(id) ?: error("Note $id not found")
         val parsed = FrontmatterParser.parse(e.path, e.rawMarkdown)
@@ -271,6 +303,17 @@ class NoteRepository @Inject constructor(
 
     private suspend fun persistIndexed(entity: NoteEntity) {
         dao.upsertNoteAndReplaceTodos(entity, todoIndex.extract(entity.id, entity.body))
+    }
+
+    private fun normalizeMarkdownPath(value: String): String {
+        val path = value.trim().removePrefix("/")
+        require(path.isNotBlank() && path.endsWith(".md", ignoreCase = true)) {
+            "Use a Markdown filename ending in .md"
+        }
+        require(path.split('/').none { it.isBlank() || it == "." || it == ".." }) {
+            "Use a repository-relative filename"
+        }
+        return path
     }
 
 }

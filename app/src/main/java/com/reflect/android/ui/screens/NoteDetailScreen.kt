@@ -15,6 +15,7 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.DriveFileRenameOutline
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
@@ -45,6 +46,9 @@ fun NoteDetailScreen(
     val note by vm.note.collectAsState()
     var showActions by remember { mutableStateOf(false) }
     var showDeleteConfirmation by remember { mutableStateOf(false) }
+    var showRenameDialog by remember { mutableStateOf(false) }
+    var renamePath by remember { mutableStateOf("") }
+    val renameError by vm.renameError.collectAsState()
 
     LaunchedEffect(vm) {
         vm.deletedNotes.collect { deleted ->
@@ -81,6 +85,18 @@ fun NoteDetailScreen(
                             expanded = showActions,
                             onDismissRequest = { showActions = false }
                         ) {
+                            DropdownMenuItem(
+                                text = { Text("Rename file") },
+                                onClick = {
+                                    showActions = false
+                                    renamePath = note?.path.orEmpty()
+                                    vm.clearRenameError()
+                                    showRenameDialog = true
+                                },
+                                leadingIcon = {
+                                    Icon(Icons.Default.DriveFileRenameOutline, contentDescription = null)
+                                }
+                            )
                             DropdownMenuItem(
                                 text = { Text("Delete note") },
                                 onClick = {
@@ -196,6 +212,44 @@ fun NoteDetailScreen(
             },
             dismissButton = {
                 TextButton(onClick = { showDeleteConfirmation = false }) { Text("Cancel") }
+            }
+        )
+    }
+
+    if (showRenameDialog) {
+        AlertDialog(
+            onDismissRequest = {
+                showRenameDialog = false
+                vm.clearRenameError()
+            },
+            title = { Text("Rename note file") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Use a repository-relative Markdown filename. Links are not rewritten.")
+                    OutlinedTextField(
+                        value = renamePath,
+                        onValueChange = {
+                            renamePath = it
+                            vm.clearRenameError()
+                        },
+                        label = { Text("Path") },
+                        supportingText = renameError?.let { { Text(it, color = MaterialTheme.colorScheme.error) } },
+                        isError = renameError != null,
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    vm.renameNote(id, renamePath) { showRenameDialog = false }
+                }) { Text("Rename") }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    showRenameDialog = false
+                    vm.clearRenameError()
+                }) { Text("Cancel") }
             }
         )
     }

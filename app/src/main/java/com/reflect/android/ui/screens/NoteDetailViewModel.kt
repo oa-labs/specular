@@ -25,6 +25,8 @@ class NoteDetailViewModel @Inject constructor(private val repo: NoteRepository) 
     val deletedNotes: SharedFlow<DeletedNote> = _deletedNotes
     private val _linkedNoteIds = MutableSharedFlow<String>()
     val linkedNoteIds: SharedFlow<String> = _linkedNoteIds
+    private val _renameError = MutableStateFlow<String?>(null)
+    val renameError: StateFlow<String?> = _renameError
 
     fun load(id: String) {
         viewModelScope.launch { _note.value = repo.getNote(id) }
@@ -67,5 +69,23 @@ class NoteDetailViewModel @Inject constructor(private val repo: NoteRepository) 
             _note.value = null
             _deletedNotes.emit(DeletedNote(id, title))
         }
+    }
+
+    fun renameNote(id: String, path: String, onRenamed: () -> Unit) {
+        viewModelScope.launch {
+            try {
+                _note.value = repo.renameNote(id, path)
+                _renameError.value = null
+                onRenamed()
+            } catch (e: IllegalArgumentException) {
+                _renameError.value = e.message ?: "Unable to rename note"
+            } catch (e: IllegalStateException) {
+                _renameError.value = e.message ?: "Unable to rename note"
+            }
+        }
+    }
+
+    fun clearRenameError() {
+        _renameError.value = null
     }
 }

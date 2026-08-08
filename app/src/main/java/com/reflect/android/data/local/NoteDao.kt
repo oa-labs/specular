@@ -30,6 +30,9 @@ interface NoteDao {
     @Query("SELECT * FROM notes WHERE isPendingDeletion = 1")
     suspend fun getPendingDeletions(): List<NoteEntity>
 
+    @Query("SELECT * FROM notes WHERE pendingRenameFromPath IS NOT NULL")
+    suspend fun getPendingRenames(): List<NoteEntity>
+
     @Query("SELECT * FROM notes")
     suspend fun getAllForTodoIndex(): List<NoteEntity>
 

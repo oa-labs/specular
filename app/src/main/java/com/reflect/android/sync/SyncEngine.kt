@@ -14,6 +14,7 @@ import com.specular.android.data.remote.DeleteContentRequest
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.util.Base64
+import java.util.UUID
 import retrofit2.HttpException
 import java.io.IOException
 import javax.inject.Inject
@@ -60,15 +61,21 @@ class SyncEngine @Inject constructor(
             }
             logDebug("Pull tree loaded markdownCandidates=${tree.tree.count { it.type == "blob" && it.path.endsWith(".md") }}")
 
+            val remoteMarkdownPaths = tree.tree
+                .asSequence()
+                .filter { it.type == "blob" && it.path.endsWith(".md") }
+                .map { it.path }
+                .toSet()
+
             for (entry in tree.tree) {
                 if (entry.type != "blob" || !entry.path.endsWith(".md")) continue
-                val local = dao.getByPath(entry.path)
+                val localAtPath = dao.getByPath(entry.path)
                 // A locally requested deletion is authoritative until its remote
                 // operation completes. Do not revive it during the pull phase.
-                if (local?.isPendingDeletion == true) continue
+                if (localAtPath?.isPendingDeletion == true) continue
                 // A matching remote SHA means the remote has not changed. Keep a dirty
                 // local copy intact so the subsequent push can publish it.
-                if (local?.lastRemoteSha == entry.sha) continue
+                if (localAtPath?.lastRemoteSha == entry.sha) continue
 
                 val contentResponse = runSyncStage("pull:download path=${entry.path}") {
                     api.getContent(owner, repo, entry.path, header, ref = branch)
@@ -76,50 +83,44 @@ class SyncEngine @Inject constructor(
                 val raw = contentResponse.content?.let { b64 ->
                     String(Base64.getDecoder().decode(b64.replace("\n", "")), Charsets.UTF_8)
                 } ?: continue
+                val parsed = FrontmatterParser.parse(entry.path, raw)
+                val remoteId = FrontmatterParser.identityFor(entry.path, parsed.id)
+                val localWithSameId = dao.getById(remoteId)
 
-                // Keep local edits intact and retain the remote copy as a conflict.
-                if (local != null && local.isDirty && local.lastRemoteSha != entry.sha) {
-                    val conflictPath = entry.path.removeSuffix(".md") +
-                        " (conflict ${java.time.LocalDate.now()}).md"
-                    runSyncStage("pull:write conflict path=$conflictPath") {
-                        fileStore.write(conflictPath, raw)
-                        val parsed = FrontmatterParser.parse(entry.path, raw)
-                        val entity = NoteEntity(
-                                id = "${FrontmatterParser.identityFor(entry.path, parsed.id)}:conflict:${entry.sha}",
-                                title = parsed.title + " (conflict)",
-                                path = conflictPath,
-                                rawMarkdown = raw,
-                                body = parsed.body,
-                                aliases = parsed.aliases.toString(),
-                                snippet = FrontmatterParser.snippetOrEmpty(parsed.body, parsed.snippet),
-                                isDaily = conflictPath.startsWith("daily/"),
-                                lastRemoteSha = entry.sha,
-                                isConflict = true
-                            )
-                        dao.upsertNoteAndReplaceTodos(entity, todoIndex.extract(entity.id, entity.body))
-                    }
+                // A local rename creates the destination first, then deletes this old
+                // path. Until that happens, the old remote file is expected and must
+                // not be mistaken for a remote rename in the opposite direction.
+                if (localWithSameId?.isDirty == true &&
+                    localWithSameId.pendingRenameFromPath == entry.path
+                ) {
                     continue
                 }
 
-                runSyncStage("pull:persist path=${entry.path}") {
-                    fileStore.write(entry.path, raw)
-                    val parsed = FrontmatterParser.parse(entry.path, raw)
-                    val entity = NoteEntity(
-                            id = FrontmatterParser.identityFor(entry.path, parsed.id),
-                            title = parsed.title,
-                            path = entry.path,
-                            rawMarkdown = raw,
-                            body = parsed.body,
-                            aliases = parsed.aliases.toString(),
-                            snippet = FrontmatterParser.snippetOrEmpty(parsed.body, parsed.snippet),
-                            isDaily = entry.path.startsWith("daily/"),
-                            lastRemoteSha = entry.sha,
-                            isDirty = false,
-                            isConflict = false
-                        )
-                    dao.upsertNoteAndReplaceTodos(entity, todoIndex.extract(entity.id, entity.body))
+                // The stable frontmatter id identifies a remote rename. A clean local
+                // file can simply move. If it has local edits, retain those as a dirty
+                // conflict copy and make the renamed remote file canonical.
+                if (localWithSameId != null && localWithSameId.path != entry.path) {
+                    if (localWithSameId.isDirty) {
+                        preserveLocalAsConflict(localWithSameId)
+                    } else {
+                        fileStore.delete(localWithSameId.path)
+                    }
+                    persistRemote(entry.path, entry.sha, raw, parsed)
+                    continue
                 }
+
+                // Concurrent edits to the same path keep the remote version at its
+                // canonical path and turn the local version into a separately
+                // pushable conflict note. This prevents an endless sha-mismatch loop.
+                if (localAtPath != null && localAtPath.isDirty && localAtPath.lastRemoteSha != entry.sha) {
+                    preserveLocalAsConflict(localAtPath)
+                    persistRemote(entry.path, entry.sha, raw, parsed)
+                    continue
+                }
+
+                persistRemote(entry.path, entry.sha, raw, parsed)
             }
+            reconcileRemoteRemovals(remoteMarkdownPaths)
             logInfo("Pull completed")
             Result.Success
         } catch (e: Exception) {
@@ -142,13 +143,16 @@ class SyncEngine @Inject constructor(
             val pendingDeletions = runSyncStage("push:load pending deletions") {
                 dao.getPendingDeletions()
             }
+            val pendingRenames = runSyncStage("push:load pending renames") {
+                dao.getPendingRenames()
+            }
             val dirty = runSyncStage("push:load dirty notes") { dao.getDirty() }
                 .filterNot { it.isPendingDeletion }
-            if (dirty.isEmpty() && pendingDeletions.isEmpty()) {
+            if (dirty.isEmpty() && pendingDeletions.isEmpty() && pendingRenames.isEmpty()) {
                 logInfo("Push skipped: no dirty notes")
                 return@withContext Result.Success
             }
-            logDebug("Push queued notes=${dirty.size} deletions=${pendingDeletions.size}")
+            logDebug("Push queued notes=${dirty.size} deletions=${pendingDeletions.size} renames=${pendingRenames.size}")
             var failedPushes = 0
             for (e in pendingDeletions) {
                 // A note created and deleted before its first push has no remote
@@ -223,6 +227,32 @@ class SyncEngine @Inject constructor(
                     return@withContext Result.Error(userFacingPushError(ex))
                 }
             }
+            // A rename is intentionally non-atomic with the Contents API: create the
+            // destination first, then remove the old path. The pending fields survive
+            // process death between those requests and make the delete retryable.
+            for (e in dao.getPendingRenames()) {
+                val oldPath = e.pendingRenameFromPath ?: continue
+                val oldSha = e.pendingRenameFromSha ?: continue
+                try {
+                    logDebug("Push completing rename oldPath=$oldPath newPath=${e.path}")
+                    api.deleteContent(
+                        owner, repo, oldPath, header,
+                        DeleteContentRequest("Rename ${e.title}", oldSha, branch)
+                    )
+                    dao.upsert(e.copy(pendingRenameFromPath = null, pendingRenameFromSha = null))
+                } catch (ex: Exception) {
+                    // A desktop client may already have removed the old path.
+                    if ((ex as? HttpException)?.code() == 404) {
+                        dao.upsert(e.copy(pendingRenameFromPath = null, pendingRenameFromSha = null))
+                        continue
+                    }
+                    failedPushes++
+                    logPushFailure(oldPath, ex)
+                    val statusCode = (ex as? HttpException)?.code()
+                    if (statusCode == 409 || statusCode == 422) continue
+                    return@withContext Result.Error(userFacingPushError(ex))
+                }
+            }
             if (failedPushes > 0) {
                 return@withContext Result.Error(
                     "Some notes could not be pushed because the remote changed. " +
@@ -251,6 +281,98 @@ class SyncEngine @Inject constructor(
 
     private fun logPushFailure(path: String, error: Exception) {
         logSyncFailure("push:upload path=$path", error)
+    }
+
+    private suspend fun persistRemote(
+        path: String,
+        remoteSha: String,
+        raw: String,
+        parsed: FrontmatterParser.Parsed
+    ) {
+        runSyncStage("pull:persist path=$path") {
+            fileStore.write(path, raw)
+            val entity = NoteEntity(
+                id = FrontmatterParser.identityFor(path, parsed.id),
+                title = parsed.title,
+                path = path,
+                rawMarkdown = raw,
+                body = parsed.body,
+                aliases = parsed.aliases.toString(),
+                snippet = FrontmatterParser.snippetOrEmpty(parsed.body, parsed.snippet),
+                isDaily = path.startsWith("daily/"),
+                lastRemoteSha = remoteSha,
+                isDirty = false,
+                isConflict = false
+            )
+            dao.upsertNoteAndReplaceTodos(entity, todoIndex.extract(entity.id, entity.body))
+        }
+    }
+
+    /** Converts a locally edited file into a pushable conflict note. */
+    private suspend fun preserveLocalAsConflict(note: NoteEntity) {
+        val raw = fileStore.read(note.path) ?: note.rawMarkdown
+        saveConflictCopy(note.path, raw, remoteSha = null, isDirty = true)
+        dao.deleteNoteAndTodos(note.id)
+        fileStore.delete(note.path)
+    }
+
+    private suspend fun saveConflictCopy(
+        sourcePath: String,
+        sourceRaw: String,
+        remoteSha: String?,
+        isDirty: Boolean
+    ) {
+        val conflictPath = nextConflictPath(sourcePath)
+        val conflictId = "01" + UUID.randomUUID().toString().replace("-", "").take(24)
+        val parsed = FrontmatterParser.parse(sourcePath, sourceRaw)
+        val raw = parsed.rawFrontmatter?.let { frontmatter ->
+            "---\n${FrontmatterParser.upsertIdInFrontmatter(frontmatter, conflictId)}\n---\n${parsed.body}"
+        } ?: FrontmatterParser.generateFrontmatter(conflictId, parsed.aliases, parsed.snippet) + parsed.body
+        val conflict = FrontmatterParser.parse(conflictPath, raw)
+        fileStore.write(conflictPath, raw)
+        val entity = NoteEntity(
+            id = conflictId,
+            title = "${conflict.title} (conflict)",
+            path = conflictPath,
+            rawMarkdown = raw,
+            body = conflict.body,
+            aliases = conflict.aliases.toString(),
+            snippet = FrontmatterParser.snippetOrEmpty(conflict.body, conflict.snippet),
+            isDaily = conflictPath.startsWith("daily/"),
+            lastRemoteSha = remoteSha,
+            isDirty = isDirty,
+            isConflict = true
+        )
+        dao.upsertNoteAndReplaceTodos(entity, todoIndex.extract(entity.id, entity.body))
+    }
+
+    private suspend fun nextConflictPath(path: String): String {
+        val stem = path.removeSuffix(".md")
+        val date = java.time.LocalDate.now()
+        var candidate = "$stem (conflict $date).md"
+        var suffix = 2
+        while (dao.getByPath(candidate) != null || fileStore.exists(candidate)) {
+            candidate = "$stem (conflict $date $suffix).md"
+            suffix++
+        }
+        return candidate
+    }
+
+    /** Removes clean local notes no longer present in the remote tree. */
+    private suspend fun reconcileRemoteRemovals(remotePaths: Set<String>) {
+        dao.getAllForTodoIndex().forEach { local ->
+            if (local.path in remotePaths || local.isPendingDeletion || local.isConflict ||
+                local.pendingRenameFromPath != null
+            ) return@forEach
+            if (local.isDirty) {
+                logInfo("Pull preserving locally edited remote deletion path=${local.path}")
+                preserveLocalAsConflict(local)
+            } else {
+                logDebug("Pull removing deleted remote path=${local.path}")
+                fileStore.delete(local.path)
+                dao.deleteNoteAndTodos(local.id)
+            }
+        }
     }
 
     private fun logSyncFailure(stage: String, error: Exception) {

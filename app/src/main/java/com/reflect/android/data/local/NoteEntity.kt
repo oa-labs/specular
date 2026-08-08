@@ -19,6 +19,13 @@ data class NoteEntity(
     val isDirty: Boolean = false,
     /** Hidden locally while its GitHub Contents API deletion is waiting to sync. */
     val isPendingDeletion: Boolean = false,
+    /**
+     * The old remote path still to remove after this note has been uploaded to
+     * [path].  A GitHub Contents API rename is a create followed by a delete,
+     * so keeping this on the note makes that two-step operation crash-safe.
+     */
+    val pendingRenameFromPath: String? = null,
+    val pendingRenameFromSha: String? = null,
     val isConflict: Boolean = false,
     val updatedAt: Long = System.currentTimeMillis()
 )
