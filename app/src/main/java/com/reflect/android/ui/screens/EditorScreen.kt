@@ -25,8 +25,13 @@ import java.io.File
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun EditorScreen(navController: NavController, id: String, vm: EditorViewModel = hiltViewModel()) {
-    val isNew = id == "__new__"
-    LaunchedEffect(id) { if (!isNew) vm.load(id) }
+    val isNew = id == "__new__" || id == "__new_todo__"
+    LaunchedEffect(id) {
+        when {
+            id == "__new_todo__" -> vm.prepareNewTodo()
+            !isNew -> vm.load(id)
+        }
+    }
     val title by vm.title.collectAsState()
     val body by vm.body.collectAsState()
     val saving by vm.saving.collectAsState()
@@ -63,7 +68,15 @@ fun EditorScreen(navController: NavController, id: String, vm: EditorViewModel =
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(if (isNew) "New note" else "Edit") },
+                title = {
+                    Text(
+                        when {
+                            id == "__new_todo__" -> "New to-do"
+                            isNew -> "New note"
+                            else -> "Edit"
+                        }
+                    )
+                },
                 navigationIcon = {
                     IconButton(onClick = { navController.popBackStack() }) { Icon(Icons.Default.ArrowBack, "Back") }
                 },

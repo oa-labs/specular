@@ -23,6 +23,7 @@ sealed class Screen(val route: String) {
     data object Editor : Screen("editor/{id}") {
         fun routeFor(id: String) = "editor/${Uri.encode(id)}"
         fun routeForNew() = "editor/__new__"
+        fun routeForNewTodo() = "editor/__new_todo__"
     }
     data object Settings : Screen("settings")
     data object Onboarding : Screen("onboarding")

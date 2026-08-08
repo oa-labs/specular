@@ -111,6 +111,15 @@ interface NoteDao {
     )
     fun observeAllTodos(): PagingSource<Int, TodoListItem>
 
+    /** A deliberately small, non-paged projection for the home-screen widget. */
+    @Query(
+        "SELECT t.noteId, t.taskIndex, t.text, t.isCompleted, n.title AS noteTitle " +
+            "FROM todo_index t JOIN notes n ON n.id = t.noteId " +
+            "WHERE n.isPendingDeletion = 0 AND t.isCompleted = 0 " +
+            "ORDER BY n.updatedAt DESC, t.taskIndex ASC LIMIT :limit"
+    )
+    suspend fun getOpenTodosForWidget(limit: Int): List<TodoListItem>
+
     @Query(
         "SELECT notes.id, notes.title, notes.path, '' AS rawMarkdown, " +
             "substr(notes.body, 1, 4096) AS body, '[]' AS aliases, notes.snippet, " +

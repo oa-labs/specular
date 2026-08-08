@@ -79,6 +79,7 @@ class SyncEngineTest {
             override suspend fun clearTodos() = Unit
             override fun observeTodosByCompletion(completed: Boolean): PagingSource<Int, TodoListItem> = error("unused")
             override fun observeAllTodos(): PagingSource<Int, TodoListItem> = error("unused")
+            override suspend fun getOpenTodosForWidget(limit: Int): List<TodoListItem> = emptyList()
             override fun searchFts(query: String): Flow<List<NoteEntity>> = emptyFlow()
             override fun searchLike(q: String): Flow<List<NoteEntity>> = emptyFlow()
             override suspend fun markDirty(id: String, dirty: Boolean, sha: String?) = Unit
@@ -132,6 +133,7 @@ class SyncEngineTest {
             override suspend fun clearTodos() = Unit
             override fun observeTodosByCompletion(completed: Boolean): PagingSource<Int, TodoListItem> = error("unused")
             override fun observeAllTodos(): PagingSource<Int, TodoListItem> = error("unused")
+            override suspend fun getOpenTodosForWidget(limit: Int): List<TodoListItem> = emptyList()
             override fun searchFts(query: String): Flow<List<NoteEntity>> = emptyFlow()
             override fun searchLike(q: String): Flow<List<NoteEntity>> = emptyFlow()
             override suspend fun markDirty(id: String, dirty: Boolean, sha: String?) = Unit
@@ -219,6 +221,7 @@ class SyncEngineTest {
             override suspend fun clearTodos() = Unit
             override fun observeTodosByCompletion(completed: Boolean): PagingSource<Int, TodoListItem> = error("unused")
             override fun observeAllTodos(): PagingSource<Int, TodoListItem> = error("unused")
+            override suspend fun getOpenTodosForWidget(limit: Int): List<TodoListItem> = emptyList()
             override fun searchFts(query: String): Flow<List<NoteEntity>> = emptyFlow()
             override fun searchLike(q: String): Flow<List<NoteEntity>> = emptyFlow()
             override suspend fun markDirty(id: String, dirty: Boolean, sha: String?) = Unit
@@ -530,6 +533,7 @@ class SyncEngineTest {
         override suspend fun clearTodos() = Unit
         override fun observeTodosByCompletion(completed: Boolean): PagingSource<Int, TodoListItem> = error("unused")
         override fun observeAllTodos(): PagingSource<Int, TodoListItem> = error("unused")
+        override suspend fun getOpenTodosForWidget(limit: Int): List<TodoListItem> = emptyList()
         override fun searchFts(query: String): Flow<List<NoteEntity>> = emptyFlow()
         override fun searchLike(q: String): Flow<List<NoteEntity>> = emptyFlow()
         override suspend fun markDirty(id: String, dirty: Boolean, sha: String?) = Unit

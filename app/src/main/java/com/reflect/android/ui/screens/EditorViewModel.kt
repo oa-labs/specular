@@ -39,6 +39,14 @@ class EditorViewModel @Inject constructor(
     fun setTitle(v: String) { _title.value = v }
     fun setBody(v: String) { _body.value = v }
 
+    /** Starts an editor that immediately contains one open Markdown task. */
+    fun prepareNewTodo() {
+        editingId = null
+        editingPath = null
+        _title.value = "New to-do"
+        _body.value = "- [ ] "
+    }
+
     fun importImage(uri: Uri) {
         viewModelScope.launch {
             try {

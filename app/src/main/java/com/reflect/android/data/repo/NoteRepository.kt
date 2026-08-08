@@ -20,6 +20,7 @@ import com.specular.android.domain.model.NoteListItem
 import com.specular.android.domain.model.TodoFilter
 import com.specular.android.domain.model.TodoListItem
 import com.specular.android.sync.SyncScheduler
+import com.specular.android.widget.TodoWidgetUpdater
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.Dispatchers
@@ -38,7 +39,8 @@ class NoteRepository @Inject constructor(
     private val snippetGenerator: AiSnippetGenerator,
     private val noteStoreLock: NoteStoreLock,
     private val todoIndex: TodoIndex,
-    private val workManager: WorkManager
+    private val workManager: WorkManager,
+    private val todoWidgetUpdater: TodoWidgetUpdater? = null
 ) {
     private data class SnippetGenerationInput(
         val entity: NoteEntity,
@@ -95,6 +97,7 @@ class NoteRepository @Inject constructor(
                 persistIndexed(entity)
             }
         }
+        todoWidgetUpdater?.requestUpdate()
     }
 
     suspend fun getNote(id: String): Note? {
@@ -143,12 +146,14 @@ class NoteRepository @Inject constructor(
             getNote(id)!!
         }
         enqueueSyncAfterLocalChange()
+        todoWidgetUpdater?.requestUpdate()
         return note
     }
 
     suspend fun updateNote(id: String, newTitle: String? = null, newBody: String? = null): Note {
         val note = noteStoreLock.withLock { updateNoteLocked(id, newTitle, newBody) }
         enqueueSyncAfterLocalChange()
+        todoWidgetUpdater?.requestUpdate()
         return note
     }
 
@@ -225,7 +230,10 @@ class NoteRepository @Inject constructor(
             if (updatedBody == current.bodyMarkdown) current
             else updateNoteLocked(noteId, newBody = updatedBody, updateRecency = false)
         }
-        if (note != null) enqueueSyncAfterLocalChange()
+        if (note != null) {
+            enqueueSyncAfterLocalChange()
+            todoWidgetUpdater?.requestUpdate()
+        }
         return note
     }
 
@@ -237,6 +245,7 @@ class NoteRepository @Inject constructor(
             dao.upsert(e.copy(isPendingDeletion = true))
         }
         enqueueSyncAfterLocalChange()
+        todoWidgetUpdater?.requestUpdate()
     }
 
     suspend fun undoDeleteNote(id: String) {
@@ -245,6 +254,7 @@ class NoteRepository @Inject constructor(
             if (e.isPendingDeletion) dao.upsert(e.copy(isPendingDeletion = false))
         }
         enqueueSyncAfterLocalChange()
+        todoWidgetUpdater?.requestUpdate()
     }
 
     /** Pins or unpins a note locally without changing its Markdown or GitHub state. */

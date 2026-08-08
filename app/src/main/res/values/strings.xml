@@ -7,4 +7,10 @@
     <string name="settings">Settings</string>
     <string name="sync">Sync</string>
     <string name="conflict_banner">Conflict — keep mine / theirs / both?</string>
+    <string name="todo_widget_title">Open to-dos</string>
+    <string name="todo_widget_description">View and complete your open Specular to-dos</string>
+    <string name="add_todo">Add to-do</string>
+    <string name="complete_todo">Complete to-do</string>
+    <string name="no_open_todos">No open to-dos</string>
+    <string name="untitled_task">Untitled task</string>
 </resources>

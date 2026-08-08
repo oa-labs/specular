@@ -15,6 +15,7 @@ import com.specular.android.data.remote.GitHubApi
 import com.specular.android.data.remote.GitHubAuth
 import com.specular.android.data.remote.PutContentRequest
 import com.specular.android.data.remote.DeleteContentRequest
+import com.specular.android.widget.TodoWidgetUpdater
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.util.Base64
@@ -38,7 +39,8 @@ class SyncEngine @Inject constructor(
     private val fileStore: FileStore,
     private val noteStoreLock: NoteStoreLock = NoteStoreLock(),
     private val todoIndex: TodoIndex = TodoIndex(),
-    private val attachmentDao: AttachmentDao = NoopAttachmentDao
+    private val attachmentDao: AttachmentDao = NoopAttachmentDao,
+    private val todoWidgetUpdater: TodoWidgetUpdater? = null
 ) {
     sealed class Result {
         data object Success : Result()
@@ -47,6 +49,7 @@ class SyncEngine @Inject constructor(
     }
 
     suspend fun pull(): Result = noteStoreLock.withLock { pullLocked() }
+        .also { todoWidgetUpdater?.requestUpdate() }
 
     private suspend fun pullLocked(): Result = withContext(Dispatchers.IO) {
         val header = auth.authHeader() ?: return@withContext Result.NotConfigured
@@ -313,7 +316,7 @@ class SyncEngine @Inject constructor(
         val pushResult = pushLocked()
         logInfo("Sync completed result=$pushResult")
         pushResult
-    }
+    }.also { todoWidgetUpdater?.requestUpdate() }
 
     private fun logPushFailure(path: String, error: Exception) {
         logSyncFailure("push:upload path=$path", error)
