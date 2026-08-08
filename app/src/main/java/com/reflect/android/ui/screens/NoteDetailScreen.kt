@@ -283,7 +283,8 @@ internal fun MarkdownText(
     markdown: String,
     taskOffset: Int,
     onTaskClick: (Int) -> Unit,
-    onLinkClick: (String) -> Boolean
+    onLinkClick: (String) -> Boolean,
+    onBodyClick: (() -> Unit)? = null
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val markwon = remember(context) {
@@ -306,6 +307,9 @@ internal fun MarkdownText(
         },
         update = { textView ->
             textView.setTextColor(textColor)
+            textView.setOnClickListener(
+                onBodyClick?.let { bodyClick -> View.OnClickListener { bodyClick() } }
+            )
             markwon.setMarkdown(textView, markdown)
 
             val rendered = textView.text as? Spannable ?: return@AndroidView

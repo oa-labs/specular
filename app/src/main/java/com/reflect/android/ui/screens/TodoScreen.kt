@@ -90,7 +90,10 @@ fun TodoScreen(navController: NavController, vm: TodoViewModel = hiltViewModel()
                                             markdown = todo.text,
                                             taskOffset = 0,
                                             onTaskClick = {},
-                                            onLinkClick = { false }
+                                            onLinkClick = { false },
+                                            onBodyClick = {
+                                                navController.navigate(Screen.Detail.routeFor(todo.noteId))
+                                            }
                                         )
                                     }
                                 },
