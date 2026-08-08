@@ -80,7 +80,9 @@ class TodoWidgetUpdater @Inject constructor(
                 action = TodoWidgetProvider.ACTION_TODO_INTERACTION
                 data = android.net.Uri.parse("specular://widget/interaction/$appWidgetId")
             },
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            // Collection rows supply their note/task via fill-in intents. Android drops
+            // that data for immutable pending intents, which makes every row inert.
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
         )
 
     private fun newTodoPendingIntent(): PendingIntent = activityPendingIntent(TodoWidgetProvider.ACTION_NEW_TODO)

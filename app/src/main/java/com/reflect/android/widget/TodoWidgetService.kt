@@ -38,17 +38,23 @@ private class TodoWidgetRemoteViewsFactory(
     override fun getViewAt(position: Int): RemoteViews? {
         val todo = todos.getOrNull(position) ?: return null
         return RemoteViews(context.packageName, R.layout.widget_todo_row).apply {
-            setTextViewText(R.id.todo_widget_text, todo.text.ifBlank { context.getString(R.string.untitled_task) })
+            setTextViewText(
+                R.id.todo_widget_text,
+                renderWidgetMarkdown(todo.text.ifBlank { context.getString(R.string.untitled_task) })
+            )
             setTextViewText(R.id.todo_widget_note, todo.noteTitle)
             setImageViewResource(R.id.todo_widget_complete, R.drawable.ic_widget_open_circle)
             setOnClickFillInIntent(
                 R.id.todo_widget_complete,
                 interactionIntent(TodoWidgetProvider.INTERACTION_COMPLETE, todo)
             )
-            setOnClickFillInIntent(
-                R.id.todo_widget_row,
-                interactionIntent(TodoWidgetProvider.INTERACTION_OPEN, todo)
-            )
+            val openIntent = interactionIntent(TodoWidgetProvider.INTERACTION_OPEN, todo)
+            // RemoteViews does not reliably bubble clicks from nested text views to
+            // the collection-row root on all launchers, so bind the visible body.
+            setOnClickFillInIntent(R.id.todo_widget_row, openIntent)
+            setOnClickFillInIntent(R.id.todo_widget_content, openIntent)
+            setOnClickFillInIntent(R.id.todo_widget_text, openIntent)
+            setOnClickFillInIntent(R.id.todo_widget_note, openIntent)
         }
     }
 
