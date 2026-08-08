@@ -41,6 +41,7 @@ import com.specular.android.ui.navigation.Screen
 fun TodoScreen(navController: NavController, vm: TodoViewModel = hiltViewModel()) {
     val filter by vm.filter.collectAsState()
     val indexReady by vm.indexReady.collectAsState()
+    val pendingCompletion by vm.pendingCompletion.collectAsState()
     val todos = vm.todos.collectAsLazyPagingItems()
 
     Scaffold(
@@ -79,13 +80,15 @@ fun TodoScreen(navController: NavController, vm: TodoViewModel = hiltViewModel()
                             }
                         ) { index ->
                             val todo = todos[index] ?: return@items
+                            val pendingState = pendingCompletion[todo.key()]
                             ListItem(
                                 headlineContent = { Text(todo.text.ifBlank { "Untitled task" }) },
                                 supportingContent = { Text(todo.noteTitle) },
                                 leadingContent = {
                                     Checkbox(
-                                        checked = todo.isCompleted,
-                                        onCheckedChange = { vm.toggle(todo) }
+                                        checked = pendingState ?: todo.isCompleted,
+                                        onCheckedChange = { vm.toggle(todo) },
+                                        enabled = pendingState == null
                                     )
                                 },
                                 modifier = Modifier
