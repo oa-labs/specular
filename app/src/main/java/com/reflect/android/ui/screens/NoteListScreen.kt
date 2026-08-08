@@ -12,6 +12,7 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Checklist
+import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -33,6 +34,8 @@ import com.specular.android.ui.screens.NoteListViewModel
 fun NoteListScreen(navController: NavController, vm: NoteListViewModel = hiltViewModel()) {
     val notes by vm.notes.collectAsState()
     val sort by vm.sort.collectAsState()
+    val folders by vm.folders.collectAsState()
+    val deselectedFolders by vm.deselectedFolders.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
     val savedStateHandle = navController.currentBackStackEntry?.savedStateHandle
     var overflowExpanded by remember { mutableStateOf(false) }
@@ -108,6 +111,31 @@ fun NoteListScreen(navController: NavController, vm: NoteListViewModel = hiltVie
                             expanded = overflowExpanded,
                             onDismissRequest = { overflowExpanded = false }
                         ) {
+                            if (folders.isNotEmpty()) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(start = 16.dp, top = 8.dp, end = 12.dp, bottom = 4.dp),
+                                    verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
+                                ) {
+                                    Icon(Icons.Default.FilterList, contentDescription = null)
+                                    Spacer(Modifier.width(12.dp))
+                                    Text("Filter folders", style = MaterialTheme.typography.labelLarge)
+                                }
+                                folders.forEach { folder ->
+                                    DropdownMenuItem(
+                                        text = { Text(folder) },
+                                        onClick = { vm.toggleFolder(folder) },
+                                        trailingIcon = {
+                                            Checkbox(
+                                                checked = folder !in deselectedFolders,
+                                                onCheckedChange = null
+                                            )
+                                        }
+                                    )
+                                }
+                                HorizontalDivider()
+                            }
                             DropdownMenuItem(
                                 text = { Text("Settings") },
                                 onClick = {
@@ -134,9 +162,16 @@ fun NoteListScreen(navController: NavController, vm: NoteListViewModel = hiltVie
                         modifier = Modifier.padding(horizontal = 24.dp),
                         horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally
                     ) {
-                        Text("No notes yet", style = MaterialTheme.typography.headlineSmall)
                         Text(
-                            "Notes sync automatically in the background once GitHub is configured. Tap + to create one.",
+                            if (folders.isEmpty()) "No notes yet" else "No notes in selected folders",
+                            style = MaterialTheme.typography.headlineSmall
+                        )
+                        Text(
+                            if (folders.isEmpty()) {
+                                "Notes sync automatically in the background once GitHub is configured. Tap + to create one."
+                            } else {
+                                "Open the menu to select one or more folders."
+                            },
                             style = MaterialTheme.typography.bodyMedium,
                             modifier = Modifier.padding(top = 8.dp)
                         )

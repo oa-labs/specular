@@ -9,6 +9,7 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -36,6 +37,20 @@ internal fun sortNotes(notes: List<NoteListItem>, sort: NoteSort): List<NoteList
     return withinPinGroup.sortedByDescending { it.isPinned }
 }
 
+/** Folders that are shown as labels on the home screen, in display order. */
+internal fun noteFolders(notes: List<NoteListItem>): List<String> =
+    notes.mapNotNull(::noteFolderLabel)
+        .distinct()
+        .sortedWith(String.CASE_INSENSITIVE_ORDER)
+
+/** Root-level notes remain visible because they do not have a folder label to filter by. */
+internal fun filterNotesByFolders(
+    notes: List<NoteListItem>,
+    deselectedFolders: Set<String>
+): List<NoteListItem> = notes.filter { note ->
+    noteFolderLabel(note) !in deselectedFolders
+}
+
 @HiltViewModel
 class NoteListViewModel @Inject constructor(
     private val repo: NoteRepository,
@@ -43,9 +58,21 @@ class NoteListViewModel @Inject constructor(
 ) : ViewModel() {
     private val _sort = MutableStateFlow(NoteSort.LAST_UPDATED)
     val sort: StateFlow<NoteSort> = _sort
+    private val _deselectedFolders = MutableStateFlow<Set<String>>(emptySet())
+    val deselectedFolders: StateFlow<Set<String>> = _deselectedFolders
 
-    val notes: StateFlow<List<NoteListItem>> = combine(repo.observeNotes(), _sort) { notes, sort ->
-        sortNotes(notes, sort)
+    private val allNotes: StateFlow<List<NoteListItem>> = repo.observeNotes()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val folders: StateFlow<List<String>> = allNotes
+        .map(::noteFolders)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val notes: StateFlow<List<NoteListItem>> = combine(allNotes, _sort, _deselectedFolders) {
+            notes,
+            sort,
+            deselectedFolders ->
+        sortNotes(filterNotesByFolders(notes, deselectedFolders), sort)
     }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
@@ -82,5 +109,11 @@ class NoteListViewModel @Inject constructor(
 
     fun setSort(sort: NoteSort) {
         _sort.value = sort
+    }
+
+    fun toggleFolder(folder: String) {
+        _deselectedFolders.value = _deselectedFolders.value.toMutableSet().apply {
+            if (!add(folder)) remove(folder)
+        }
     }
 }

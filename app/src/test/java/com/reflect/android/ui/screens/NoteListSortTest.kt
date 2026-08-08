@@ -54,6 +54,31 @@ class NoteListSortTest {
         assertEquals(null, noteFolderLabel(note("Regular", 1)))
     }
 
+    @Test fun `lists available note folders alphabetically without duplicates`() {
+        val notes = listOf(
+            note("Standup", 1, path = "meeting/standup.md"),
+            note("Today", 1, path = "daily/2026-08-08.md"),
+            note("Another standup", 1, path = "meeting/another.md"),
+            note("Root note", 1),
+            note("Image", 1, path = "assets/logo.md")
+        )
+
+        assertEquals(listOf("daily", "meeting"), noteFolders(notes))
+    }
+
+    @Test fun `filters deselected folders while retaining root notes`() {
+        val notes = listOf(
+            note("Today", 1, path = "daily/2026-08-08.md"),
+            note("Standup", 1, path = "meeting/standup.md"),
+            note("Root note", 1)
+        )
+
+        assertEquals(
+            listOf("Standup", "Root note"),
+            filterNotesByFolders(notes, setOf("daily")).map { it.title }
+        )
+    }
+
     private fun note(
         title: String,
         updatedAt: Long,
