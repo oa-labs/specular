@@ -44,6 +44,9 @@ fun NoteDetailScreen(
 ) {
     LaunchedEffect(id) { vm.load(id) }
     val note by vm.note.collectAsState()
+    // The note itself is unchanged when sync downloads an attachment. Observing
+    // attachment writes lets imageModel retry as soon as the local file exists.
+    val attachmentChangeToken by vm.attachmentChangeToken.collectAsState(initial = null)
     var showActions by remember { mutableStateOf(false) }
     var showDeleteConfirmation by remember { mutableStateOf(false) }
     var showRenameDialog by remember { mutableStateOf(false) }
@@ -117,6 +120,9 @@ fun NoteDetailScreen(
                 CircularProgressIndicator()
             }
         } else {
+            // Read the token so Compose tracks it as a dependency of the rendered note.
+            @Suppress("UNUSED_VARIABLE")
+            val attachmentRefresh = attachmentChangeToken
             Column(modifier = Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()).padding(16.dp)) {
                 val isRegenerating by vm.isRegenerating.collectAsState()
                 Row(

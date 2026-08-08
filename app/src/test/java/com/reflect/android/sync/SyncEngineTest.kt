@@ -28,6 +28,7 @@ import com.specular.android.data.remote.PutContentRequest
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.flow.flowOf
 import androidx.paging.PagingSource
 import com.specular.android.domain.model.TodoListItem
 import org.junit.Assert.assertEquals
@@ -535,6 +536,7 @@ class SyncEngineTest {
     private class MemoryAttachmentDao(vararg initial: AttachmentEntity) : AttachmentDao {
         private val attachments = initial.associateByTo(linkedMapOf()) { it.path }
 
+        override fun observeChangeToken(): Flow<Long?> = flowOf(null)
         override suspend fun getByPath(path: String): AttachmentEntity? = attachments[path]
         override suspend fun getDirty(): List<AttachmentEntity> = attachments.values.filter { it.isDirty }
         override suspend fun upsert(attachment: AttachmentEntity) {

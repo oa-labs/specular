@@ -4,9 +4,14 @@ import androidx.room.Dao
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
+import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface AttachmentDao {
+    /** Changes whenever a synced or imported attachment is persisted. */
+    @Query("SELECT MAX(updatedAt) FROM attachments")
+    fun observeChangeToken(): Flow<Long?>
+
     @Query("SELECT * FROM attachments WHERE path = :path LIMIT 1")
     suspend fun getByPath(path: String): AttachmentEntity?
 

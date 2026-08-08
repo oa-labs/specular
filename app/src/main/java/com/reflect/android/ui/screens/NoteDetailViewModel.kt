@@ -3,6 +3,7 @@ package com.specular.android.ui.screens
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import android.net.Uri
+import com.specular.android.data.local.AttachmentDao
 import com.specular.android.data.local.FileStore
 import com.specular.android.data.local.MarkdownAttachmentResolver
 import com.specular.android.data.repo.NoteRepository
@@ -19,7 +20,8 @@ import javax.inject.Inject
 @HiltViewModel
 class NoteDetailViewModel @Inject constructor(
     private val repo: NoteRepository,
-    private val fileStore: FileStore
+    private val fileStore: FileStore,
+    attachmentDao: AttachmentDao
 ) : ViewModel() {
     data class DeletedNote(val id: String, val title: String)
 
@@ -33,6 +35,8 @@ class NoteDetailViewModel @Inject constructor(
     val linkedNoteIds: SharedFlow<String> = _linkedNoteIds
     private val _renameError = MutableStateFlow<String?>(null)
     val renameError: StateFlow<String?> = _renameError
+    /** Triggers a detail recomposition when a background sync writes an image. */
+    val attachmentChangeToken = attachmentDao.observeChangeToken()
 
     fun load(id: String) {
         viewModelScope.launch { _note.value = repo.getNote(id) }
