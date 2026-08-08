@@ -39,6 +39,7 @@ fun NoteListScreen(navController: NavController, vm: NoteListViewModel = hiltVie
     val snackbarHostState = remember { SnackbarHostState() }
     val savedStateHandle = navController.currentBackStackEntry?.savedStateHandle
     var overflowExpanded by remember { mutableStateOf(false) }
+    var sortExpanded by remember { mutableStateOf(false) }
 
     LaunchedEffect(savedStateHandle) {
         savedStateHandle ?: return@LaunchedEffect
@@ -68,7 +69,40 @@ fun NoteListScreen(navController: NavController, vm: NoteListViewModel = hiltVie
                         Icon(Icons.Default.Checklist, "View todos")
                     }
                     IconButton(onClick = { navController.navigate(Screen.Search.route) }) { Icon(Icons.Default.Search, "Search") }
-                    IconButton(onClick = { navController.navigate(Screen.Settings.route) }) { Icon(Icons.Default.Settings, "Settings") }
+                    Box {
+                        IconButton(onClick = { sortExpanded = true }) {
+                            Icon(Icons.AutoMirrored.Filled.Sort, "Sort notes")
+                        }
+                        DropdownMenu(
+                            expanded = sortExpanded,
+                            onDismissRequest = { sortExpanded = false }
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("Last updated") },
+                                onClick = {
+                                    vm.setSort(NoteSort.LAST_UPDATED)
+                                    sortExpanded = false
+                                },
+                                trailingIcon = {
+                                    if (sort == NoteSort.LAST_UPDATED) {
+                                        Icon(Icons.Default.Check, contentDescription = null)
+                                    }
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Alphabetical") },
+                                onClick = {
+                                    vm.setSort(NoteSort.ALPHABETICAL)
+                                    sortExpanded = false
+                                },
+                                trailingIcon = {
+                                    if (sort == NoteSort.ALPHABETICAL) {
+                                        Icon(Icons.Default.Check, contentDescription = null)
+                                    }
+                                }
+                            )
+                        }
+                    }
                     if (isSyncing) CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
                     Box {
                         IconButton(onClick = { overflowExpanded = true }) {
@@ -88,28 +122,12 @@ fun NoteListScreen(navController: NavController, vm: NoteListViewModel = hiltVie
                             )
                             HorizontalDivider()
                             DropdownMenuItem(
-                                text = { Text("Last updated") },
+                                text = { Text("Settings") },
                                 onClick = {
-                                    vm.setSort(NoteSort.LAST_UPDATED)
                                     overflowExpanded = false
+                                    navController.navigate(Screen.Settings.route)
                                 },
-                                trailingIcon = {
-                                    if (sort == NoteSort.LAST_UPDATED) {
-                                        Icon(Icons.Default.Check, contentDescription = null)
-                                    }
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text("Alphabetical") },
-                                onClick = {
-                                    vm.setSort(NoteSort.ALPHABETICAL)
-                                    overflowExpanded = false
-                                },
-                                trailingIcon = {
-                                    if (sort == NoteSort.ALPHABETICAL) {
-                                        Icon(Icons.Default.Check, contentDescription = null)
-                                    }
-                                }
+                                leadingIcon = { Icon(Icons.Default.Settings, contentDescription = null) }
                             )
                         }
                     }
