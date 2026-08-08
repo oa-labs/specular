@@ -1,6 +1,9 @@
 package com.specular.android.ui.screens
 
+import android.Manifest
+import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Environment
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
@@ -13,6 +16,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavController
@@ -35,6 +39,21 @@ fun EditorScreen(navController: NavController, id: String, vm: EditorViewModel =
             vm.insertImage("assets/${cameraUri!!.lastPathSegment}")
         }
     }
+    val launchCameraCapture = {
+        cameraUri = FileProvider.getUriForFile(
+            context, "${context.packageName}.fileprovider",
+            File(
+                context.getExternalFilesDir(Environment.DIRECTORY_PICTURES),
+                "capture-${System.currentTimeMillis()}.jpg"
+            )
+        )
+        cameraLauncher.launch(cameraUri!!)
+    }
+    val cameraPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) launchCameraCapture()
+    }
     val galleryLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         if (uri != null) {
             // Copy to assets and insert — simplified: insert original uri, FileStore handles copy on save
@@ -51,11 +70,11 @@ fun EditorScreen(navController: NavController, id: String, vm: EditorViewModel =
                 },
                 actions = {
                     IconButton(onClick = {
-                        cameraUri = FileProvider.getUriForFile(
-                            context, "${context.packageName}.fileprovider",
-                            File(context.getExternalFilesDir(null), "capture-${System.currentTimeMillis()}.jpg")
-                        )
-                        cameraLauncher.launch(cameraUri!!)
+                        if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
+                            launchCameraCapture()
+                        } else {
+                            cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+                        }
                     }) { Icon(Icons.Default.PhotoCamera, "Camera") }
                     IconButton(onClick = { galleryLauncher.launch("image/*") }) { Icon(Icons.Default.PhotoLibrary, "Gallery") }
                     if (saving) CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)

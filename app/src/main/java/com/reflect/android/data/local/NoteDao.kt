@@ -20,6 +20,10 @@ interface NoteDao {
     @Query("SELECT * FROM notes WHERE path = :path LIMIT 1")
     suspend fun getByPath(path: String): NoteEntity?
 
+    /** Reflect exports folder names with inconsistent casing (for example notes/ and Notes/). */
+    @Query("SELECT * FROM notes WHERE path = :path COLLATE NOCASE LIMIT 1")
+    suspend fun getByPathIgnoringCase(path: String): NoteEntity?
+
     @Query("SELECT * FROM notes WHERE isDirty = 1")
     suspend fun getDirty(): List<NoteEntity>
 

@@ -26,8 +26,18 @@ class NoteLinkPathResolverTest {
     }
 
     @Test
-    fun doesNotTreatWebOrEscapingLinksAsNotes() {
+    fun resolvesLinksThatAscendPastRepositoryRootToTheRepository() {
+        assertEquals(
+            "notes/AiAgentsDeepDiveApril7,2026.md",
+            NoteLinkPathResolver.resolve(
+                "source.md",
+                "../notes/AiAgentsDeepDiveApril7,2026.md"
+            )
+        )
+    }
+
+    @Test
+    fun doesNotTreatWebLinksAsNotes() {
         assertNull(NoteLinkPathResolver.resolve("notes/source.md", "https://example.com/note.md"))
-        assertNull(NoteLinkPathResolver.resolve("source.md", "../outside.md"))
     }
 }

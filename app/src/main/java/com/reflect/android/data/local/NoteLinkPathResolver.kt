@@ -31,7 +31,10 @@ object NoteLinkPathResolver {
             .forEach { component ->
                 when (component) {
                     "", "." -> Unit
-                    ".." -> if (components.isEmpty()) return null else components.removeLast()
+                    // Treat a path that ascends above the repository root as rooted at the
+                    // repository. Exported notes commonly use ../notes/... even when the
+                    // source note itself is stored at the root in this app.
+                    ".." -> if (components.isNotEmpty()) components.removeLast()
                     else -> components += component
                 }
             }
