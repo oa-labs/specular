@@ -182,6 +182,16 @@ class NoteRepository @Inject constructor(
         return note
     }
 
+    /** Appends a captured thought or task to today's single daily note. */
+    suspend fun appendToTodayNote(markdown: String): Note {
+        require(markdown.isNotBlank()) { "Captured text cannot be blank" }
+        val today = getOrCreateTodayNote()
+        return updateNote(
+            today.id,
+            newBody = today.bodyMarkdown.trimEnd() + "\n\n" + markdown.trim()
+        )
+    }
+
     suspend fun updateNote(id: String, newTitle: String? = null, newBody: String? = null): Note {
         val note = noteStoreLock.withLock { updateNoteLocked(id, newTitle, newBody) }
         enqueueSyncAfterLocalChange()

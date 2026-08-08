@@ -12,11 +12,13 @@ import com.specular.android.ui.screens.SearchScreen
 import com.specular.android.ui.screens.SettingsScreen
 import com.specular.android.ui.screens.OnboardingScreen
 import com.specular.android.ui.screens.TodoScreen
+import com.specular.android.ui.screens.VoiceCaptureScreen
 
 sealed class Screen(val route: String) {
     data object List : Screen("list")
     data object Search : Screen("search")
     data object Todos : Screen("todos")
+    data object VoiceCapture : Screen("voice-capture")
     data object Detail : Screen("detail/{id}") {
         fun routeFor(id: String) = "detail/${Uri.encode(id)}"
     }
@@ -38,6 +40,7 @@ fun SpecularNavGraph(
         composable(Screen.List.route) { NoteListScreen(navController) }
         composable(Screen.Search.route) { SearchScreen(navController) }
         composable(Screen.Todos.route) { TodoScreen(navController) }
+        composable(Screen.VoiceCapture.route) { VoiceCaptureScreen(navController) }
         composable(Screen.Detail.route) { backStack ->
             val id = backStack.arguments?.getString("id") ?: return@composable
             NoteDetailScreen(navController, id)

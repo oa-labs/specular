@@ -14,6 +14,7 @@ import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.*
@@ -30,6 +31,8 @@ import androidx.navigation.NavController
 import com.specular.android.data.remote.GitHubAuth
 import com.specular.android.data.remote.RepoResponse
 import com.specular.android.data.remote.AiProviderSettings
+import com.specular.android.data.remote.VoiceProvider
+import com.specular.android.data.remote.VoiceTranscriptionConfig
 import androidx.work.WorkManager
 import com.specular.android.sync.SyncScheduler
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -48,6 +51,7 @@ fun SettingsScreen(navController: NavController, vm: SettingsViewModel = hiltVie
     val aiUrl by vm.aiUrl.collectAsState()
     val aiApiKey by vm.aiApiKey.collectAsState()
     val aiModelId by vm.aiModelId.collectAsState()
+    val voiceConfig by vm.voiceConfig.collectAsState()
     val isTesting by vm.isTesting.collectAsState()
     val statusMessage by vm.statusMessage.collectAsState()
     val statusIsError by vm.statusIsError.collectAsState()
@@ -58,8 +62,15 @@ fun SettingsScreen(navController: NavController, vm: SettingsViewModel = hiltVie
     var aiUrlInput by remember(aiUrl) { mutableStateOf(aiUrl ?: "") }
     var aiApiKeyInput by remember(aiApiKey) { mutableStateOf(aiApiKey ?: "") }
     var aiModelIdInput by remember(aiModelId) { mutableStateOf(aiModelId ?: "") }
+    var voiceProviderInput by remember(voiceConfig) { mutableStateOf(voiceConfig?.provider ?: VoiceProvider.OPENROUTER) }
+    var voiceModelIdInput by remember(voiceConfig) { mutableStateOf(voiceConfig?.modelId ?: "") }
+    var voiceUsePreviewKeyInput by remember(voiceConfig) { mutableStateOf(voiceConfig?.usePreviewApiKey ?: true) }
+    var voiceEndpointInput by remember(voiceConfig) { mutableStateOf(voiceConfig?.endpoint ?: "") }
+    var voiceApiKeyInput by remember(voiceConfig) { mutableStateOf(voiceConfig?.apiKey ?: "") }
     var showToken by remember { mutableStateOf(false) }
     var showAiApiKey by remember { mutableStateOf(false) }
+    var showVoiceApiKey by remember { mutableStateOf(false) }
+    var voiceProviderExpanded by remember { mutableStateOf(false) }
     var showClearDialog by remember { mutableStateOf(false) }
     var showRepositoryPicker by remember { mutableStateOf(false) }
     val repositories by vm.repositories.collectAsState()
@@ -68,12 +79,18 @@ fun SettingsScreen(navController: NavController, vm: SettingsViewModel = hiltVie
 
     val githubConfigured = vm.isConfigured()
     val aiConfigured = vm.isAiConfigured()
+    val voiceConfigured = vm.isVoiceConfigured()
     val hasChanges = tokenInput != (token ?: "") ||
         ownerInput != (owner ?: "") ||
         repoInput != (repo ?: "") ||
         aiUrlInput != (aiUrl ?: "") ||
         aiApiKeyInput != (aiApiKey ?: "") ||
-        aiModelIdInput != (aiModelId ?: "")
+        aiModelIdInput != (aiModelId ?: "") ||
+        voiceProviderInput != (voiceConfig?.provider ?: VoiceProvider.OPENROUTER) ||
+        voiceModelIdInput != (voiceConfig?.modelId ?: "") ||
+        voiceUsePreviewKeyInput != (voiceConfig?.usePreviewApiKey ?: true) ||
+        voiceEndpointInput != (voiceConfig?.endpoint ?: "") ||
+        voiceApiKeyInput != (voiceConfig?.apiKey ?: "")
 
     Scaffold(
         topBar = {
@@ -90,7 +107,11 @@ fun SettingsScreen(navController: NavController, vm: SettingsViewModel = hiltVie
             Surface(shadowElevation = 6.dp) {
                 Button(
                     onClick = {
-                        vm.save(tokenInput, ownerInput, repoInput, aiUrlInput, aiApiKeyInput, aiModelIdInput)
+                        vm.save(
+                            tokenInput, ownerInput, repoInput, aiUrlInput, aiApiKeyInput, aiModelIdInput,
+                            voiceProviderInput, voiceModelIdInput, voiceUsePreviewKeyInput,
+                            voiceEndpointInput, voiceApiKeyInput
+                        )
                     },
                     enabled = hasChanges && !isTesting,
                     modifier = Modifier
@@ -235,6 +256,92 @@ fun SettingsScreen(navController: NavController, vm: SettingsViewModel = hiltVie
                 InfoCallout("Only notes without a snippet are sent. Generated previews are saved into the note's markdown metadata.")
             }
 
+            SettingsCard(
+                icon = { Icon(Icons.Default.Mic, contentDescription = null) },
+                title = "Voice transcription",
+                description = "Turn a recording into a thought or to-do in today's note.",
+                configured = voiceConfigured
+            ) {
+                Box {
+                    OutlinedButton(onClick = { voiceProviderExpanded = true }, modifier = Modifier.fillMaxWidth()) {
+                        Text("Provider: ${voiceProviderInput.label}")
+                    }
+                    DropdownMenu(
+                        expanded = voiceProviderExpanded,
+                        onDismissRequest = { voiceProviderExpanded = false }
+                    ) {
+                        VoiceProvider.entries.forEach { provider ->
+                            DropdownMenuItem(
+                                text = { Text(provider.label) },
+                                onClick = {
+                                    voiceProviderInput = provider
+                                    if (voiceModelIdInput.isBlank()) {
+                                        voiceModelIdInput = defaultVoiceModel(provider)
+                                    }
+                                    voiceProviderExpanded = false
+                                }
+                            )
+                        }
+                    }
+                }
+
+                OutlinedTextField(
+                    value = voiceModelIdInput,
+                    onValueChange = { voiceModelIdInput = it },
+                    label = { Text("Voice model ID") },
+                    placeholder = { Text(defaultVoiceModel(voiceProviderInput)) },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
+                )
+
+                if (voiceProviderInput == VoiceProvider.CUSTOM_OPENAI_COMPATIBLE) {
+                    OutlinedTextField(
+                        value = voiceEndpointInput,
+                        onValueChange = { voiceEndpointInput = it },
+                        label = { Text("Transcription endpoint") },
+                        placeholder = { Text("https://provider.example/v1/audio/transcriptions") },
+                        supportingText = { Text("OpenAI-compatible multipart endpoint") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                }
+
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(
+                        checked = voiceUsePreviewKeyInput,
+                        onCheckedChange = { voiceUsePreviewKeyInput = it }
+                    )
+                    Column {
+                        Text("Use AI preview API key")
+                        Text(
+                            "Reuse the encrypted key above when both capabilities use the same provider.",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                }
+
+                if (!voiceUsePreviewKeyInput) {
+                    OutlinedTextField(
+                        value = voiceApiKeyInput,
+                        onValueChange = { voiceApiKeyInput = it },
+                        label = { Text("Voice API key") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        visualTransformation = if (showVoiceApiKey) VisualTransformation.None else PasswordVisualTransformation(),
+                        trailingIcon = {
+                            IconButton(onClick = { showVoiceApiKey = !showVoiceApiKey }) {
+                                Icon(
+                                    if (showVoiceApiKey) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                    contentDescription = if (showVoiceApiKey) "Hide voice API key" else "Show voice API key"
+                                )
+                            }
+                        }
+                    )
+                }
+
+                InfoCallout("Recordings are sent only to this provider for transcription, then deleted from the device after the transcript is returned.")
+            }
+
             OutlinedCard(
                 modifier = Modifier.fillMaxWidth(),
                 colors = CardDefaults.outlinedCardColors(containerColor = MaterialTheme.colorScheme.surface)
@@ -249,7 +356,7 @@ fun SettingsScreen(navController: NavController, vm: SettingsViewModel = hiltVie
                         Text("Privacy and storage", style = MaterialTheme.typography.titleMedium)
                     }
                     Text(
-                        "Credentials are stored securely. AI requests send note content to the provider URL you configure. Specular does not add telemetry.",
+                        "Credentials are stored securely. Preview and voice requests send content only to the providers you configure. Specular does not add telemetry.",
                         style = MaterialTheme.typography.bodySmall
                     )
                 }
@@ -293,6 +400,11 @@ fun SettingsScreen(navController: NavController, vm: SettingsViewModel = hiltVie
                         aiUrlInput = ""
                         aiApiKeyInput = ""
                         aiModelIdInput = ""
+                        voiceProviderInput = VoiceProvider.OPENROUTER
+                        voiceModelIdInput = ""
+                        voiceUsePreviewKeyInput = true
+                        voiceEndpointInput = ""
+                        voiceApiKeyInput = ""
                     },
                     colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
                 ) { Text("Clear settings") }
@@ -463,6 +575,9 @@ class SettingsViewModel @Inject constructor(
     private val _aiModelId = MutableStateFlow(aiSettings.config.value?.modelId)
     val aiModelId: StateFlow<String?> = _aiModelId.asStateFlow()
 
+    private val _voiceConfig = MutableStateFlow(aiSettings.voiceConfig.value)
+    val voiceConfig: StateFlow<VoiceTranscriptionConfig?> = _voiceConfig.asStateFlow()
+
     private val _isTesting = MutableStateFlow(false)
     val isTesting: StateFlow<Boolean> = _isTesting.asStateFlow()
 
@@ -483,13 +598,20 @@ class SettingsViewModel @Inject constructor(
 
     fun isAiConfigured(): Boolean = aiSettings.isConfigured()
 
+    fun isVoiceConfigured(): Boolean = aiSettings.isVoiceConfigured()
+
     fun save(
         tokenInput: String,
         ownerInput: String,
         repoInput: String,
         aiUrlInput: String,
         aiApiKeyInput: String,
-        aiModelIdInput: String
+        aiModelIdInput: String,
+        voiceProvider: VoiceProvider,
+        voiceModelId: String,
+        voiceUsePreviewKey: Boolean,
+        voiceEndpoint: String,
+        voiceApiKey: String
     ) {
         auth.token = tokenInput.ifBlank { null }
         auth.repoOwner = ownerInput.ifBlank { null }
@@ -502,6 +624,17 @@ class SettingsViewModel @Inject constructor(
         } else if (aiIsComplete) {
             aiSettings.save(aiUrlInput, aiApiKeyInput, aiModelIdInput)
         }
+        aiSettings.saveVoice(
+            voiceModelId.takeIf { it.isNotBlank() }?.let {
+                VoiceTranscriptionConfig(
+                    provider = voiceProvider,
+                    modelId = it,
+                    usePreviewApiKey = voiceUsePreviewKey,
+                    endpoint = voiceEndpoint,
+                    apiKey = voiceApiKey
+                )
+            }
+        )
 
         _token.value = auth.token
         _owner.value = auth.repoOwner
@@ -512,6 +645,7 @@ class SettingsViewModel @Inject constructor(
             _aiApiKey.value = aiSettings.config.value?.apiKey
             _aiModelId.value = aiSettings.config.value?.modelId
         }
+        _voiceConfig.value = aiSettings.voiceConfig.value
 
         if (auth.isConfigured()) {
             SyncScheduler.schedulePeriodic(workManager)
@@ -596,6 +730,7 @@ class SettingsViewModel @Inject constructor(
         _aiUrl.value = null
         _aiApiKey.value = null
         _aiModelId.value = null
+        _voiceConfig.value = null
         _statusIsError.value = false
         _statusMessage.value = "Configuration cleared"
     }
@@ -603,4 +738,9 @@ class SettingsViewModel @Inject constructor(
     fun clearStatus() {
         _statusMessage.value = null
     }
+}
+
+private fun defaultVoiceModel(provider: VoiceProvider): String = when (provider) {
+    VoiceProvider.OPENROUTER -> "openai/whisper-large-v3"
+    VoiceProvider.OPENAI, VoiceProvider.CUSTOM_OPENAI_COMPATIBLE -> "whisper-1"
 }

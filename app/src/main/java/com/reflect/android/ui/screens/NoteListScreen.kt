@@ -15,6 +15,7 @@ import androidx.compose.material.icons.filled.CalendarToday
 import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.ExperimentalMaterialApi
 import androidx.compose.material.pullrefresh.PullRefreshIndicator
 import androidx.compose.material.pullrefresh.pullRefresh
@@ -84,13 +85,6 @@ fun NoteListScreen(navController: NavController, vm: NoteListViewModel = hiltVie
             TopAppBar(
                 title = { Text("Specular") },
                 actions = {
-                    IconButton(
-                        onClick = openTodayEditor,
-                        enabled = !isOpeningToday
-                    ) {
-                        if (isOpeningToday) CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
-                        else Icon(Icons.Default.CalendarToday, "Edit today's daily note")
-                    }
                     IconButton(onClick = vm::refresh, enabled = !isRefreshing) {
                         if (isRefreshing) CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
                         else Icon(Icons.Default.Refresh, "Sync now")
@@ -198,6 +192,14 @@ fun NoteListScreen(navController: NavController, vm: NoteListViewModel = hiltVie
                                 navController.navigate(Screen.Editor.routeForNewTodo())
                             },
                             leadingIcon = { Icon(Icons.Default.Checklist, contentDescription = null) }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Voice capture") },
+                            onClick = {
+                                createExpanded = false
+                                navController.navigate(Screen.VoiceCapture.route)
+                            },
+                            leadingIcon = { Icon(Icons.Default.Mic, contentDescription = null) }
                         )
                     }
                 }
