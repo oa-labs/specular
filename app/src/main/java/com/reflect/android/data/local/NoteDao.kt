@@ -11,7 +11,22 @@ import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface NoteDao {
-    @Query("SELECT * FROM notes WHERE isPendingDeletion = 0 ORDER BY isDaily DESC, updatedAt DESC")
+    /**
+     * List screens must not hydrate a note's complete Markdown. Besides being
+     * unnecessary, selecting both [NoteEntity.rawMarkdown] and [NoteEntity.body]
+     * can exhaust Android's CursorWindow when a repository contains many notes.
+     *
+     * Keep the [NoteEntity] return type for the existing callers, but populate
+     * content fields with safe, small placeholders. Full note content is always
+     * read through [getById] when a note is opened.
+     */
+    @Query(
+        "SELECT id, title, path, '' AS rawMarkdown, substr(body, 1, 4096) AS body, " +
+            "'[]' AS aliases, snippet, isDaily, NULL AS lastRemoteSha, isDirty, " +
+            "0 AS isPendingDeletion, NULL AS pendingRenameFromPath, " +
+            "NULL AS pendingRenameFromSha, isConflict, updatedAt " +
+            "FROM notes WHERE isPendingDeletion = 0 ORDER BY isDaily DESC, updatedAt DESC"
+    )
     fun observeAll(): Flow<List<NoteEntity>>
 
     @Query("SELECT * FROM notes WHERE id = :id LIMIT 1")
@@ -96,10 +111,24 @@ interface NoteDao {
     )
     fun observeAllTodos(): PagingSource<Int, TodoListItem>
 
-    @Query("SELECT notes.* FROM notes JOIN notes_fts ON notes.id = notes_fts.docid WHERE notes_fts MATCH :query")
+    @Query(
+        "SELECT notes.id, notes.title, notes.path, '' AS rawMarkdown, " +
+            "substr(notes.body, 1, 4096) AS body, '[]' AS aliases, notes.snippet, " +
+            "notes.isDaily, NULL AS lastRemoteSha, notes.isDirty, 0 AS isPendingDeletion, " +
+            "NULL AS pendingRenameFromPath, NULL AS pendingRenameFromSha, " +
+            "notes.isConflict, notes.updatedAt " +
+            "FROM notes JOIN notes_fts ON notes.id = notes_fts.docid WHERE notes_fts MATCH :query"
+    )
     fun searchFts(query: String): Flow<List<NoteEntity>>
 
-    @Query("SELECT * FROM notes WHERE title LIKE '%' || :q || '%' OR body LIKE '%' || :q || '%' ORDER BY updatedAt DESC")
+    @Query(
+        "SELECT id, title, path, '' AS rawMarkdown, substr(body, 1, 4096) AS body, " +
+            "'[]' AS aliases, snippet, isDaily, NULL AS lastRemoteSha, isDirty, " +
+            "0 AS isPendingDeletion, NULL AS pendingRenameFromPath, " +
+            "NULL AS pendingRenameFromSha, isConflict, updatedAt " +
+            "FROM notes WHERE title LIKE '%' || :q || '%' OR body LIKE '%' || :q || '%' " +
+            "ORDER BY updatedAt DESC"
+    )
     fun searchLike(q: String): Flow<List<NoteEntity>>
 
     @Query("UPDATE notes SET isDirty = :dirty, lastRemoteSha = :sha WHERE id = :id")
