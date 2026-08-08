@@ -27,7 +27,8 @@ import androidx.lifecycle.viewModelScope
 import androidx.navigation.NavController
 import com.specular.android.data.remote.GitHubAuth
 import com.specular.android.data.remote.AiProviderSettings
-import com.specular.android.sync.SyncEngine
+import androidx.work.WorkManager
+import com.specular.android.sync.SyncScheduler
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -370,7 +371,7 @@ private fun InfoCallout(message: String) {
 @HiltViewModel
 class SettingsViewModel @Inject constructor(
     private val auth: GitHubAuth,
-    private val syncEngine: SyncEngine,
+    private val workManager: WorkManager,
     private val aiSettings: AiProviderSettings
 ) : ViewModel() {
 
@@ -435,12 +436,17 @@ class SettingsViewModel @Inject constructor(
             _aiModelId.value = aiSettings.config.value?.modelId
         }
 
+        if (auth.isConfigured()) {
+            SyncScheduler.schedulePeriodic(workManager)
+            SyncScheduler.enqueueInitialSync(workManager)
+        }
+
         val aiFieldsEntered = aiFields.count { it.isNotBlank() }
         _statusIsError.value = !auth.isConfigured() && !aiSettings.isConfigured() || aiFieldsEntered in 1..2
         _statusMessage.value = when {
-            auth.isConfigured() && aiFieldsEntered in 1..2 -> "GitHub settings saved. Complete all AI fields to enable previews."
-            auth.isConfigured() && aiSettings.isConfigured() -> "Changes saved. Test your GitHub connection when ready."
-            auth.isConfigured() -> "GitHub settings saved. Test the connection when ready."
+            auth.isConfigured() && aiFieldsEntered in 1..2 -> "GitHub settings saved and notes are syncing. Complete all AI fields to enable previews."
+            auth.isConfigured() && aiSettings.isConfigured() -> "Changes saved. Notes are syncing in the background."
+            auth.isConfigured() -> "GitHub settings saved. Notes are syncing in the background."
             aiSettings.isConfigured() -> "AI provider saved. Add GitHub details if you want sync."
             aiFieldsEntered in 1..2 -> "Complete all AI fields to enable note previews."
             else -> "Add a GitHub token, owner, and repository to enable sync."
@@ -455,20 +461,7 @@ class SettingsViewModel @Inject constructor(
 
             try {
                 val result = auth.testConnection()
-                _statusMessage.value = "$result. Syncing notes..."
-                when (val syncResult = syncEngine.sync()) {
-                    is SyncEngine.Result.Success -> {
-                        _statusMessage.value = "$result. Notes synced successfully."
-                    }
-                    is SyncEngine.Result.NotConfigured -> {
-                        _statusIsError.value = true
-                        _statusMessage.value = "Connection succeeded, but sync is not configured."
-                    }
-                    is SyncEngine.Result.Error -> {
-                        _statusIsError.value = true
-                        _statusMessage.value = "Connection succeeded, but sync failed: ${syncResult.message}"
-                    }
-                }
+                _statusMessage.value = "$result. Notes are syncing in the background."
             } catch (e: Exception) {
                 val message = when (e) {
                     is IllegalArgumentException -> e.message ?: "Invalid configuration"

@@ -30,7 +30,7 @@ SDK at `/opt/android-sdk` (`local.properties` already set). JDK 17+ required.
    adb install app/build/outputs/apk/gmsFree/debug/app-gmsFree-debug.apk
    ```
 3. Open **Settings** → paste token + `owner`/`repo` (e.g. `joelwreed` / `reflect-notes`) → Save.
-4. Tap sync (refresh) — notes pull from `main` via GitHub REST; edits set `isDirty` and push on next sync. Conflicts create `Name (conflict YYYY-MM-DD).md`.
+4. Save the GitHub settings — an initial sync is queued in the background, followed by automatic syncs at least every 15 minutes while connected. Edits set `isDirty` and push on the next sync. Conflicts create `Name (conflict YYYY-MM-DD).md`.
 
 ## Structure
 

@@ -8,7 +8,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Sort
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.MoreVert
@@ -34,8 +33,6 @@ import com.specular.android.ui.screens.NoteListViewModel
 fun NoteListScreen(navController: NavController, vm: NoteListViewModel = hiltViewModel()) {
     val notes by vm.notes.collectAsState()
     val sort by vm.sort.collectAsState()
-    val isSyncing by vm.isSyncing.collectAsState()
-    val syncMessage by vm.syncMessage.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
     val savedStateHandle = navController.currentBackStackEntry?.savedStateHandle
     var overflowExpanded by remember { mutableStateOf(false) }
@@ -103,7 +100,6 @@ fun NoteListScreen(navController: NavController, vm: NoteListViewModel = hiltVie
                             )
                         }
                     }
-                    if (isSyncing) CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
                     Box {
                         IconButton(onClick = { overflowExpanded = true }) {
                             Icon(Icons.Default.MoreVert, "More actions")
@@ -112,15 +108,6 @@ fun NoteListScreen(navController: NavController, vm: NoteListViewModel = hiltVie
                             expanded = overflowExpanded,
                             onDismissRequest = { overflowExpanded = false }
                         ) {
-                            DropdownMenuItem(
-                                text = { Text("Sync") },
-                                onClick = {
-                                    overflowExpanded = false
-                                    vm.sync()
-                                },
-                                leadingIcon = { Icon(Icons.Default.Refresh, contentDescription = null) }
-                            )
-                            HorizontalDivider()
                             DropdownMenuItem(
                                 text = { Text("Settings") },
                                 onClick = {
@@ -141,19 +128,6 @@ fun NoteListScreen(navController: NavController, vm: NoteListViewModel = hiltVie
         }
     ) { padding ->
         Column(modifier = Modifier.fillMaxSize().padding(padding)) {
-            syncMessage?.let { message ->
-                Card(
-                    modifier = Modifier.fillMaxWidth().padding(16.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)
-                ) {
-                    Text(
-                        message,
-                        modifier = Modifier.padding(12.dp),
-                        color = MaterialTheme.colorScheme.onErrorContainer
-                    )
-                }
-            }
-
             if (notes.isEmpty()) {
                 Box(modifier = Modifier.fillMaxSize().weight(1f), contentAlignment = androidx.compose.ui.Alignment.Center) {
                     Column(
@@ -162,13 +136,10 @@ fun NoteListScreen(navController: NavController, vm: NoteListViewModel = hiltVie
                     ) {
                         Text("No notes yet", style = MaterialTheme.typography.headlineSmall)
                         Text(
-                            "Pull to sync from your GitHub repository or tap + to create one.",
+                            "Notes sync automatically in the background once GitHub is configured. Tap + to create one.",
                             style = MaterialTheme.typography.bodyMedium,
                             modifier = Modifier.padding(top = 8.dp)
                         )
-                        if (isSyncing) {
-                            CircularProgressIndicator(modifier = Modifier.padding(top = 16.dp))
-                        }
                     }
                 }
             } else {
