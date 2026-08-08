@@ -82,7 +82,18 @@ fun TodoScreen(navController: NavController, vm: TodoViewModel = hiltViewModel()
                             val todo = todos[index] ?: return@items
                             val pendingState = pendingCompletion[todo.key()]
                             ListItem(
-                                headlineContent = { Text(todo.text.ifBlank { "Untitled task" }) },
+                                headlineContent = {
+                                    if (todo.text.isBlank()) {
+                                        Text("Untitled task")
+                                    } else {
+                                        MarkdownText(
+                                            markdown = todo.text,
+                                            taskOffset = 0,
+                                            onTaskClick = {},
+                                            onLinkClick = { false }
+                                        )
+                                    }
+                                },
                                 supportingContent = { Text(todo.noteTitle) },
                                 leadingContent = {
                                     Checkbox(

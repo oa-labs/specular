@@ -278,7 +278,8 @@ fun NoteDetailScreen(
 }
 
 @Composable
-private fun MarkdownText(
+/** Renders Markdown shared by note details and compact task-list rows. */
+internal fun MarkdownText(
     markdown: String,
     taskOffset: Int,
     onTaskClick: (Int) -> Unit,
