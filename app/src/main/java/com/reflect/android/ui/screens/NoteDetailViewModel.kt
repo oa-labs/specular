@@ -23,6 +23,8 @@ class NoteDetailViewModel @Inject constructor(private val repo: NoteRepository) 
     val isRegenerating: StateFlow<Boolean> = _isRegenerating
     private val _deletedNotes = MutableSharedFlow<DeletedNote>()
     val deletedNotes: SharedFlow<DeletedNote> = _deletedNotes
+    private val _linkedNoteIds = MutableSharedFlow<String>()
+    val linkedNoteIds: SharedFlow<String> = _linkedNoteIds
 
     fun load(id: String) {
         viewModelScope.launch { _note.value = repo.getNote(id) }
@@ -49,6 +51,12 @@ class NoteDetailViewModel @Inject constructor(private val repo: NoteRepository) 
     fun toggleTask(id: String, taskIndex: Int) {
         viewModelScope.launch {
             _note.value = repo.toggleTodo(id, taskIndex) ?: return@launch
+        }
+    }
+
+    fun openLinkedNote(path: String) {
+        viewModelScope.launch {
+            repo.findNoteIdByPath(path)?.let { _linkedNoteIds.emit(it) }
         }
     }
 

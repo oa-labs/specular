@@ -110,6 +110,9 @@ class NoteRepository @Inject constructor(
         )
     }
 
+    /** Finds an indexed note by its repository-relative Markdown path. */
+    suspend fun findNoteIdByPath(path: String): String? = dao.getByPath(path)?.id
+
     suspend fun createNote(title: String, body: String = ""): Note {
         return noteStoreLock.withLock {
             val id = "01" + UUID.randomUUID().toString().replace("-", "").take(24)

@@ -3,6 +3,7 @@ package com.specular.android.ui.screens
 import android.text.method.LinkMovementMethod
 import android.text.Spannable
 import android.text.style.ClickableSpan
+import android.text.style.URLSpan
 import android.util.TypedValue
 import android.widget.TextView
 import androidx.compose.foundation.layout.*
@@ -30,6 +31,7 @@ import io.noties.markwon.ext.tasklist.TaskListPlugin
 import io.noties.markwon.ext.tasklist.TaskListSpan
 import com.specular.android.ui.navigation.Screen
 import com.specular.android.data.local.countTodoItems
+import com.specular.android.data.local.NoteLinkPathResolver
 import android.view.View
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -51,6 +53,12 @@ fun NoteDetailScreen(
                 set(DELETED_NOTE_TITLE, deleted.title)
             }
             navController.popBackStack()
+        }
+    }
+
+    LaunchedEffect(vm) {
+        vm.linkedNoteIds.collect { linkedNoteId ->
+            navController.navigate(Screen.Detail.routeFor(linkedNoteId))
         }
     }
 
@@ -135,7 +143,14 @@ fun NoteDetailScreen(
 
                 matches.forEach { match ->
                     val markdownBeforeImage = displayMarkdown.substring(cursor, match.range.first)
-                    MarkdownText(markdownBeforeImage, taskOffset) { taskIndex -> vm.toggleTask(id, taskIndex) }
+                    MarkdownText(
+                        markdown = markdownBeforeImage,
+                        taskOffset = taskOffset,
+                        onTaskClick = { taskIndex -> vm.toggleTask(id, taskIndex) },
+                        onLinkClick = { destination ->
+                            NoteLinkPathResolver.resolve(n.path, destination)?.let(vm::openLinkedNote) != null
+                        }
+                    )
                     taskOffset += countTodoItems(markdownBeforeImage)
 
                     val alt = match.groupValues[1]
@@ -145,14 +160,21 @@ fun NoteDetailScreen(
                         AsyncImage(model = url, contentDescription = alt, modifier = Modifier.fillMaxWidth())
                     } else {
                         // Keep unsupported image destinations readable without displaying syntax.
-                        MarkdownText(alt.ifBlank { "Image" }, taskOffset) { }
+                        MarkdownText(alt.ifBlank { "Image" }, taskOffset, onTaskClick = { }, onLinkClick = { false })
                     }
 
                     cursor = match.range.last + 1
                 }
 
                 val markdownAfterImages = displayMarkdown.substring(cursor)
-                MarkdownText(markdownAfterImages, taskOffset) { taskIndex -> vm.toggleTask(id, taskIndex) }
+                MarkdownText(
+                    markdown = markdownAfterImages,
+                    taskOffset = taskOffset,
+                    onTaskClick = { taskIndex -> vm.toggleTask(id, taskIndex) },
+                    onLinkClick = { destination ->
+                        NoteLinkPathResolver.resolve(n.path, destination)?.let(vm::openLinkedNote) != null
+                    }
+                )
             }
         }
     }
@@ -180,7 +202,12 @@ fun NoteDetailScreen(
 }
 
 @Composable
-private fun MarkdownText(markdown: String, taskOffset: Int, onTaskClick: (Int) -> Unit) {
+private fun MarkdownText(
+    markdown: String,
+    taskOffset: Int,
+    onTaskClick: (Int) -> Unit,
+    onLinkClick: (String) -> Boolean
+) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val markwon = remember(context) {
         Markwon.builder(context)
@@ -205,6 +232,29 @@ private fun MarkdownText(markdown: String, taskOffset: Int, onTaskClick: (Int) -
             markwon.setMarkdown(textView, markdown)
 
             val rendered = textView.text as? Spannable ?: return@AndroidView
+            rendered.getSpans(0, rendered.length, URLSpan::class.java)
+                .forEach { linkSpan ->
+                    val start = rendered.getSpanStart(linkSpan)
+                    val end = rendered.getSpanEnd(linkSpan)
+                    if (start >= 0 && end > start) {
+                        val flags = rendered.getSpanFlags(linkSpan)
+                        rendered.removeSpan(linkSpan)
+                        rendered.setSpan(
+                            object : ClickableSpan() {
+                                override fun onClick(widget: View) {
+                                    if (!onLinkClick(linkSpan.url)) linkSpan.onClick(widget)
+                                }
+
+                                override fun updateDrawState(ds: android.text.TextPaint) {
+                                    linkSpan.updateDrawState(ds)
+                                }
+                            },
+                            start,
+                            end,
+                            flags
+                        )
+                    }
+                }
             rendered.getSpans(0, rendered.length, TaskListSpan::class.java)
                 .sortedBy { rendered.getSpanStart(it) }
                 .forEachIndexed { localIndex, taskSpan ->
