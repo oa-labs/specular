@@ -186,7 +186,12 @@ class NoteRepository @Inject constructor(
         return note
     }
 
-    private suspend fun updateNoteLocked(id: String, newTitle: String? = null, newBody: String? = null): Note {
+    private suspend fun updateNoteLocked(
+        id: String,
+        newTitle: String? = null,
+        newBody: String? = null,
+        updateRecency: Boolean = true
+    ): Note {
         val e = dao.getById(id) ?: error("Note $id not found")
         val parsed = FrontmatterParser.parse(e.path, e.rawMarkdown)
         val title = newTitle ?: parsed.title
@@ -205,7 +210,9 @@ class NoteRepository @Inject constructor(
             body = body,
             snippet = parsed.snippet,
             isDirty = true,
-            updatedAt = System.currentTimeMillis()
+            // Checking off a task still changes the Markdown and must sync, but it
+            // should not move every task from this note in the global task list.
+            updatedAt = if (updateRecency) System.currentTimeMillis() else e.updatedAt
         )
         persistIndexed(updated)
         return getNote(id)!!
@@ -216,7 +223,7 @@ class NoteRepository @Inject constructor(
             val current = getNote(noteId) ?: return@withLock null
             val updatedBody = todoIndex.toggleAtIndex(current.bodyMarkdown, taskIndex)
             if (updatedBody == current.bodyMarkdown) current
-            else updateNoteLocked(noteId, newBody = updatedBody)
+            else updateNoteLocked(noteId, newBody = updatedBody, updateRecency = false)
         }
         if (note != null) enqueueSyncAfterLocalChange()
         return note
