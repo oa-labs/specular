@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import com.specular.android.data.local.FolderFilterSettings
 import com.specular.android.data.repo.NoteRepository
 import com.specular.android.data.remote.AiProviderSettings
+import com.specular.android.sync.SyncEngine
 import com.specular.android.domain.model.NoteListItem
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.SharingStarted
@@ -56,7 +57,8 @@ internal fun filterNotesByFolders(
 class NoteListViewModel @Inject constructor(
     private val repo: NoteRepository,
     private val aiSettings: AiProviderSettings,
-    private val folderFilterSettings: FolderFilterSettings
+    private val folderFilterSettings: FolderFilterSettings,
+    private val syncEngine: SyncEngine
 ) : ViewModel() {
     private val _sort = MutableStateFlow(NoteSort.LAST_UPDATED)
     val sort: StateFlow<NoteSort> = _sort
@@ -79,6 +81,12 @@ class NoteListViewModel @Inject constructor(
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     private val snippetJobs = mutableSetOf<String>()
+    private val _isRefreshing = MutableStateFlow(false)
+    val isRefreshing: StateFlow<Boolean> = _isRefreshing
+    private val _syncMessage = MutableStateFlow<String?>(null)
+    val syncMessage: StateFlow<String?> = _syncMessage
+    private val _isOpeningToday = MutableStateFlow(false)
+    val isOpeningToday: StateFlow<Boolean> = _isOpeningToday
 
     init {
         viewModelScope.launch {
@@ -119,5 +127,34 @@ class NoteListViewModel @Inject constructor(
         }
         _deselectedFolders.value = updatedFolders
         folderFilterSettings.saveDeselectedFolders(updatedFolders)
+    }
+
+    fun refresh() {
+        if (_isRefreshing.value) return
+        viewModelScope.launch {
+            _isRefreshing.value = true
+            _syncMessage.value = when (val result = syncEngine.sync()) {
+                SyncEngine.Result.Success -> "Notes are up to date"
+                SyncEngine.Result.NotConfigured -> "Connect a GitHub repository in Settings to sync"
+                is SyncEngine.Result.Error -> result.message
+            }
+            _isRefreshing.value = false
+        }
+    }
+
+    fun consumeSyncMessage() {
+        _syncMessage.value = null
+    }
+
+    fun openToday(onReady: (String) -> Unit) {
+        if (_isOpeningToday.value) return
+        viewModelScope.launch {
+            _isOpeningToday.value = true
+            try {
+                onReady(repo.getOrCreateTodayNote().id)
+            } finally {
+                _isOpeningToday.value = false
+            }
+        }
     }
 }

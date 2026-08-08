@@ -272,3 +272,37 @@ You do **not** need Play Services or the Play Store to install on Android.
 
 *Approved: 2026-08-06 — all open questions resolved. Plan is decision-complete.*
 
+## Implementation Status — 2026-08-08
+
+The local-first note stack, Markdown rendering/editing, offline search, attachment
+capture/preview, GitHub Contents API pull/push, durable dirty/delete/rename state,
+conflict-copy preservation, lifecycle/manual/periodic sync, and direct-APK project
+setup are implemented.
+
+The following approved plan items were completed on 2026-08-08:
+
+- Manual **Sync now** and pull-to-refresh from the note list.
+- PAT-based repository picker: it lists repositories accessible to the entered
+  token and validates that the selected default branch contains Markdown notes
+  before it can be saved.
+- Editor polish: Markdown shortcuts, `[[wikilink]]` suggestions from the local
+  index, and a Today action that opens or creates `daily/YYYY-MM-DD.md` with an id.
+
+### Remaining Open Implementation Items
+
+- **OAuth App + PKCE:** register the GitHub OAuth App, supply a real client id,
+  and implement browser authorization, redirect validation, and token exchange.
+  PAT remains the working authentication path.
+- **Conflict resolution UX:** conflict copies are created safely, but the approved
+  Keep mine / Keep theirs / Keep both actions have not been implemented.
+- **Batch atomic commits:** multi-file changes currently use sequential Contents
+  API requests; Git Data create-tree/create-commit/update-ref batching remains open.
+- **Large-repository hardening:** handle truncated trees/pagination, add a large
+  file guard, and measure the 2k-note cold-start and incremental-sync targets.
+- **Sync error UX:** show specific rate-limit, expired-auth, private-repository,
+  and oversized-file guidance rather than only the current generic error message.
+- **Settings completion:** configurable periodic-sync policy, intentional
+  repository-switch/cache-clear flow, and any needed migration UI remain open.
+- **Release readiness:** add instrumented and screenshot tests, CI (build/lint/test),
+  real-device/private-repo and airplane-mode validation, signing/release
+  instructions, an import guide, and `SYNC.md`.

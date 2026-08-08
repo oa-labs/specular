@@ -8,6 +8,9 @@ import com.specular.android.data.repo.NoteRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -26,18 +29,40 @@ class EditorViewModel @Inject constructor(
     private var editingId: String? = null
     private var editingPath: String? = null
 
+    val linkSuggestions: StateFlow<List<String>> = repo.observeNotes()
+        .map { notes -> notes.map { it.title }.distinct().sorted() }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
     fun load(id: String) {
         editingId = id
         viewModelScope.launch {
             val note = repo.getNote(id) ?: return@launch
             _title.value = note.title
-            _body.value = note.bodyMarkdown
+            // The title has its own field. Do not make an existing H1 look like body
+            // content or preserve an old title when the note is renamed.
+            _body.value = note.bodyMarkdown.replaceFirst(
+                Regex("""^\s*#\s+[^\r\n]+(?:\r?\n){0,2}"""),
+                ""
+            )
             editingPath = note.path
         }
     }
 
     fun setTitle(v: String) { _title.value = v }
     fun setBody(v: String) { _body.value = v }
+
+    fun insertMarkdown(prefix: String, suffix: String = "") {
+        _body.value = _body.value.trimEnd() + "\n" + prefix + suffix
+    }
+
+    fun insertWikiLink(title: String) {
+        val openingLink = Regex("""\[\[[^\]\n]*$""")
+        _body.value = if (openingLink.containsMatchIn(_body.value)) {
+            _body.value.replace(openingLink, "[[$title]]")
+        } else {
+            _body.value.trimEnd() + "\n[[$title]]"
+        }
+    }
 
     /** Starts an editor that immediately contains one open Markdown task. */
     fun prepareNewTodo() {

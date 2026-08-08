@@ -81,6 +81,50 @@ class GitHubAuth @Inject constructor(
         }
     }
 
+    /**
+     * Lists repositories available to an entered PAT before it is saved. This keeps
+     * connection setup from relying on error-prone owner/repository typing.
+     */
+    suspend fun listRepositories(candidateToken: String): List<RepoResponse> {
+        require(candidateToken.isNotBlank()) { "Enter a personal access token first." }
+        return try {
+            api.listRepos("Bearer $candidateToken")
+        } catch (e: HttpException) {
+            when (e.code()) {
+                401 -> throw IllegalArgumentException("Invalid or expired token. Please check your PAT.")
+                403 -> throw IllegalArgumentException("GitHub denied repository access. Check your PAT permissions.")
+                else -> throw IllegalArgumentException("GitHub API error (${e.code()}): ${e.message()}")
+            }
+        } catch (e: IOException) {
+            throw IllegalStateException("Network error. Please check your internet connection.")
+        }
+    }
+
+    /** Verifies that a selected repository looks like a usable Reflect notes repo. */
+    suspend fun validateReflectRepository(candidateToken: String, repository: RepoResponse) {
+        require(candidateToken.isNotBlank()) { "Enter a personal access token first." }
+        try {
+            val header = "Bearer $candidateToken"
+            val ref = api.getRef(repository.owner.login, repository.name, repository.default_branch, header)
+            val tree = api.getTree(repository.owner.login, repository.name, ref.`object`.sha, header)
+            val containsMarkdown = tree.tree.any { entry ->
+                entry.type == "blob" && entry.path.endsWith(".md") && !entry.path.endsWith(".reflect.md")
+            }
+            require(containsMarkdown) {
+                "${repository.full_name} has no Markdown notes on ${repository.default_branch}."
+            }
+        } catch (e: HttpException) {
+            when (e.code()) {
+                401 -> throw IllegalArgumentException("Invalid or expired token. Please check your PAT.")
+                403 -> throw IllegalArgumentException("Token cannot read ${repository.full_name}.")
+                404 -> throw IllegalArgumentException("Repository or default branch was not found.")
+                else -> throw IllegalArgumentException("GitHub API error (${e.code()}): ${e.message()}")
+            }
+        } catch (e: IOException) {
+            throw IllegalStateException("Network error. Please check your internet connection.")
+        }
+    }
+
     fun clear() {
         prefs.edit().clear().apply()
     }

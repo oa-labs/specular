@@ -6,7 +6,9 @@ import android.net.Uri
 import android.os.Environment
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Done
@@ -35,6 +37,14 @@ fun EditorScreen(navController: NavController, id: String, vm: EditorViewModel =
     val title by vm.title.collectAsState()
     val body by vm.body.collectAsState()
     val saving by vm.saving.collectAsState()
+    val linkSuggestions by vm.linkSuggestions.collectAsState()
+    val linkQuery = remember(body) {
+        Regex("""\[\[([^\]\n]*)$""").find(body)?.groupValues?.get(1)?.trim().orEmpty()
+    }
+    val matchingLinks = remember(linkSuggestions, linkQuery) {
+        if (linkQuery.isBlank()) emptyList()
+        else linkSuggestions.filter { it.contains(linkQuery, ignoreCase = true) }.take(5)
+    }
 
     // Camera/gallery images are copied into the mirrored repository's attachments/.
     val context = androidx.compose.ui.platform.LocalContext.current
@@ -100,6 +110,37 @@ fun EditorScreen(navController: NavController, id: String, vm: EditorViewModel =
         Column(modifier = Modifier.fillMaxSize().padding(padding).padding(16.dp)) {
             OutlinedTextField(value = title, onValueChange = { vm.setTitle(it) }, label = { Text("Title") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
             Spacer(Modifier.height(12.dp))
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                color = MaterialTheme.colorScheme.surfaceVariant,
+                shape = MaterialTheme.shapes.small
+            ) {
+                Row(
+                    modifier = Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(2.dp)
+                ) {
+                    EditorShortcut("Bold") { vm.insertMarkdown("**bold text**") }
+                    EditorShortcut("Italic") { vm.insertMarkdown("_italic text_") }
+                    EditorShortcut("List") { vm.insertMarkdown("- ") }
+                    EditorShortcut("Task") { vm.insertMarkdown("- [ ] ") }
+                    EditorShortcut("Link") { vm.insertMarkdown("[link text](https://)") }
+                    EditorShortcut("Wiki link") { vm.insertMarkdown("[[") }
+                }
+            }
+            if (matchingLinks.isNotEmpty()) {
+                Spacer(Modifier.height(6.dp))
+                Text("Link to", style = MaterialTheme.typography.labelMedium)
+                Row(modifier = Modifier.horizontalScroll(rememberScrollState())) {
+                    matchingLinks.forEach { suggestion ->
+                        AssistChip(
+                            onClick = { vm.insertWikiLink(suggestion) },
+                            label = { Text(suggestion) },
+                            modifier = Modifier.padding(end = 6.dp)
+                        )
+                    }
+                }
+            }
+            Spacer(Modifier.height(12.dp))
             OutlinedTextField(
                 value = body, onValueChange = { vm.setBody(it) },
                 label = { Text("Markdown") },
@@ -107,5 +148,12 @@ fun EditorScreen(navController: NavController, id: String, vm: EditorViewModel =
                 placeholder = { Text("Type [[ to link…\nUse camera or gallery to add images") }
             )
         }
+    }
+}
+
+@Composable
+private fun EditorShortcut(label: String, onClick: () -> Unit) {
+    TextButton(onClick = onClick, contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp)) {
+        Text(label, maxLines = 1)
     }
 }

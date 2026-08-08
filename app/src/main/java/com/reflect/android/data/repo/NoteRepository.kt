@@ -26,6 +26,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.util.UUID
+import java.time.LocalDate
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -139,6 +140,36 @@ class NoteRepository @Inject constructor(
                 aliases = "[]",
                 snippet = null,
                 isDaily = false,
+                lastRemoteSha = null,
+                isDirty = true
+            )
+            persistIndexed(entity)
+            getNote(id)!!
+        }
+        enqueueSyncAfterLocalChange()
+        todoWidgetUpdater?.requestUpdate()
+        return note
+    }
+
+    /** Opens today's daily note, creating the contract's `daily/YYYY-MM-DD.md` if needed. */
+    suspend fun getOrCreateTodayNote(): Note {
+        val note = noteStoreLock.withLock {
+            val date = LocalDate.now().toString()
+            val path = "daily/$date.md"
+            dao.getByPath(path)?.let { return@withLock getNote(it.id)!! }
+
+            val id = "01" + UUID.randomUUID().toString().replace("-", "").take(24)
+            val raw = FrontmatterParser.generateFrontmatter(id) + "# $date\n\n"
+            fileStore.write(path, raw)
+            val entity = NoteEntity(
+                id = id,
+                title = date,
+                path = path,
+                rawMarkdown = raw,
+                body = "# $date\n\n",
+                aliases = "[]",
+                snippet = null,
+                isDaily = true,
                 lastRemoteSha = null,
                 isDirty = true
             )

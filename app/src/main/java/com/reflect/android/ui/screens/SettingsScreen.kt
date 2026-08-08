@@ -1,6 +1,8 @@
 package com.specular.android.ui.screens
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
@@ -26,6 +28,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.navigation.NavController
 import com.specular.android.data.remote.GitHubAuth
+import com.specular.android.data.remote.RepoResponse
 import com.specular.android.data.remote.AiProviderSettings
 import androidx.work.WorkManager
 import com.specular.android.sync.SyncScheduler
@@ -58,6 +61,10 @@ fun SettingsScreen(navController: NavController, vm: SettingsViewModel = hiltVie
     var showToken by remember { mutableStateOf(false) }
     var showAiApiKey by remember { mutableStateOf(false) }
     var showClearDialog by remember { mutableStateOf(false) }
+    var showRepositoryPicker by remember { mutableStateOf(false) }
+    val repositories by vm.repositories.collectAsState()
+    val isLoadingRepositories by vm.isLoadingRepositories.collectAsState()
+    val repositoryPickerError by vm.repositoryPickerError.collectAsState()
 
     val githubConfigured = vm.isConfigured()
     val aiConfigured = vm.isAiConfigured()
@@ -150,6 +157,25 @@ fun SettingsScreen(navController: NavController, vm: SettingsViewModel = hiltVie
                         singleLine = true
                     )
                 }
+
+                OutlinedButton(
+                    onClick = {
+                        showRepositoryPicker = true
+                        vm.loadRepositories(tokenInput)
+                    },
+                    enabled = tokenInput.isNotBlank() && !isLoadingRepositories,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    if (isLoadingRepositories) {
+                        CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                        Spacer(Modifier.width(8.dp))
+                    }
+                    Text("Choose repository")
+                }
+                Text(
+                    "The picker verifies that the selected repository contains Markdown notes.",
+                    style = MaterialTheme.typography.bodySmall
+                )
 
                 OutlinedButton(
                     onClick = { vm.testConnection() },
@@ -273,6 +299,50 @@ fun SettingsScreen(navController: NavController, vm: SettingsViewModel = hiltVie
             },
             dismissButton = {
                 TextButton(onClick = { showClearDialog = false }) { Text("Cancel") }
+            }
+        )
+    }
+
+    if (showRepositoryPicker) {
+        AlertDialog(
+            onDismissRequest = { if (!isLoadingRepositories) showRepositoryPicker = false },
+            title = { Text("Choose a Reflect repository") },
+            text = {
+                when {
+                    isLoadingRepositories -> Box(
+                        modifier = Modifier.fillMaxWidth().height(160.dp),
+                        contentAlignment = Alignment.Center
+                    ) { CircularProgressIndicator() }
+                    repositoryPickerError != null -> Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Text(repositoryPickerError!!, color = MaterialTheme.colorScheme.error)
+                        OutlinedButton(onClick = { vm.loadRepositories(tokenInput) }) { Text("Try again") }
+                    }
+                    repositories.isEmpty() -> Text("No accessible repositories were found for this token.")
+                    else -> LazyColumn(modifier = Modifier.heightIn(max = 360.dp)) {
+                        items(repositories, key = { it.id }) { repository ->
+                            ListItem(
+                                headlineContent = { Text(repository.full_name) },
+                                supportingContent = {
+                                    Text(if (repository.private) "Private · ${repository.default_branch}" else "Public · ${repository.default_branch}")
+                                },
+                                modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)
+                            )
+                            HorizontalDivider()
+                            // The whole row remains readable while the action below is explicit.
+                            TextButton(
+                                onClick = {
+                                    vm.selectRepository(tokenInput, repository) {
+                                        showRepositoryPicker = false
+                                    }
+                                },
+                                modifier = Modifier.fillMaxWidth()
+                            ) { Text("Use this repository") }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showRepositoryPicker = false }, enabled = !isLoadingRepositories) { Text("Cancel") }
             }
         )
     }
@@ -402,6 +472,13 @@ class SettingsViewModel @Inject constructor(
     private val _statusIsError = MutableStateFlow(false)
     val statusIsError: StateFlow<Boolean> = _statusIsError.asStateFlow()
 
+    private val _repositories = MutableStateFlow<List<RepoResponse>>(emptyList())
+    val repositories: StateFlow<List<RepoResponse>> = _repositories.asStateFlow()
+    private val _isLoadingRepositories = MutableStateFlow(false)
+    val isLoadingRepositories: StateFlow<Boolean> = _isLoadingRepositories.asStateFlow()
+    private val _repositoryPickerError = MutableStateFlow<String?>(null)
+    val repositoryPickerError: StateFlow<String?> = _repositoryPickerError.asStateFlow()
+
     fun isConfigured(): Boolean = auth.isConfigured()
 
     fun isAiConfigured(): Boolean = aiSettings.isConfigured()
@@ -472,6 +549,40 @@ class SettingsViewModel @Inject constructor(
                 _statusMessage.value = message
             } finally {
                 _isTesting.value = false
+            }
+        }
+    }
+
+    fun loadRepositories(tokenInput: String) {
+        viewModelScope.launch {
+            _isLoadingRepositories.value = true
+            _repositoryPickerError.value = null
+            try {
+                _repositories.value = auth.listRepositories(tokenInput)
+            } catch (e: Exception) {
+                _repositories.value = emptyList()
+                _repositoryPickerError.value = e.message ?: "Could not load repositories."
+            } finally {
+                _isLoadingRepositories.value = false
+            }
+        }
+    }
+
+    fun selectRepository(tokenInput: String, repository: RepoResponse, onValidated: () -> Unit) {
+        viewModelScope.launch {
+            _isLoadingRepositories.value = true
+            _repositoryPickerError.value = null
+            try {
+                auth.validateReflectRepository(tokenInput, repository)
+                _owner.value = repository.owner.login
+                _repo.value = repository.name
+                _statusIsError.value = false
+                _statusMessage.value = "${repository.full_name} is a valid Markdown notes repository. Save changes to connect it."
+                onValidated()
+            } catch (e: Exception) {
+                _repositoryPickerError.value = e.message ?: "This repository could not be validated."
+            } finally {
+                _isLoadingRepositories.value = false
             }
         }
     }

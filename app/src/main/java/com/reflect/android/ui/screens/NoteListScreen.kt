@@ -12,8 +12,14 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Checklist
+import androidx.compose.material.icons.filled.CalendarToday
 import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material.icons.filled.PushPin
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.ExperimentalMaterialApi
+import androidx.compose.material.pullrefresh.PullRefreshIndicator
+import androidx.compose.material.pullrefresh.pullRefresh
+import androidx.compose.material.pullrefresh.rememberPullRefreshState
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -30,17 +36,21 @@ import com.specular.android.ui.navigation.Screen
 import com.specular.android.ui.screens.NoteListViewModel
 
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterialApi::class)
 @Composable
 fun NoteListScreen(navController: NavController, vm: NoteListViewModel = hiltViewModel()) {
     val notes by vm.notes.collectAsState()
     val sort by vm.sort.collectAsState()
     val folders by vm.folders.collectAsState()
     val deselectedFolders by vm.deselectedFolders.collectAsState()
+    val isRefreshing by vm.isRefreshing.collectAsState()
+    val syncMessage by vm.syncMessage.collectAsState()
+    val isOpeningToday by vm.isOpeningToday.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
     val savedStateHandle = navController.currentBackStackEntry?.savedStateHandle
     var overflowExpanded by remember { mutableStateOf(false) }
     var sortExpanded by remember { mutableStateOf(false) }
+    val pullRefreshState = rememberPullRefreshState(isRefreshing, vm::refresh)
 
     LaunchedEffect(savedStateHandle) {
         savedStateHandle ?: return@LaunchedEffect
@@ -59,6 +69,12 @@ fun NoteListScreen(navController: NavController, vm: NoteListViewModel = hiltVie
             }
         }
     }
+    LaunchedEffect(syncMessage) {
+        syncMessage?.let { message ->
+            snackbarHostState.showSnackbar(message)
+            vm.consumeSyncMessage()
+        }
+    }
 
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
@@ -66,6 +82,17 @@ fun NoteListScreen(navController: NavController, vm: NoteListViewModel = hiltVie
             TopAppBar(
                 title = { Text("Specular") },
                 actions = {
+                    IconButton(
+                        onClick = { vm.openToday { noteId -> navController.navigate(Screen.Detail.routeFor(noteId)) } },
+                        enabled = !isOpeningToday
+                    ) {
+                        if (isOpeningToday) CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                        else Icon(Icons.Default.CalendarToday, "Open today's daily note")
+                    }
+                    IconButton(onClick = vm::refresh, enabled = !isRefreshing) {
+                        if (isRefreshing) CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                        else Icon(Icons.Default.Refresh, "Sync now")
+                    }
                     IconButton(onClick = { navController.navigate(Screen.Todos.route) }) {
                         Icon(Icons.Default.Checklist, "View todos")
                     }
@@ -156,7 +183,8 @@ fun NoteListScreen(navController: NavController, vm: NoteListViewModel = hiltVie
             }
         }
     ) { padding ->
-        Column(modifier = Modifier.fillMaxSize().padding(padding)) {
+        Box(modifier = Modifier.fillMaxSize().padding(padding).pullRefresh(pullRefreshState)) {
+        Column(modifier = Modifier.fillMaxSize()) {
             if (notes.isEmpty()) {
                 Box(modifier = Modifier.fillMaxSize().weight(1f), contentAlignment = androidx.compose.ui.Alignment.Center) {
                     Column(
@@ -204,6 +232,12 @@ fun NoteListScreen(navController: NavController, vm: NoteListViewModel = hiltVie
                     }
                 }
             }
+        }
+        PullRefreshIndicator(
+            refreshing = isRefreshing,
+            state = pullRefreshState,
+            modifier = Modifier.align(androidx.compose.ui.Alignment.TopCenter)
+        )
         }
     }
 }
