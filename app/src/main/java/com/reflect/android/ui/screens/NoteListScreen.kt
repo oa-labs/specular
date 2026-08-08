@@ -5,7 +5,6 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.Sort
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Search
@@ -49,8 +48,11 @@ fun NoteListScreen(navController: NavController, vm: NoteListViewModel = hiltVie
     val snackbarHostState = remember { SnackbarHostState() }
     val savedStateHandle = navController.currentBackStackEntry?.savedStateHandle
     var overflowExpanded by remember { mutableStateOf(false) }
-    var sortExpanded by remember { mutableStateOf(false) }
+    var createExpanded by remember { mutableStateOf(false) }
     val pullRefreshState = rememberPullRefreshState(isRefreshing, vm::refresh)
+    val openTodayEditor = {
+        vm.openToday { noteId -> navController.navigate(Screen.Editor.routeFor(noteId)) }
+    }
 
     LaunchedEffect(savedStateHandle) {
         savedStateHandle ?: return@LaunchedEffect
@@ -83,11 +85,11 @@ fun NoteListScreen(navController: NavController, vm: NoteListViewModel = hiltVie
                 title = { Text("Specular") },
                 actions = {
                     IconButton(
-                        onClick = { vm.openToday { noteId -> navController.navigate(Screen.Detail.routeFor(noteId)) } },
+                        onClick = openTodayEditor,
                         enabled = !isOpeningToday
                     ) {
                         if (isOpeningToday) CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
-                        else Icon(Icons.Default.CalendarToday, "Open today's daily note")
+                        else Icon(Icons.Default.CalendarToday, "Edit today's daily note")
                     }
                     IconButton(onClick = vm::refresh, enabled = !isRefreshing) {
                         if (isRefreshing) CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
@@ -98,18 +100,18 @@ fun NoteListScreen(navController: NavController, vm: NoteListViewModel = hiltVie
                     }
                     IconButton(onClick = { navController.navigate(Screen.Search.route) }) { Icon(Icons.Default.Search, "Search") }
                     Box {
-                        IconButton(onClick = { sortExpanded = true }) {
-                            Icon(Icons.AutoMirrored.Filled.Sort, "Sort notes")
+                        IconButton(onClick = { overflowExpanded = true }) {
+                            Icon(Icons.Default.MoreVert, "More actions")
                         }
                         DropdownMenu(
-                            expanded = sortExpanded,
-                            onDismissRequest = { sortExpanded = false }
+                            expanded = overflowExpanded,
+                            onDismissRequest = { overflowExpanded = false }
                         ) {
                             DropdownMenuItem(
-                                text = { Text("Last updated") },
+                                text = { Text("Sort by last updated") },
                                 onClick = {
                                     vm.setSort(NoteSort.LAST_UPDATED)
-                                    sortExpanded = false
+                                    overflowExpanded = false
                                 },
                                 trailingIcon = {
                                     if (sort == NoteSort.LAST_UPDATED) {
@@ -118,10 +120,10 @@ fun NoteListScreen(navController: NavController, vm: NoteListViewModel = hiltVie
                                 }
                             )
                             DropdownMenuItem(
-                                text = { Text("Alphabetical") },
+                                text = { Text("Sort alphabetically") },
                                 onClick = {
                                     vm.setSort(NoteSort.ALPHABETICAL)
-                                    sortExpanded = false
+                                    overflowExpanded = false
                                 },
                                 trailingIcon = {
                                     if (sort == NoteSort.ALPHABETICAL) {
@@ -129,16 +131,7 @@ fun NoteListScreen(navController: NavController, vm: NoteListViewModel = hiltVie
                                     }
                                 }
                             )
-                        }
-                    }
-                    Box {
-                        IconButton(onClick = { overflowExpanded = true }) {
-                            Icon(Icons.Default.MoreVert, "More actions")
-                        }
-                        DropdownMenu(
-                            expanded = overflowExpanded,
-                            onDismissRequest = { overflowExpanded = false }
-                        ) {
+                            HorizontalDivider()
                             if (folders.isNotEmpty()) {
                                 Row(
                                     modifier = Modifier
@@ -178,8 +171,44 @@ fun NoteListScreen(navController: NavController, vm: NoteListViewModel = hiltVie
             )
         },
         floatingActionButton = {
-            FloatingActionButton(onClick = { navController.navigate(Screen.Editor.routeForNew()) }) {
-                Icon(Icons.Default.Add, "New note")
+            Column(
+                horizontalAlignment = androidx.compose.ui.Alignment.End,
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Box {
+                    SmallFloatingActionButton(onClick = { createExpanded = true }) {
+                        Icon(Icons.Default.MoreVert, "More ways to add")
+                    }
+                    DropdownMenu(
+                        expanded = createExpanded,
+                        onDismissRequest = { createExpanded = false }
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text("New note") },
+                            onClick = {
+                                createExpanded = false
+                                navController.navigate(Screen.Editor.routeForNew())
+                            },
+                            leadingIcon = { Icon(Icons.Default.Add, contentDescription = null) }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("New to-do") },
+                            onClick = {
+                                createExpanded = false
+                                navController.navigate(Screen.Editor.routeForNewTodo())
+                            },
+                            leadingIcon = { Icon(Icons.Default.Checklist, contentDescription = null) }
+                        )
+                    }
+                }
+                ExtendedFloatingActionButton(
+                    onClick = openTodayEditor,
+                    icon = {
+                        if (isOpeningToday) CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                        else Icon(Icons.Default.CalendarToday, contentDescription = null)
+                    },
+                    text = { Text("Add to today") }
+                )
             }
         }
     ) { padding ->
@@ -197,7 +226,7 @@ fun NoteListScreen(navController: NavController, vm: NoteListViewModel = hiltVie
                         )
                         Text(
                             if (folders.isEmpty()) {
-                                "Notes sync automatically in the background once GitHub is configured. Tap + to create one."
+                                "Notes sync automatically in the background once GitHub is configured. Tap Add to today to start one."
                             } else {
                                 "Open the menu to select one or more folders."
                             },

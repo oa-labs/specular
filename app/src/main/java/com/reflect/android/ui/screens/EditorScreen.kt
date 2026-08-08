@@ -11,6 +11,8 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Done
 import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.PhotoLibrary
@@ -27,16 +29,21 @@ import java.io.File
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun EditorScreen(navController: NavController, id: String, vm: EditorViewModel = hiltViewModel()) {
-    val isNew = id == "__new__" || id == "__new_todo__"
+    val isNewNote = id == "__new__"
+    val isNew = isNewNote || id == "__new_todo__"
     LaunchedEffect(id) {
         when {
             id == "__new_todo__" -> vm.prepareNewTodo()
+            isNewNote -> vm.prepareNewNote()
             !isNew -> vm.load(id)
         }
     }
     val title by vm.title.collectAsState()
     val body by vm.body.collectAsState()
     val saving by vm.saving.collectAsState()
+    val selectedFolder by vm.selectedFolder.collectAsState()
+    val availableFolders by vm.availableFolders.collectAsState()
+    var folderExpanded by remember { mutableStateOf(false) }
     val linkSuggestions by vm.linkSuggestions.collectAsState()
     val linkQuery = remember(body) {
         Regex("""\[\[([^\]\n]*)$""").find(body)?.groupValues?.get(1)?.trim().orEmpty()
@@ -109,6 +116,43 @@ fun EditorScreen(navController: NavController, id: String, vm: EditorViewModel =
     ) { padding ->
         Column(modifier = Modifier.fillMaxSize().padding(padding).padding(16.dp)) {
             OutlinedTextField(value = title, onValueChange = { vm.setTitle(it) }, label = { Text("Title") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+            if (isNewNote) {
+                Box(modifier = Modifier.padding(top = 8.dp)) {
+                    TextButton(onClick = { folderExpanded = true }) {
+                        Text("Save to: ${selectedFolder ?: "Inbox"}")
+                        Icon(Icons.Default.ArrowDropDown, contentDescription = null)
+                    }
+                    DropdownMenu(
+                        expanded = folderExpanded,
+                        onDismissRequest = { folderExpanded = false }
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text("Inbox") },
+                            onClick = {
+                                vm.setFolder(null)
+                                folderExpanded = false
+                            },
+                            trailingIcon = {
+                                if (selectedFolder == null) Icon(Icons.Default.Check, contentDescription = null)
+                            }
+                        )
+                        availableFolders.forEach { folder ->
+                            DropdownMenuItem(
+                                text = { Text(folder) },
+                                onClick = {
+                                    vm.setFolder(folder)
+                                    folderExpanded = false
+                                },
+                                trailingIcon = {
+                                    if (selectedFolder.equals(folder, ignoreCase = true)) {
+                                        Icon(Icons.Default.Check, contentDescription = null)
+                                    }
+                                }
+                            )
+                        }
+                    }
+                }
+            }
             Spacer(Modifier.height(12.dp))
             Surface(
                 modifier = Modifier.fillMaxWidth(),

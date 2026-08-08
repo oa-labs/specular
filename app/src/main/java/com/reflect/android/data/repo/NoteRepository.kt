@@ -123,11 +123,12 @@ class NoteRepository @Inject constructor(
     suspend fun findNoteIdByPath(path: String): String? =
         dao.getByPath(path)?.id ?: dao.getByPathIgnoringCase(path)?.id
 
-    suspend fun createNote(title: String, body: String = ""): Note {
+    /** Creates a regular note at the repository root or in a user-selected folder. */
+    suspend fun createNote(title: String, body: String = "", folder: String? = null): Note {
         val note = noteStoreLock.withLock {
             val id = "01" + UUID.randomUUID().toString().replace("-", "").take(24)
             val slug = title.lowercase().replace(Regex("[^a-z0-9]+"), "-").trim('-').ifEmpty { "untitled" }
-            val path = "$slug.md"
+            val path = folder?.let(::normalizeNoteFolder)?.let { "$it/$slug.md" } ?: "$slug.md"
             val frontmatter = FrontmatterParser.generateFrontmatter(id)
             val raw = frontmatter + "# $title\n\n$body\n"
             fileStore.write(path, raw)
@@ -393,6 +394,20 @@ class NoteRepository @Inject constructor(
             "Use a repository-relative filename"
         }
         return path
+    }
+
+    private fun normalizeNoteFolder(value: String): String {
+        val folder = value.trim().trim('/')
+        require(folder.isNotBlank() && folder.split('/').none { it.isBlank() || it == "." || it == ".." }) {
+            "Use a repository-relative folder"
+        }
+        require(!folder.equals("daily", ignoreCase = true)) {
+            "Daily notes are created from the Today action"
+        }
+        require(!folder.equals("assets", ignoreCase = true) && !folder.equals("attachments", ignoreCase = true)) {
+            "Choose a notes folder"
+        }
+        return folder
     }
 
 }
