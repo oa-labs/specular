@@ -17,7 +17,9 @@ data class Note(
     val isDaily: Boolean = path.startsWith("daily/"),
     val lastRemoteSha: String? = null,
     val isDirty: Boolean = false,
-    val isConflict: Boolean = false
+    val isConflict: Boolean = false,
+    /** A device-local preference that places this note first on the home screen. */
+    val isPinned: Boolean = false
 )
 
 /**
@@ -31,5 +33,6 @@ data class NoteListItem(
     val isDaily: Boolean,
     val isDirty: Boolean,
     val isConflict: Boolean,
+    val isPinned: Boolean = false,
     val updatedAt: Long = 0L
 )

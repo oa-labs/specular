@@ -81,6 +81,13 @@ class NoteDetailViewModel @Inject constructor(
         }
     }
 
+    fun setPinned(id: String, isPinned: Boolean) {
+        viewModelScope.launch {
+            repo.setPinned(id, isPinned)
+            _note.value = repo.getNote(id)
+        }
+    }
+
     fun renameNote(id: String, path: String, onRenamed: () -> Unit) {
         viewModelScope.launch {
             try {

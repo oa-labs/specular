@@ -327,8 +327,12 @@ class SyncEngine @Inject constructor(
     ) {
         runSyncStage("pull:persist path=$path") {
             fileStore.write(path, raw)
+            val id = FrontmatterParser.identityFor(path, parsed.id)
+            // Pinning is a local display preference, so retain it when this note is
+            // refreshed from GitHub instead of encoding it in the Markdown file.
+            val isPinned = dao.getById(id)?.isPinned ?: false
             val entity = NoteEntity(
-                id = FrontmatterParser.identityFor(path, parsed.id),
+                id = id,
                 title = parsed.title,
                 path = path,
                 rawMarkdown = raw,
@@ -336,6 +340,7 @@ class SyncEngine @Inject constructor(
                 aliases = parsed.aliases.toString(),
                 snippet = FrontmatterParser.snippetOrEmpty(parsed.body, parsed.snippet),
                 isDaily = path.startsWith("daily/"),
+                isPinned = isPinned,
                 lastRemoteSha = remoteSha,
                 isDirty = false,
                 isConflict = false

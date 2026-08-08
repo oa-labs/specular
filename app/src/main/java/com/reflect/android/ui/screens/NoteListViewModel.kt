@@ -21,16 +21,19 @@ enum class NoteSort {
     ALPHABETICAL
 }
 
-internal fun sortNotes(notes: List<NoteListItem>, sort: NoteSort): List<NoteListItem> = when (sort) {
-    NoteSort.LAST_UPDATED -> notes.sortedWith(
+internal fun sortNotes(notes: List<NoteListItem>, sort: NoteSort): List<NoteListItem> {
+    val withinPinGroup = when (sort) {
+        NoteSort.LAST_UPDATED -> notes.sortedWith(
         compareByDescending<NoteListItem> { it.updatedAt }
             .thenBy { it.title.lowercase(Locale.ROOT) }
             .thenBy { it.path }
     )
-    NoteSort.ALPHABETICAL -> notes.sortedWith(
+        NoteSort.ALPHABETICAL -> notes.sortedWith(
         compareBy<NoteListItem> { it.title.lowercase(Locale.ROOT) }
             .thenBy { it.path }
     )
+    }
+    return withinPinGroup.sortedByDescending { it.isPinned }
 }
 
 @HiltViewModel

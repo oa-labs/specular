@@ -16,6 +16,7 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.DriveFileRenameOutline
+import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
@@ -88,6 +89,16 @@ fun NoteDetailScreen(
                             expanded = showActions,
                             onDismissRequest = { showActions = false }
                         ) {
+                            note?.let { currentNote ->
+                                DropdownMenuItem(
+                                    text = { Text(if (currentNote.isPinned) "Unpin note" else "Pin note") },
+                                    onClick = {
+                                        showActions = false
+                                        vm.setPinned(id, !currentNote.isPinned)
+                                    },
+                                    leadingIcon = { Icon(Icons.Default.PushPin, contentDescription = null) }
+                                )
+                            }
                             DropdownMenuItem(
                                 text = { Text("Rename file") },
                                 onClick = {

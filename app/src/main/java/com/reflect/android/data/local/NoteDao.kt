@@ -22,7 +22,7 @@ interface NoteDao {
      */
     @Query(
         "SELECT id, title, path, '' AS rawMarkdown, substr(body, 1, 4096) AS body, " +
-            "'[]' AS aliases, snippet, isDaily, NULL AS lastRemoteSha, isDirty, " +
+            "'[]' AS aliases, snippet, isDaily, isPinned, NULL AS lastRemoteSha, isDirty, " +
             "0 AS isPendingDeletion, NULL AS pendingRenameFromPath, " +
             "NULL AS pendingRenameFromSha, isConflict, updatedAt " +
             "FROM notes WHERE isPendingDeletion = 0 ORDER BY isDaily DESC, updatedAt DESC"
@@ -114,7 +114,7 @@ interface NoteDao {
     @Query(
         "SELECT notes.id, notes.title, notes.path, '' AS rawMarkdown, " +
             "substr(notes.body, 1, 4096) AS body, '[]' AS aliases, notes.snippet, " +
-            "notes.isDaily, NULL AS lastRemoteSha, notes.isDirty, 0 AS isPendingDeletion, " +
+            "notes.isDaily, notes.isPinned, NULL AS lastRemoteSha, notes.isDirty, 0 AS isPendingDeletion, " +
             "NULL AS pendingRenameFromPath, NULL AS pendingRenameFromSha, " +
             "notes.isConflict, notes.updatedAt " +
             "FROM notes JOIN notes_fts ON notes.id = notes_fts.docid WHERE notes_fts MATCH :query"
@@ -123,7 +123,7 @@ interface NoteDao {
 
     @Query(
         "SELECT id, title, path, '' AS rawMarkdown, substr(body, 1, 4096) AS body, " +
-            "'[]' AS aliases, snippet, isDaily, NULL AS lastRemoteSha, isDirty, " +
+            "'[]' AS aliases, snippet, isDaily, isPinned, NULL AS lastRemoteSha, isDirty, " +
             "0 AS isPendingDeletion, NULL AS pendingRenameFromPath, " +
             "NULL AS pendingRenameFromSha, isConflict, updatedAt " +
             "FROM notes WHERE title LIKE '%' || :q || '%' OR body LIKE '%' || :q || '%' " +
@@ -133,4 +133,5 @@ interface NoteDao {
 
     @Query("UPDATE notes SET isDirty = :dirty, lastRemoteSha = :sha WHERE id = :id")
     suspend fun markDirty(id: String, dirty: Boolean, sha: String?)
+
 }

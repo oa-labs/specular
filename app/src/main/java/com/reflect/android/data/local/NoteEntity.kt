@@ -15,6 +15,8 @@ data class NoteEntity(
     val aliases: String, // JSON array string
     val snippet: String? = null,
     val isDaily: Boolean,
+    /** Device-local preference; intentionally not written to the Markdown file. */
+    val isPinned: Boolean = false,
     val lastRemoteSha: String?,
     val isDirty: Boolean = false,
     /** Hidden locally while its GitHub Contents API deletion is waiting to sync. */

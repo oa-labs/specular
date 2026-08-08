@@ -51,6 +51,7 @@ class NoteRepository @Inject constructor(
                 isDaily = e.isDaily,
                 isDirty = e.isDirty,
                 isConflict = e.isConflict,
+                isPinned = e.isPinned,
                 updatedAt = e.updatedAt
             )
         }
@@ -106,7 +107,8 @@ class NoteRepository @Inject constructor(
             isDaily = e.isDaily,
             lastRemoteSha = e.lastRemoteSha,
             isDirty = e.isDirty,
-            isConflict = e.isConflict
+            isConflict = e.isConflict,
+            isPinned = e.isPinned
         )
     }
 
@@ -223,6 +225,14 @@ class NoteRepository @Inject constructor(
         }
     }
 
+    /** Pins or unpins a note locally without changing its Markdown or GitHub state. */
+    suspend fun setPinned(id: String, isPinned: Boolean) {
+        noteStoreLock.withLock {
+            val note = dao.getById(id) ?: return@withLock
+            dao.upsert(note.copy(isPinned = isPinned))
+        }
+    }
+
     fun observeTodos(filter: TodoFilter): Flow<PagingData<TodoListItem>> =
         Pager(PagingConfig(pageSize = 50, enablePlaceholders = false)) {
             when (filter) {
@@ -253,6 +263,7 @@ class NoteRepository @Inject constructor(
                         isDaily = e.isDaily,
                         isDirty = e.isDirty,
                         isConflict = e.isConflict,
+                        isPinned = e.isPinned,
                         updatedAt = e.updatedAt
                     )
                 }

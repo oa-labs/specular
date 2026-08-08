@@ -7,7 +7,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 
 @Database(
     entities = [NoteEntity::class, NoteFts::class, TodoEntity::class, TodoIndexState::class, AttachmentEntity::class],
-    version = 6,
+    version = 7,
     exportSchema = false
 )
 abstract class SpecularDatabase : RoomDatabase() {
@@ -62,6 +62,12 @@ abstract class SpecularDatabase : RoomDatabase() {
                         "path TEXT NOT NULL, mimeType TEXT, lastRemoteSha TEXT, " +
                         "isDirty INTEGER NOT NULL, updatedAt INTEGER NOT NULL, PRIMARY KEY(path))"
                 )
+            }
+        }
+
+        val MIGRATION_6_7 = object : Migration(6, 7) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE notes ADD COLUMN isPinned INTEGER NOT NULL DEFAULT 0")
             }
         }
 
