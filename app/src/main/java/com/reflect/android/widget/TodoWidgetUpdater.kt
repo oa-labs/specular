@@ -43,7 +43,13 @@ class TodoWidgetUpdater @Inject constructor(
         )
         if (ids.isEmpty()) return
 
-        val todos = noteStoreLock.withLock {
+        // Populate the derived index before the collection service is asked for rows.
+        openTodos()
+        ids.forEach { id -> manager.updateAppWidget(id, buildViews(id)) }
+        manager.notifyAppWidgetViewDataChanged(ids, R.id.todo_widget_list)
+    }
+
+    suspend fun openTodos(): List<TodoListItem> = noteStoreLock.withLock {
             // A widget may be the first task-related surface opened after an upgrade.
             // Build the derived index here instead of presenting a misleading empty list.
             if (dao.todoIndexReady() != true) {
@@ -52,55 +58,27 @@ class TodoWidgetUpdater @Inject constructor(
             }
             dao.getOpenTodosForWidget(MAX_TODOS)
         }
-        ids.forEach { id -> manager.updateAppWidget(id, buildViews(todos)) }
-    }
 
-    private fun buildViews(todos: List<TodoListItem>): RemoteViews =
+    private fun buildViews(appWidgetId: Int): RemoteViews =
         RemoteViews(context.packageName, R.layout.widget_todo).apply {
-            removeAllViews(R.id.todo_widget_rows)
-            if (todos.isEmpty()) {
-                setViewVisibility(R.id.todo_widget_empty, android.view.View.VISIBLE)
-            } else {
-                setViewVisibility(R.id.todo_widget_empty, android.view.View.GONE)
-                todos.forEach { todo ->
-                    addView(R.id.todo_widget_rows, buildTodoRow(todo))
-                }
-            }
+            setRemoteAdapter(R.id.todo_widget_list, Intent(context, TodoWidgetService::class.java).apply {
+                putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, appWidgetId)
+                // Adapter intents with otherwise identical extras are treated as the same.
+                data = android.net.Uri.parse("specular://widget/list/$appWidgetId")
+            })
+            setEmptyView(R.id.todo_widget_list, R.id.todo_widget_empty)
+            setPendingIntentTemplate(R.id.todo_widget_list, todoInteractionPendingIntent(appWidgetId))
             setOnClickPendingIntent(R.id.todo_widget_add, newTodoPendingIntent())
             setOnClickPendingIntent(R.id.todo_widget_header, openTodosPendingIntent())
         }
 
-    private fun buildTodoRow(todo: TodoListItem): RemoteViews =
-        RemoteViews(context.packageName, R.layout.widget_todo_row).apply {
-            setTextViewText(R.id.todo_widget_text, todo.text.ifBlank { context.getString(R.string.untitled_task) })
-            setTextViewText(R.id.todo_widget_note, todo.noteTitle)
-            setImageViewResource(R.id.todo_widget_complete, R.drawable.ic_widget_check_circle)
-            setOnClickPendingIntent(R.id.todo_widget_complete, completePendingIntent(todo))
-            setOnClickPendingIntent(R.id.todo_widget_row, openNotePendingIntent(todo.noteId))
-        }
-
-    private fun completePendingIntent(todo: TodoListItem): PendingIntent =
+    private fun todoInteractionPendingIntent(appWidgetId: Int): PendingIntent =
         PendingIntent.getBroadcast(
             context,
             0,
             Intent(context, TodoWidgetProvider::class.java).apply {
-                action = TodoWidgetProvider.ACTION_COMPLETE_TODO
-                data = android.net.Uri.parse("specular://widget/complete/${todo.noteId}/${todo.taskIndex}")
-                putExtra(TodoWidgetProvider.EXTRA_NOTE_ID, todo.noteId)
-                putExtra(TodoWidgetProvider.EXTRA_TASK_INDEX, todo.taskIndex)
-            },
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-
-    private fun openNotePendingIntent(noteId: String): PendingIntent =
-        PendingIntent.getActivity(
-            context,
-            0,
-            Intent(context, MainActivity::class.java).apply {
-                action = TodoWidgetProvider.ACTION_OPEN_NOTE
-                data = android.net.Uri.parse("specular://widget/note/$noteId")
-                putExtra(TodoWidgetProvider.EXTRA_NOTE_ID, noteId)
-                flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+                action = TodoWidgetProvider.ACTION_TODO_INTERACTION
+                data = android.net.Uri.parse("specular://widget/interaction/$appWidgetId")
             },
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
@@ -122,6 +100,6 @@ class TodoWidgetUpdater @Inject constructor(
         )
 
     private companion object {
-        const val MAX_TODOS = 6
+        const val MAX_TODOS = 200
     }
 }

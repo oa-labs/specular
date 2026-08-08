@@ -13,6 +13,7 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Checklist
 import androidx.compose.material.icons.filled.FilterList
+import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -187,6 +188,9 @@ fun NoteListScreen(navController: NavController, vm: NoteListViewModel = hiltVie
                             },
                             trailingContent = {
                                 Row {
+                                    if (item.isPinned) {
+                                        Icon(Icons.Default.PushPin, contentDescription = "Pinned")
+                                    }
                                     if (item.isDirty) Badge { Text("•") }
                                     if (item.isConflict) Badge(containerColor = MaterialTheme.colorScheme.error) { Text("!") }
                                     noteFolderLabel(item)?.let { label ->
