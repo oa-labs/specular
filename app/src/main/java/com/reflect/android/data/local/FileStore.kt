@@ -16,7 +16,15 @@ class FileStore @Inject constructor(
 ) {
     private val root: File get() = File(context.filesDir, "notes").apply { mkdirs() }
 
-    fun resolve(path: String): File = File(root, path).also { it.parentFile?.mkdirs() }
+    fun resolve(path: String): File {
+        val canonicalRoot = root.canonicalFile
+        val target = File(canonicalRoot, path).canonicalFile
+        require(target.path.startsWith(canonicalRoot.path + File.separator)) {
+            "Repository path escapes local storage: $path"
+        }
+        target.parentFile?.mkdirs()
+        return target
+    }
 
     fun read(path: String): String? {
         val f = resolve(path)
@@ -25,6 +33,15 @@ class FileStore @Inject constructor(
 
     fun write(path: String, content: String) {
         resolve(path).writeText(content)
+    }
+
+    fun readBytes(path: String): ByteArray? {
+        val file = resolve(path)
+        return file.takeIf { it.exists() }?.readBytes()
+    }
+
+    fun writeBytes(path: String, content: ByteArray) {
+        resolve(path).writeBytes(content)
     }
 
     fun delete(path: String): Boolean = resolve(path).delete()

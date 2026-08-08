@@ -2,6 +2,9 @@ package com.specular.android.ui.screens
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import android.net.Uri
+import com.specular.android.data.local.FileStore
+import com.specular.android.data.local.MarkdownAttachmentResolver
 import com.specular.android.data.repo.NoteRepository
 import com.specular.android.domain.model.Note
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -14,7 +17,10 @@ import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 @HiltViewModel
-class NoteDetailViewModel @Inject constructor(private val repo: NoteRepository) : ViewModel() {
+class NoteDetailViewModel @Inject constructor(
+    private val repo: NoteRepository,
+    private val fileStore: FileStore
+) : ViewModel() {
     data class DeletedNote(val id: String, val title: String)
 
     private val _note = MutableStateFlow<Note?>(null)
@@ -87,5 +93,12 @@ class NoteDetailViewModel @Inject constructor(private val repo: NoteRepository) 
 
     fun clearRenameError() {
         _renameError.value = null
+    }
+
+    fun imageModel(notePath: String, destination: String): Any? {
+        if (destination.startsWith("http://") || destination.startsWith("https://")) return destination
+        val path = MarkdownAttachmentResolver.resolve(notePath, destination) ?: return null
+        if (!fileStore.exists(path)) return null
+        return Uri.fromFile(fileStore.resolve(path))
     }
 }

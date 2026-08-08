@@ -2,9 +2,13 @@ package com.specular.android.sync
 
 import android.util.Log
 import com.specular.android.data.local.FileStore
+import com.specular.android.data.local.AttachmentDao
+import com.specular.android.data.local.AttachmentEntity
 import com.specular.android.data.local.FrontmatterParser
+import com.specular.android.data.local.MarkdownAttachmentResolver
 import com.specular.android.data.local.NoteDao
 import com.specular.android.data.local.NoteEntity
+import com.specular.android.data.local.NoopAttachmentDao
 import com.specular.android.data.local.NoteStoreLock
 import com.specular.android.data.local.TodoIndex
 import com.specular.android.data.remote.GitHubApi
@@ -33,7 +37,8 @@ class SyncEngine @Inject constructor(
     private val dao: NoteDao,
     private val fileStore: FileStore,
     private val noteStoreLock: NoteStoreLock = NoteStoreLock(),
-    private val todoIndex: TodoIndex = TodoIndex()
+    private val todoIndex: TodoIndex = TodoIndex(),
+    private val attachmentDao: AttachmentDao = NoopAttachmentDao
 ) {
     sealed class Result {
         data object Success : Result()
@@ -59,16 +64,16 @@ class SyncEngine @Inject constructor(
             val tree = runSyncStage("pull:get tree") {
                 api.getTree(owner, repo, ref.`object`.sha, header, recursive = 1)
             }
-            logDebug("Pull tree loaded markdownCandidates=${tree.tree.count { it.type == "blob" && it.path.endsWith(".md") }}")
+            logDebug("Pull tree loaded markdownCandidates=${tree.tree.count { isMarkdownNote(it) }}")
 
             val remoteMarkdownPaths = tree.tree
                 .asSequence()
-                .filter { it.type == "blob" && it.path.endsWith(".md") }
+                .filter(::isMarkdownNote)
                 .map { it.path }
                 .toSet()
 
             for (entry in tree.tree) {
-                if (entry.type != "blob" || !entry.path.endsWith(".md")) continue
+                if (!isMarkdownNote(entry)) continue
                 val localAtPath = dao.getByPath(entry.path)
                 // A locally requested deletion is authoritative until its remote
                 // operation completes. Do not revive it during the pull phase.
@@ -120,6 +125,7 @@ class SyncEngine @Inject constructor(
 
                 persistRemote(entry.path, entry.sha, raw, parsed)
             }
+            pullReferencedAttachments(tree.tree, owner, repo, header, branch)
             reconcileRemoteRemovals(remoteMarkdownPaths)
             logInfo("Pull completed")
             Result.Success
@@ -146,14 +152,44 @@ class SyncEngine @Inject constructor(
             val pendingRenames = runSyncStage("push:load pending renames") {
                 dao.getPendingRenames()
             }
+            val referencedAttachments = dao.getAllForTodoIndex()
+                .asSequence()
+                .filterNot { it.isPendingDeletion }
+                .flatMap { MarkdownAttachmentResolver.referencedPaths(it.path, it.rawMarkdown).asSequence() }
+                .toSet()
+            val dirtyAttachments = runSyncStage("push:load dirty attachments") {
+                attachmentDao.getDirty().filter { it.path in referencedAttachments }
+            }
             val dirty = runSyncStage("push:load dirty notes") { dao.getDirty() }
                 .filterNot { it.isPendingDeletion }
-            if (dirty.isEmpty() && pendingDeletions.isEmpty() && pendingRenames.isEmpty()) {
+            if (dirty.isEmpty() && pendingDeletions.isEmpty() && pendingRenames.isEmpty() && dirtyAttachments.isEmpty()) {
                 logInfo("Push skipped: no dirty notes")
                 return@withContext Result.Success
             }
-            logDebug("Push queued notes=${dirty.size} deletions=${pendingDeletions.size} renames=${pendingRenames.size}")
+            logDebug("Push queued notes=${dirty.size} attachments=${dirtyAttachments.size} deletions=${pendingDeletions.size} renames=${pendingRenames.size}")
             var failedPushes = 0
+            // Markdown must not be published before the binary it references.
+            for (attachment in dirtyAttachments) {
+                val bytes = fileStore.readBytes(attachment.path)
+                    ?: return@withContext Result.Error("Attachment ${attachment.path} is missing locally.")
+                try {
+                    val response = api.putContent(
+                        owner, repo, attachment.path, header,
+                        PutContentRequest(
+                            message = "Upload attachment ${attachment.path.substringAfterLast('/')}",
+                            content = Base64.getEncoder().encodeToString(bytes),
+                            sha = attachment.lastRemoteSha,
+                            branch = branch
+                        )
+                    )
+                    attachmentDao.upsert(
+                        attachment.copy(lastRemoteSha = response.content?.sha, isDirty = false)
+                    )
+                } catch (ex: Exception) {
+                    logPushFailure(attachment.path, ex)
+                    return@withContext Result.Error(userFacingPushError(ex))
+                }
+            }
             for (e in pendingDeletions) {
                 // A note created and deleted before its first push has no remote
                 // counterpart, so completing its local deletion is sufficient.
@@ -373,6 +409,59 @@ class SyncEngine @Inject constructor(
                 dao.deleteNoteAndTodos(local.id)
             }
         }
+    }
+
+    /** Downloads only binary files referenced by locally indexed Markdown notes. */
+    private suspend fun pullReferencedAttachments(
+        treeEntries: List<com.specular.android.data.remote.TreeEntry>,
+        owner: String,
+        repo: String,
+        header: String,
+        branch: String
+    ) {
+        val remoteAttachments = treeEntries
+            .asSequence()
+            .filter { it.type == "blob" && MarkdownAttachmentResolver.isAttachmentPath(it.path) }
+            .associateBy { it.path }
+        val referenced = dao.getAllForTodoIndex()
+            .asSequence()
+            .filterNot { it.isPendingDeletion }
+            .flatMap { MarkdownAttachmentResolver.referencedPaths(it.path, it.rawMarkdown).asSequence() }
+            .toSet()
+
+        for (path in referenced) {
+            val remote = remoteAttachments[path] ?: continue
+            val local = attachmentDao.getByPath(path)
+            if (local?.lastRemoteSha == remote.sha && fileStore.exists(path)) continue
+            // A locally captured attachment has not been uploaded yet; it wins over
+            // an unexpected remote path collision rather than being overwritten.
+            if (local?.isDirty == true) continue
+            val response = runSyncStage("pull:download attachment path=$path") {
+                api.getBlob(owner, repo, remote.sha, header)
+            }
+            val bytes = Base64.getDecoder().decode(response.content.replace("\n", ""))
+            fileStore.writeBytes(path, bytes)
+            attachmentDao.upsert(
+                AttachmentEntity(
+                    path = path,
+                    mimeType = mimeTypeFor(path),
+                    lastRemoteSha = remote.sha,
+                    isDirty = false
+                )
+            )
+        }
+    }
+
+    private fun isMarkdownNote(entry: com.specular.android.data.remote.TreeEntry): Boolean =
+        entry.type == "blob" && entry.path.endsWith(".md") && !entry.path.endsWith(".reflect.md")
+
+    private fun mimeTypeFor(path: String): String? = when (path.substringAfterLast('.', "").lowercase()) {
+        "jpg", "jpeg" -> "image/jpeg"
+        "png" -> "image/png"
+        "gif" -> "image/gif"
+        "webp" -> "image/webp"
+        "heic", "heif" -> "image/heic"
+        else -> null
     }
 
     private fun logSyncFailure(stage: String, error: Exception) {

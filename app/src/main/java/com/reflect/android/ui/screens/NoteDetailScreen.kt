@@ -171,12 +171,17 @@ fun NoteDetailScreen(
 
                     val alt = match.groupValues[1]
                     val url = match.groupValues[2]
-                    if (url.startsWith("assets/") || url.startsWith("http") || url.startsWith("file:")) {
+                    val imageModel = vm.imageModel(n.path, url)
+                    if (imageModel != null) {
                         Spacer(Modifier.height(8.dp))
-                        AsyncImage(model = url, contentDescription = alt, modifier = Modifier.fillMaxWidth())
+                        AsyncImage(model = imageModel, contentDescription = alt, modifier = Modifier.fillMaxWidth())
                     } else {
-                        // Keep unsupported image destinations readable without displaying syntax.
-                        MarkdownText(alt.ifBlank { "Image" }, taskOffset, onTaskClick = { }, onLinkClick = { false })
+                        MarkdownText(
+                            alt.ifBlank { "Image unavailable: $url" },
+                            taskOffset,
+                            onTaskClick = { },
+                            onLinkClick = { false }
+                        )
                     }
 
                     cursor = match.range.last + 1

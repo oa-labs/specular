@@ -49,6 +49,14 @@ interface GitHubApi {
         @Query("recursive") recursive: Int = 1
     ): TreeResponse
 
+    @GET("repos/{owner}/{repo}/git/blobs/{sha}")
+    suspend fun getBlob(
+        @Path("owner") owner: String,
+        @Path("repo") repo: String,
+        @Path("sha") sha: String,
+        @Header("Authorization") auth: String
+    ): BlobResponse
+
     @GET("repos/{owner}/{repo}/git/ref/heads/{branch}")
     suspend fun getRef(
         @Path("owner") owner: String,
@@ -115,6 +123,13 @@ data class TreeEntry(
     val type: String, // blob, tree
     val sha: String,
     val size: Int? = null
+)
+
+data class BlobResponse(
+    val sha: String,
+    val content: String,
+    val encoding: String,
+    val size: Int
 )
 
 data class RefResponse(

@@ -6,12 +6,13 @@ import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 
 @Database(
-    entities = [NoteEntity::class, NoteFts::class, TodoEntity::class, TodoIndexState::class],
-    version = 5,
+    entities = [NoteEntity::class, NoteFts::class, TodoEntity::class, TodoIndexState::class, AttachmentEntity::class],
+    version = 6,
     exportSchema = false
 )
 abstract class SpecularDatabase : RoomDatabase() {
     abstract fun noteDao(): NoteDao
+    abstract fun attachmentDao(): AttachmentDao
 
     companion object {
         val MIGRATION_1_2 = object : Migration(1, 2) {
@@ -53,5 +54,16 @@ abstract class SpecularDatabase : RoomDatabase() {
                 db.execSQL("ALTER TABLE notes ADD COLUMN pendingRenameFromSha TEXT")
             }
         }
+
+        val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS attachments (" +
+                        "path TEXT NOT NULL, mimeType TEXT, lastRemoteSha TEXT, " +
+                        "isDirty INTEGER NOT NULL, updatedAt INTEGER NOT NULL, PRIMARY KEY(path))"
+                )
+            }
+        }
+
     }
 }

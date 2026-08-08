@@ -1,6 +1,8 @@
 package com.specular.android.sync
 
 import com.specular.android.data.local.FileStore
+import com.specular.android.data.local.AttachmentDao
+import com.specular.android.data.local.AttachmentEntity
 import com.specular.android.data.local.NoteDao
 import com.specular.android.data.local.NoteEntity
 import com.specular.android.data.local.NoteStoreLock
@@ -11,6 +13,7 @@ import com.specular.android.data.repo.NoteRepository
 import com.specular.android.data.remote.AiProviderSettings
 import com.specular.android.data.remote.AiSnippetGenerator
 import com.specular.android.data.remote.ContentResponse
+import com.specular.android.data.remote.BlobResponse
 import com.specular.android.data.remote.DeleteContentRequest
 import com.specular.android.data.remote.GitHubApi
 import com.specular.android.data.remote.GitHubAuth
@@ -21,6 +24,7 @@ import com.specular.android.data.remote.TreeEntry
 import com.specular.android.data.remote.TreeResponse
 import com.specular.android.data.remote.Owner
 import com.specular.android.data.remote.PutContentResponse
+import com.specular.android.data.remote.PutContentRequest
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emptyFlow
@@ -386,6 +390,77 @@ class SyncEngineTest {
         verify(fileStore).move("old.md", "new.md")
     }
 
+    @Test
+    fun pullDownloadsReferencedAttachmentFromAssetsOrAttachmentsTree() = runTest {
+        val api = mock(GitHubApi::class.java)
+        val auth = mock(GitHubAuth::class.java)
+        val fileStore = mock(FileStore::class.java)
+        val dao = MemoryNoteDao()
+        val attachments = MemoryAttachmentDao()
+        val noteRaw = "---\nid: 01image\n---\n# Image\n\n![](../attachments/photo.png)"
+        val imageBytes = byteArrayOf(1, 2, 3, 4)
+        configurePull(
+            api,
+            auth,
+            listOf(
+                TreeEntry("notes/Image.md", "100644", "blob", "note-sha"),
+                TreeEntry("attachments/photo.png", "100644", "blob", "image-sha")
+            )
+        )
+        `when`(api.getContent("owner", "repo", "notes/Image.md", "Bearer token", "main"))
+            .thenReturn(content("notes/Image.md", "note-sha", noteRaw))
+        `when`(api.getBlob("owner", "repo", "image-sha", "Bearer token"))
+            .thenReturn(
+                BlobResponse(
+                    sha = "image-sha",
+                    content = Base64.getEncoder().encodeToString(imageBytes),
+                    encoding = "base64",
+                    size = imageBytes.size
+                )
+            )
+
+        val result = SyncEngine(api, auth, dao, fileStore, attachmentDao = attachments).pull()
+
+        assertTrue(result is SyncEngine.Result.Success)
+        assertEquals("image-sha", attachments.getByPath("attachments/photo.png")?.lastRemoteSha)
+    }
+
+    @Test
+    fun pushUploadsDirtyReferencedAttachmentBeforeMarkdown() = runTest {
+        val api = mock(GitHubApi::class.java)
+        val auth = mock(GitHubAuth::class.java)
+        val fileStore = mock(FileStore::class.java)
+        val note = testNote(
+            id = "01image", path = "notes/Image.md", sha = "note-sha",
+            raw = "# Image\n\n![](../attachments/photo.png)"
+        )
+        val dao = MemoryNoteDao(note)
+        val attachment = AttachmentEntity("attachments/photo.png", "image/png", null, isDirty = true)
+        val attachments = MemoryAttachmentDao(attachment)
+        val bytes = byteArrayOf(9, 8, 7)
+        `when`(fileStore.readBytes("attachments/photo.png")).thenReturn(bytes)
+        configurePull(api, auth, emptyList())
+        val request = PutContentRequest(
+            message = "Upload attachment photo.png",
+            content = Base64.getEncoder().encodeToString(bytes),
+            sha = null,
+            branch = "main"
+        )
+        `when`(api.putContent("owner", "repo", "attachments/photo.png", "Bearer token", request))
+            .thenReturn(
+                PutContentResponse(
+                    content = ContentResponse("photo.png", "attachments/photo.png", "new-sha", null, null, "file"),
+                    commit = null
+                )
+            )
+
+        val result = SyncEngine(api, auth, dao, fileStore, attachmentDao = attachments).push()
+
+        assertTrue(result is SyncEngine.Result.Success)
+        assertEquals("new-sha", attachments.getByPath("attachments/photo.png")?.lastRemoteSha)
+        assertTrue(attachments.getDirty().isEmpty())
+    }
+
     private suspend fun configurePull(api: GitHubApi, auth: GitHubAuth, entries: List<TreeEntry>) {
         `when`(auth.authHeader()).thenReturn("Bearer token")
         `when`(auth.repoOwner).thenReturn("owner")
@@ -455,5 +530,18 @@ class SyncEngineTest {
         override fun searchFts(query: String): Flow<List<NoteEntity>> = emptyFlow()
         override fun searchLike(q: String): Flow<List<NoteEntity>> = emptyFlow()
         override suspend fun markDirty(id: String, dirty: Boolean, sha: String?) = Unit
+    }
+
+    private class MemoryAttachmentDao(vararg initial: AttachmentEntity) : AttachmentDao {
+        private val attachments = initial.associateByTo(linkedMapOf()) { it.path }
+
+        override suspend fun getByPath(path: String): AttachmentEntity? = attachments[path]
+        override suspend fun getDirty(): List<AttachmentEntity> = attachments.values.filter { it.isDirty }
+        override suspend fun upsert(attachment: AttachmentEntity) {
+            attachments[attachment.path] = attachment
+        }
+        override suspend fun deleteByPath(path: String) {
+            attachments.remove(path)
+        }
     }
 }

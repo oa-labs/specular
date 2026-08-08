@@ -59,10 +59,13 @@ object AppModule {
             .addMigrations(SpecularDatabase.MIGRATION_2_3)
             .addMigrations(SpecularDatabase.MIGRATION_3_4)
             .addMigrations(SpecularDatabase.MIGRATION_4_5)
+            .addMigrations(SpecularDatabase.MIGRATION_5_6)
             .fallbackToDestructiveMigration()
             .build()
 
     @Provides fun provideNoteDao(db: SpecularDatabase) = db.noteDao()
+
+    @Provides fun provideAttachmentDao(db: SpecularDatabase) = db.attachmentDao()
 
     @Provides @Singleton
     fun provideFileStore(@ApplicationContext context: Context) = FileStore(context)

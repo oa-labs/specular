@@ -31,12 +31,12 @@ fun EditorScreen(navController: NavController, id: String, vm: EditorViewModel =
     val body by vm.body.collectAsState()
     val saving by vm.saving.collectAsState()
 
-    // Camera handling — writes to assets/pasted-<epoch>.jpg and inserts markdown
+    // Camera/gallery images are copied into the mirrored repository's attachments/.
     val context = androidx.compose.ui.platform.LocalContext.current
     var cameraUri by remember { mutableStateOf<Uri?>(null) }
     val cameraLauncher = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { success ->
         if (success && cameraUri != null) {
-            vm.insertImage("assets/${cameraUri!!.lastPathSegment}")
+            vm.importImage(cameraUri!!)
         }
     }
     val launchCameraCapture = {
@@ -45,7 +45,7 @@ fun EditorScreen(navController: NavController, id: String, vm: EditorViewModel =
             File(
                 context.getExternalFilesDir(Environment.DIRECTORY_PICTURES),
                 "capture-${System.currentTimeMillis()}.jpg"
-            )
+            ).also { it.parentFile?.mkdirs() }
         )
         cameraLauncher.launch(cameraUri!!)
     }
@@ -56,8 +56,7 @@ fun EditorScreen(navController: NavController, id: String, vm: EditorViewModel =
     }
     val galleryLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         if (uri != null) {
-            // Copy to assets and insert — simplified: insert original uri, FileStore handles copy on save
-            vm.insertImage(uri.toString())
+            vm.importImage(uri)
         }
     }
 
@@ -92,7 +91,7 @@ fun EditorScreen(navController: NavController, id: String, vm: EditorViewModel =
                 value = body, onValueChange = { vm.setBody(it) },
                 label = { Text("Markdown") },
                 modifier = Modifier.fillMaxSize(),
-                placeholder = { Text("Type [[ to link…\n![](assets/…) for images") }
+                placeholder = { Text("Type [[ to link…\nUse camera or gallery to add images") }
             )
         }
     }
