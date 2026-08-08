@@ -14,8 +14,10 @@ import java.util.concurrent.TimeUnit
 object SyncScheduler {
     private const val PERIODIC_SYNC_WORK_NAME = "github_periodic_sync"
     private const val IMMEDIATE_SYNC_WORK_NAME = "github_immediate_sync"
+    private const val DEBOUNCED_SYNC_WORK_NAME = "github_debounced_sync"
     private const val SYNC_WORK_TAG = "github_sync"
     private const val SYNC_INTERVAL_MINUTES = 15L
+    private const val EDIT_DEBOUNCE_SECONDS = 5L
 
     private val connectedNetwork = Constraints.Builder()
         .setRequiredNetworkType(NetworkType.CONNECTED)
@@ -34,8 +36,8 @@ object SyncScheduler {
         )
     }
 
-    /** Queues an initial sync after GitHub credentials have been verified. */
-    fun enqueueInitialSync(workManager: WorkManager) {
+    /** Queues a sync as soon as Android has a network connection available. */
+    fun enqueueImmediateSync(workManager: WorkManager) {
         val request = OneTimeWorkRequestBuilder<SyncWorker>()
             .setConstraints(connectedNetwork)
             .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 10, TimeUnit.SECONDS)
@@ -48,4 +50,26 @@ object SyncScheduler {
             request
         )
     }
+
+    /**
+     * Queues a sync after edits settle. Replacing the prior request means rapid edits
+     * produce one sync rather than one job for every save.
+     */
+    fun enqueueDebouncedSync(workManager: WorkManager) {
+        val request = OneTimeWorkRequestBuilder<SyncWorker>()
+            .setInitialDelay(EDIT_DEBOUNCE_SECONDS, TimeUnit.SECONDS)
+            .setConstraints(connectedNetwork)
+            .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 10, TimeUnit.SECONDS)
+            .addTag(SYNC_WORK_TAG)
+            .build()
+
+        workManager.enqueueUniqueWork(
+            DEBOUNCED_SYNC_WORK_NAME,
+            ExistingWorkPolicy.REPLACE,
+            request
+        )
+    }
+
+    /** Queues an initial sync after GitHub credentials have been verified. */
+    fun enqueueInitialSync(workManager: WorkManager) = enqueueImmediateSync(workManager)
 }

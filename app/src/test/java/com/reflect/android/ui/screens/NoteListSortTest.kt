@@ -27,14 +27,48 @@ class NoteListSortTest {
         )
     }
 
-    private fun note(title: String, updatedAt: Long, isDaily: Boolean = false) = NoteListItem(
+    @Test fun `places pinned notes first while preserving the selected sort`() {
+        val notes = listOf(
+            note("Zulu", 1, isPinned = true),
+            note("Newest", 4),
+            note("Alpha", 2, isPinned = true),
+            note("Middle", 3)
+        )
+
+        assertEquals(
+            listOf("Alpha", "Zulu", "Middle", "Newest"),
+            sortNotes(notes, NoteSort.ALPHABETICAL).map { it.title }
+        )
+        assertEquals(
+            listOf("Alpha", "Zulu", "Newest", "Middle"),
+            sortNotes(notes, NoteSort.LAST_UPDATED).map { it.title }
+        )
+    }
+
+    @Test fun `shows labels for root folders except assets and attachments`() {
+        assertEquals("daily", noteFolderLabel(note("Today", 1, path = "daily/2026-08-08.md")))
+        assertEquals("meetings", noteFolderLabel(note("Standup", 1, path = "meetings/standup.md")))
+        assertEquals("projects", noteFolderLabel(note("Plan", 1, path = "projects/alpha/plan.md")))
+        assertEquals(null, noteFolderLabel(note("Image", 1, path = "assets/logo.md")))
+        assertEquals(null, noteFolderLabel(note("Photo", 1, path = "attachments/photo.md")))
+        assertEquals(null, noteFolderLabel(note("Regular", 1)))
+    }
+
+    private fun note(
+        title: String,
+        updatedAt: Long,
+        isDaily: Boolean = false,
+        isPinned: Boolean = false,
+        path: String = "$title.md"
+    ) = NoteListItem(
         id = title,
         title = title,
-        path = "$title.md",
+        path = path,
         snippet = null,
         isDaily = isDaily,
         isDirty = false,
         isConflict = false,
+        isPinned = isPinned,
         updatedAt = updatedAt
     )
 }

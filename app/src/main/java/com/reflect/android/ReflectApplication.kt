@@ -1,6 +1,9 @@
 package com.specular.android
 
 import android.app.Application
+import androidx.lifecycle.DefaultLifecycleObserver
+import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.ProcessLifecycleOwner
 import androidx.hilt.work.HiltWorkerFactory
 import androidx.work.Configuration
 import androidx.work.WorkManager
@@ -21,6 +24,16 @@ class SpecularApplication : Application(), Configuration.Provider {
 
     override fun onCreate() {
         super.onCreate()
-        SyncScheduler.schedulePeriodic(WorkManager.getInstance(this))
+        val workManager = WorkManager.getInstance(this)
+        SyncScheduler.schedulePeriodic(workManager)
+        ProcessLifecycleOwner.get().lifecycle.addObserver(object : DefaultLifecycleObserver {
+            override fun onStart(owner: LifecycleOwner) {
+                SyncScheduler.enqueueImmediateSync(workManager)
+            }
+
+            override fun onStop(owner: LifecycleOwner) {
+                SyncScheduler.enqueueImmediateSync(workManager)
+            }
+        })
     }
 }

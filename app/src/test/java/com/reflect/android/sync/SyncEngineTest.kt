@@ -30,6 +30,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.flowOf
 import androidx.paging.PagingSource
+import androidx.work.WorkManager
 import com.specular.android.domain.model.TodoListItem
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -377,7 +378,8 @@ class SyncEngineTest {
             mock(AiProviderSettings::class.java),
             mock(AiSnippetGenerator::class.java),
             NoteStoreLock(),
-            TodoIndex()
+            TodoIndex(),
+            mock(WorkManager::class.java)
         )
 
         val renamed = repository.renameNote("01rename", "new.md")

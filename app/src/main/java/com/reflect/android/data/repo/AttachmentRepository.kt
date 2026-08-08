@@ -3,10 +3,12 @@ package com.specular.android.data.repo
 import android.content.Context
 import android.net.Uri
 import android.provider.OpenableColumns
+import androidx.work.WorkManager
 import com.specular.android.data.local.AttachmentDao
 import com.specular.android.data.local.AttachmentEntity
 import com.specular.android.data.local.FileStore
 import com.specular.android.data.local.MarkdownAttachmentResolver
+import com.specular.android.sync.SyncScheduler
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -19,7 +21,8 @@ import javax.inject.Singleton
 class AttachmentRepository @Inject constructor(
     @ApplicationContext private val context: Context,
     private val fileStore: FileStore,
-    private val attachmentDao: AttachmentDao
+    private val attachmentDao: AttachmentDao,
+    private val workManager: WorkManager
 ) {
     suspend fun importImage(source: Uri, notePath: String): String = withContext(Dispatchers.IO) {
         val mimeType = context.contentResolver.getType(source) ?: "image/jpeg"
@@ -32,6 +35,7 @@ class AttachmentRepository @Inject constructor(
         attachmentDao.upsert(
             AttachmentEntity(path = path, mimeType = mimeType, lastRemoteSha = null, isDirty = true)
         )
+        SyncScheduler.enqueueDebouncedSync(workManager)
         MarkdownAttachmentResolver.referenceFor(notePath, path)
     }
 

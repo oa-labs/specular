@@ -4,6 +4,7 @@ import android.util.Base64
 import androidx.paging.Pager
 import androidx.paging.PagingConfig
 import androidx.paging.PagingData
+import androidx.work.WorkManager
 import com.specular.android.data.local.FileStore
 import com.specular.android.data.local.FrontmatterParser
 import com.specular.android.data.local.NoteDao
@@ -18,6 +19,7 @@ import com.specular.android.domain.model.Note
 import com.specular.android.domain.model.NoteListItem
 import com.specular.android.domain.model.TodoFilter
 import com.specular.android.domain.model.TodoListItem
+import com.specular.android.sync.SyncScheduler
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.Dispatchers
@@ -35,7 +37,8 @@ class NoteRepository @Inject constructor(
     private val aiSettings: AiProviderSettings,
     private val snippetGenerator: AiSnippetGenerator,
     private val noteStoreLock: NoteStoreLock,
-    private val todoIndex: TodoIndex
+    private val todoIndex: TodoIndex,
+    private val workManager: WorkManager
 ) {
     private data class SnippetGenerationInput(
         val entity: NoteEntity,
@@ -117,7 +120,7 @@ class NoteRepository @Inject constructor(
         dao.getByPath(path)?.id ?: dao.getByPathIgnoringCase(path)?.id
 
     suspend fun createNote(title: String, body: String = ""): Note {
-        return noteStoreLock.withLock {
+        val note = noteStoreLock.withLock {
             val id = "01" + UUID.randomUUID().toString().replace("-", "").take(24)
             val slug = title.lowercase().replace(Regex("[^a-z0-9]+"), "-").trim('-').ifEmpty { "untitled" }
             val path = "$slug.md"
@@ -139,10 +142,14 @@ class NoteRepository @Inject constructor(
             persistIndexed(entity)
             getNote(id)!!
         }
+        enqueueSyncAfterLocalChange()
+        return note
     }
 
     suspend fun updateNote(id: String, newTitle: String? = null, newBody: String? = null): Note {
-        return noteStoreLock.withLock { updateNoteLocked(id, newTitle, newBody) }
+        val note = noteStoreLock.withLock { updateNoteLocked(id, newTitle, newBody) }
+        enqueueSyncAfterLocalChange()
+        return note
     }
 
     /**
@@ -150,7 +157,7 @@ class NoteRepository @Inject constructor(
      * new GitHub path and deletes the old one, preserving the stable Reflect id.
      */
     suspend fun renameNote(id: String, newPath: String): Note {
-        return noteStoreLock.withLock {
+        val note = noteStoreLock.withLock {
             val note = dao.getById(id) ?: error("Note $id not found")
             require(!note.isPendingDeletion) { "A deleted note cannot be renamed" }
             val target = normalizeMarkdownPath(newPath)
@@ -175,6 +182,8 @@ class NoteRepository @Inject constructor(
             persistIndexed(renamed)
             getNote(id)!!
         }
+        enqueueSyncAfterLocalChange()
+        return note
     }
 
     private suspend fun updateNoteLocked(id: String, newTitle: String? = null, newBody: String? = null): Note {
@@ -202,11 +211,15 @@ class NoteRepository @Inject constructor(
         return getNote(id)!!
     }
 
-    suspend fun toggleTodo(noteId: String, taskIndex: Int): Note? = noteStoreLock.withLock {
-        val current = getNote(noteId) ?: return@withLock null
-        val updatedBody = todoIndex.toggleAtIndex(current.bodyMarkdown, taskIndex)
-        if (updatedBody == current.bodyMarkdown) current
-        else updateNoteLocked(noteId, newBody = updatedBody)
+    suspend fun toggleTodo(noteId: String, taskIndex: Int): Note? {
+        val note = noteStoreLock.withLock {
+            val current = getNote(noteId) ?: return@withLock null
+            val updatedBody = todoIndex.toggleAtIndex(current.bodyMarkdown, taskIndex)
+            if (updatedBody == current.bodyMarkdown) current
+            else updateNoteLocked(noteId, newBody = updatedBody)
+        }
+        if (note != null) enqueueSyncAfterLocalChange()
+        return note
     }
 
     suspend fun deleteNote(id: String) {
@@ -216,6 +229,7 @@ class NoteRepository @Inject constructor(
             // undoable and prevents a pull from bringing the note straight back.
             dao.upsert(e.copy(isPendingDeletion = true))
         }
+        enqueueSyncAfterLocalChange()
     }
 
     suspend fun undoDeleteNote(id: String) {
@@ -223,6 +237,7 @@ class NoteRepository @Inject constructor(
             val e = dao.getById(id) ?: return@withLock
             if (e.isPendingDeletion) dao.upsert(e.copy(isPendingDeletion = false))
         }
+        enqueueSyncAfterLocalChange()
     }
 
     /** Pins or unpins a note locally without changing its Markdown or GitHub state. */
@@ -310,10 +325,15 @@ class NoteRepository @Inject constructor(
             )
             true
         }
+            .also { generated -> if (generated) enqueueSyncAfterLocalChange() }
     }
 
     private suspend fun persistIndexed(entity: NoteEntity) {
         dao.upsertNoteAndReplaceTodos(entity, todoIndex.extract(entity.id, entity.body))
+    }
+
+    private fun enqueueSyncAfterLocalChange() {
+        SyncScheduler.enqueueDebouncedSync(workManager)
     }
 
     private fun normalizeMarkdownPath(value: String): String {

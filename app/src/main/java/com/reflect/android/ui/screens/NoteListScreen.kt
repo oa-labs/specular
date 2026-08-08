@@ -154,7 +154,9 @@ fun NoteListScreen(navController: NavController, vm: NoteListViewModel = hiltVie
                                 Row {
                                     if (item.isDirty) Badge { Text("•") }
                                     if (item.isConflict) Badge(containerColor = MaterialTheme.colorScheme.error) { Text("!") }
-                                    if (item.isDaily) Text(" daily", style = MaterialTheme.typography.labelSmall)
+                                    noteFolderLabel(item)?.let { label ->
+                                        Text(" $label", style = MaterialTheme.typography.labelSmall)
+                                    }
                                 }
                             },
                             modifier = Modifier.clickable { navController.navigate(Screen.Detail.routeFor(item.id)) }
@@ -166,6 +168,10 @@ fun NoteListScreen(navController: NavController, vm: NoteListViewModel = hiltVie
         }
     }
 }
+
+internal fun noteFolderLabel(item: com.specular.android.domain.model.NoteListItem): String? =
+    item.path.substringBefore('/', missingDelimiterValue = "")
+        .takeIf { it.isNotBlank() && !it.equals("assets", ignoreCase = true) && !it.equals("attachments", ignoreCase = true) }
 
 internal const val DELETED_NOTE_ID = "deleted_note_id"
 internal const val DELETED_NOTE_TITLE = "deleted_note_title"
