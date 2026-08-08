@@ -2,6 +2,7 @@ package com.specular.android.ui.screens
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.specular.android.data.local.FolderFilterSettings
 import com.specular.android.data.repo.NoteRepository
 import com.specular.android.data.remote.AiProviderSettings
 import com.specular.android.domain.model.NoteListItem
@@ -54,11 +55,12 @@ internal fun filterNotesByFolders(
 @HiltViewModel
 class NoteListViewModel @Inject constructor(
     private val repo: NoteRepository,
-    private val aiSettings: AiProviderSettings
+    private val aiSettings: AiProviderSettings,
+    private val folderFilterSettings: FolderFilterSettings
 ) : ViewModel() {
     private val _sort = MutableStateFlow(NoteSort.LAST_UPDATED)
     val sort: StateFlow<NoteSort> = _sort
-    private val _deselectedFolders = MutableStateFlow<Set<String>>(emptySet())
+    private val _deselectedFolders = MutableStateFlow(folderFilterSettings.deselectedFolders())
     val deselectedFolders: StateFlow<Set<String>> = _deselectedFolders
 
     private val allNotes: StateFlow<List<NoteListItem>> = repo.observeNotes()
@@ -112,8 +114,10 @@ class NoteListViewModel @Inject constructor(
     }
 
     fun toggleFolder(folder: String) {
-        _deselectedFolders.value = _deselectedFolders.value.toMutableSet().apply {
+        val updatedFolders = _deselectedFolders.value.toMutableSet().apply {
             if (!add(folder)) remove(folder)
         }
+        _deselectedFolders.value = updatedFolders
+        folderFilterSettings.saveDeselectedFolders(updatedFolders)
     }
 }
