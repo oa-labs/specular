@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="@drawable/widget_todo_background"
+    android:padding="12dp">
+    <LinearLayout android:id="@+id/todo_widget_header" android:layout_width="match_parent" android:layout_height="wrap_content" android:gravity="center_vertical">
+        <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="To-dos" android:textColor="#1f2937" android:textSize="18sp" android:textStyle="bold" />
+        <TextView android:id="@+id/todo_widget_add" android:layout_width="40dp" android:layout_height="40dp" android:gravity="center" android:text="+" android:textColor="#b45309" android:textSize="28sp" android:contentDescription="New to-do" />
+    </LinearLayout>
+    <TextView android:id="@+id/todo_widget_empty" android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" android:gravity="center_vertical" android:text="No open to-dos" android:textColor="#4b5563" />
+    <ListView android:id="@+id/todo_widget_list" android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" android:divider="@android:color/transparent" />
+</LinearLayout>

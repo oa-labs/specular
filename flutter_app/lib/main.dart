@@ -8,6 +8,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'src/data/app_database.dart';
 import 'src/data/note_repository.dart';
 import 'src/platform/legacy_bridge.dart';
+import 'src/sync/sync_scheduler.dart';
 import 'src/ui/specular_app.dart';
 
 Future<void> main() async {
@@ -16,8 +17,13 @@ Future<void> main() async {
   final state = await bridge.readState();
   const secureStorage = FlutterSecureStorage();
   await bridge.migrateSecrets(state, secureStorage);
+  await SyncScheduler.initialize();
   final database = AppDatabase.openLegacy(state);
-  final repository = NoteRepository(database, Directory(state.notesPath));
+  final repository = NoteRepository(
+    database,
+    Directory(state.notesPath),
+    onLocalChange: SyncScheduler.enqueue,
+  );
   runApp(
     ProviderScope(
       overrides: [

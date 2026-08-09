@@ -6,6 +6,7 @@ import androidx.security.crypto.MasterKey
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
+import com.specular.android.widget.TodoWidgetRenderer
 
 /**
  * Intentionally small Android boundary for the Flutter rewrite.
@@ -24,6 +25,10 @@ class MainActivity : FlutterActivity() {
                     "markLegacyMigrationComplete" -> {
                         getSharedPreferences(MIGRATION_PREFS, Context.MODE_PRIVATE)
                             .edit().putBoolean(MIGRATION_COMPLETE, true).apply()
+                        result.success(null)
+                    }
+                    "refreshTodoWidget" -> {
+                        TodoWidgetRenderer.requestUpdate(this)
                         result.success(null)
                     }
                     else -> result.notImplemented()

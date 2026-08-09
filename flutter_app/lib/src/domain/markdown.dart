@@ -32,7 +32,11 @@ class MarkdownContract {
           final line = lines[index];
           if (line.startsWith('id:')) id = line.substring(3).trim();
           if (line.startsWith('aliases:')) {
-            for (index++; index < lines.length && lines[index].trimLeft().startsWith('-'); index++) {
+            for (
+              index++;
+              index < lines.length && lines[index].trimLeft().startsWith('-');
+              index++
+            ) {
               aliases.add(lines[index].trimLeft().substring(1).trim());
             }
             index--;
@@ -54,7 +58,9 @@ class MarkdownContract {
       id?.isNotEmpty == true ? id! : (path.startsWith('daily/') ? path : path);
 
   static String frontmatter(String id, [List<String> aliases = const []]) {
-    final aliasLines = aliases.isEmpty ? '' : 'aliases:\n${aliases.map((value) => '  - $value').join('\n')}\n';
+    final aliasLines = aliases.isEmpty
+        ? ''
+        : 'aliases:\n${aliases.map((value) => '  - $value').join('\n')}\n';
     return '---\nid: $id\n$aliasLines---\n';
   }
 
@@ -65,12 +71,21 @@ class MarkdownContract {
 }
 
 class TodoMarkdown {
-  static final _task = RegExp(r'^\s*[-*+]\s+\[([ xX])\]\s*(.*)$', multiLine: true);
+  static final _task = RegExp(
+    r'^\s*[-*+]\s+\[([ xX])\]\s*(.*)$',
+    multiLine: true,
+  );
 
-  static List<({int index, String text, bool completed})> extract(String markdown) => [
-        for (final (index, match) in _task.allMatches(markdown).indexed)
-          (index: index, text: match.group(2)?.trim() ?? '', completed: match.group(1)?.toLowerCase() == 'x'),
-      ];
+  static List<({int index, String text, bool completed})> extract(
+    String markdown,
+  ) => [
+    for (final (index, match) in _task.allMatches(markdown).indexed)
+      (
+        index: index,
+        text: match.group(2)?.trim() ?? '',
+        completed: match.group(1)?.toLowerCase() == 'x',
+      ),
+  ];
 
   static String toggleAt(String markdown, int taskIndex) {
     var current = 0;

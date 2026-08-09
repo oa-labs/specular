@@ -17,13 +17,19 @@ class NoteRows extends Table {
   TextColumn get aliases => text()();
   TextColumn get snippet => text().nullable()();
   BoolColumn get isDaily => boolean().named('isDaily')();
-  BoolColumn get isPinned => boolean().named('isPinned').withDefault(const Constant(false))();
+  BoolColumn get isPinned =>
+      boolean().named('isPinned').withDefault(const Constant(false))();
   TextColumn get lastRemoteSha => text().named('lastRemoteSha').nullable()();
-  BoolColumn get isDirty => boolean().named('isDirty').withDefault(const Constant(false))();
-  BoolColumn get isPendingDeletion => boolean().named('isPendingDeletion').withDefault(const Constant(false))();
-  TextColumn get pendingRenameFromPath => text().named('pendingRenameFromPath').nullable()();
-  TextColumn get pendingRenameFromSha => text().named('pendingRenameFromSha').nullable()();
-  BoolColumn get isConflict => boolean().named('isConflict').withDefault(const Constant(false))();
+  BoolColumn get isDirty =>
+      boolean().named('isDirty').withDefault(const Constant(false))();
+  BoolColumn get isPendingDeletion =>
+      boolean().named('isPendingDeletion').withDefault(const Constant(false))();
+  TextColumn get pendingRenameFromPath =>
+      text().named('pendingRenameFromPath').nullable()();
+  TextColumn get pendingRenameFromSha =>
+      text().named('pendingRenameFromSha').nullable()();
+  BoolColumn get isConflict =>
+      boolean().named('isConflict').withDefault(const Constant(false))();
   IntColumn get updatedAt => integer().named('updatedAt')();
   @override
   Set<Column<Object>> get primaryKey => {id};
@@ -46,7 +52,8 @@ class TodoIndexStates extends Table {
   String get tableName => 'todo_index_state';
 
   IntColumn get id => integer().withDefault(const Constant(0))();
-  BoolColumn get isReady => boolean().named('isReady').withDefault(const Constant(false))();
+  BoolColumn get isReady =>
+      boolean().named('isReady').withDefault(const Constant(false))();
   @override
   Set<Column<Object>> get primaryKey => {id};
 }
@@ -69,24 +76,24 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase._(super.executor);
 
   factory AppDatabase.openLegacy(LegacyState state) => AppDatabase._(
-        driftDatabase(
-          name: 'reflect',
-          native: DriftNativeOptions(
-            databasePath: () async => state.databasePath,
-            shareAcrossIsolates: true,
-          ),
-        ),
-      );
+    driftDatabase(
+      name: 'reflect',
+      native: DriftNativeOptions(
+        databasePath: () async => state.databasePath,
+        shareAcrossIsolates: true,
+      ),
+    ),
+  );
 
   @override
   int get schemaVersion => 7;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
-        onCreate: (m) async {
-          await m.createAll();
-          // Fresh installs use LIKE search until they receive their first sync.
-          // Existing Room databases retain their FTS4 table and triggers intact.
-        },
-      );
+    onCreate: (m) async {
+      await m.createAll();
+      // Fresh installs use LIKE search until they receive their first sync.
+      // Existing Room databases retain their FTS4 table and triggers intact.
+    },
+  );
 }

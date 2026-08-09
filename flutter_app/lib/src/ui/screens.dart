@@ -13,31 +13,48 @@ class NoteListScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) => Scaffold(
-        appBar: AppBar(
-          title: const Text('Specular'),
-          actions: [
-            IconButton(onPressed: () => context.push('/search'), icon: const Icon(Icons.search)),
-            IconButton(onPressed: () => context.push('/todos'), icon: const Icon(Icons.checklist)),
-            IconButton(onPressed: () => context.push('/voice'), icon: const Icon(Icons.mic)),
-            IconButton(onPressed: () => context.push('/settings'), icon: const Icon(Icons.settings)),
-          ],
+    appBar: AppBar(
+      title: const Text('Specular'),
+      actions: [
+        IconButton(
+          onPressed: () => context.push('/search'),
+          icon: const Icon(Icons.search),
         ),
-        body: ref.watch(notesProvider).when(
-              data: (notes) => notes.isEmpty
-                  ? const Center(child: Text('No notes yet. Create one to get started.'))
-                  : ListView.separated(
-                      itemCount: notes.length,
-                      separatorBuilder: (_, _) => const Divider(height: 1),
-                      itemBuilder: (_, index) => _NoteTile(note: notes[index]),
-                    ),
-              error: (error, _) => Center(child: Text('Unable to load notes: $error')),
-              loading: () => const Center(child: CircularProgressIndicator()),
-            ),
-        floatingActionButton: FloatingActionButton(
-          onPressed: () => context.push('/editor/new'),
-          child: const Icon(Icons.add),
+        IconButton(
+          onPressed: () => context.push('/todos'),
+          icon: const Icon(Icons.checklist),
         ),
-      );
+        IconButton(
+          onPressed: () => context.push('/voice'),
+          icon: const Icon(Icons.mic),
+        ),
+        IconButton(
+          onPressed: () => context.push('/settings'),
+          icon: const Icon(Icons.settings),
+        ),
+      ],
+    ),
+    body: ref
+        .watch(notesProvider)
+        .when(
+          data: (notes) => notes.isEmpty
+              ? const Center(
+                  child: Text('No notes yet. Create one to get started.'),
+                )
+              : ListView.separated(
+                  itemCount: notes.length,
+                  separatorBuilder: (_, _) => const Divider(height: 1),
+                  itemBuilder: (_, index) => _NoteTile(note: notes[index]),
+                ),
+          error: (error, _) =>
+              Center(child: Text('Unable to load notes: $error')),
+          loading: () => const Center(child: CircularProgressIndicator()),
+        ),
+    floatingActionButton: FloatingActionButton(
+      onPressed: () => context.push('/editor/new'),
+      child: const Icon(Icons.add),
+    ),
+  );
 }
 
 class _NoteTile extends StatelessWidget {
@@ -46,14 +63,28 @@ class _NoteTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => ListTile(
-        title: Row(children: [
-          if (note.isPinned) const Padding(padding: EdgeInsets.only(right: 6), child: Icon(Icons.push_pin, size: 16)),
-          Expanded(child: Text(note.title.isEmpty ? 'Untitled' : note.title)),
-        ]),
-        subtitle: Text(note.body.replaceAll(RegExp(r'^#.+$', multiLine: true), '').trim(), maxLines: 2, overflow: TextOverflow.ellipsis),
-        trailing: note.isConflict ? const Icon(Icons.warning_amber_rounded, color: Colors.orange) : null,
-        onTap: () => context.push('/note/${Uri.encodeComponent(note.id)}'),
-      );
+    title: Row(
+      children: [
+        if (note.isPinned)
+          const Padding(
+            padding: EdgeInsets.only(right: 6),
+            child: Icon(Icons.push_pin, size: 16),
+          ),
+        Expanded(child: Text(note.title.isEmpty ? 'Untitled' : note.title)),
+      ],
+    ),
+    subtitle: Text(
+      note.snippet?.trim().isNotEmpty == true
+          ? note.snippet!
+          : note.body.replaceAll(RegExp(r'^#.+$', multiLine: true), '').trim(),
+      maxLines: 2,
+      overflow: TextOverflow.ellipsis,
+    ),
+    trailing: note.isConflict
+        ? const Icon(Icons.warning_amber_rounded, color: Colors.orange)
+        : null,
+    onTap: () => context.push('/note/${Uri.encodeComponent(note.id)}'),
+  );
 }
 
 class NoteDetailScreen extends ConsumerWidget {
@@ -62,20 +93,183 @@ class NoteDetailScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) => FutureBuilder<Note?>(
-        future: ref.read(noteRepositoryProvider).get(id),
-        builder: (context, snapshot) {
-          final note = snapshot.data;
-          if (!snapshot.hasData) return const Scaffold(body: Center(child: CircularProgressIndicator()));
-          if (note == null) return const Scaffold(body: Center(child: Text('Note not found')));
-          return Scaffold(
-            appBar: AppBar(
-              title: Text(note.title),
-              actions: [IconButton(onPressed: () => context.push('/editor/${Uri.encodeComponent(note.id)}'), icon: const Icon(Icons.edit))],
+    future: ref.read(noteRepositoryProvider).get(id),
+    builder: (context, snapshot) {
+      final note = snapshot.data;
+      if (!snapshot.hasData)
+        return const Scaffold(body: Center(child: CircularProgressIndicator()));
+      if (note == null)
+        return const Scaffold(body: Center(child: Text('Note not found')));
+      return Scaffold(
+        appBar: AppBar(
+          actions: [
+            IconButton(
+              tooltip: 'Generate AI snippet',
+              onPressed: () => _generateSnippet(context, ref, note),
+              icon: const Icon(Icons.auto_awesome),
             ),
-            body: Markdown(data: note.body, padding: const EdgeInsets.all(16)),
-          );
-        },
+            IconButton(
+              onPressed: () =>
+                  context.push('/editor/${Uri.encodeComponent(note.id)}'),
+              icon: const Icon(Icons.edit),
+            ),
+            PopupMenuButton<_NoteAction>(
+              onSelected: (action) {
+                switch (action) {
+                  case _NoteAction.rename:
+                    _rename(context, ref, note);
+                    break;
+                  case _NoteAction.delete:
+                    _delete(context, ref, note);
+                    break;
+                }
+              },
+              itemBuilder: (_) => const [
+                PopupMenuItem(value: _NoteAction.rename, child: Text('Rename')),
+                PopupMenuItem(value: _NoteAction.delete, child: Text('Delete')),
+              ],
+            ),
+          ],
+        ),
+        body: Markdown(
+          data: note.body,
+          padding: const EdgeInsets.all(16),
+          imageBuilder: (uri, title, alt) =>
+              _AttachmentImage(notePath: note.path, uri: uri),
+        ),
       );
+    },
+  );
+
+  static Future<void> _generateSnippet(
+    BuildContext context,
+    WidgetRef ref,
+    Note note,
+  ) async {
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('Generating snippet…')));
+    try {
+      final snippet = await ref
+          .read(aiSnippetServiceProvider)
+          .generate(note.body);
+      await ref.read(noteRepositoryProvider).updateSnippet(note, snippet);
+      ref.invalidate(notesProvider);
+      if (context.mounted)
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Snippet: $snippet')));
+    } catch (error) {
+      if (context.mounted)
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('$error')));
+    }
+  }
+
+  static Future<void> _rename(
+    BuildContext context,
+    WidgetRef ref,
+    Note note,
+  ) async {
+    final controller = TextEditingController(text: note.path);
+    final requested = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Rename note'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          decoration: const InputDecoration(
+            labelText: 'Repository-relative path',
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, controller.text),
+            child: const Text('Rename'),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+    if (requested == null) return;
+    try {
+      final renamed = await ref
+          .read(noteRepositoryProvider)
+          .rename(note, requested);
+      if (context.mounted)
+        context.go('/note/${Uri.encodeComponent(renamed.id)}');
+    } catch (error) {
+      if (context.mounted)
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('$error')));
+    }
+  }
+
+  static Future<void> _delete(
+    BuildContext context,
+    WidgetRef ref,
+    Note note,
+  ) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Delete note?'),
+        content: Text(
+          '“${note.title}” will be deleted locally and on its next GitHub sync.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    await ref.read(noteRepositoryProvider).delete(note);
+    if (context.mounted) context.go('/');
+  }
+}
+
+enum _NoteAction { rename, delete }
+
+class _AttachmentImage extends ConsumerWidget {
+  const _AttachmentImage({required this.notePath, required this.uri});
+  final String notePath;
+  final Uri uri;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) => FutureBuilder<File?>(
+    future: ref
+        .read(noteRepositoryProvider)
+        .resolveAttachment(notePath, uri.toString()),
+    builder: (context, snapshot) {
+      final file = snapshot.data;
+      if (file == null)
+        return const Padding(
+          padding: EdgeInsets.all(8),
+          child: Icon(Icons.broken_image_outlined),
+        );
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 8),
+        child: Image.file(
+          file,
+          errorBuilder: (_, _, _) => const Icon(Icons.broken_image_outlined),
+        ),
+      );
+    },
+  );
 }
 
 class EditorScreen extends ConsumerStatefulWidget {
@@ -120,12 +314,16 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
 
   Future<void> _addImage(ImageSource source) async {
     if (_note == null) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Save the note before adding an image.')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Save the note before adding an image.')),
+      );
       return;
     }
     final image = await _images.pickImage(source: source, imageQuality: 90);
     if (image == null) return;
-    final saved = await ref.read(noteRepositoryProvider).importImage(_note!, File(image.path));
+    final saved = await ref
+        .read(noteRepositoryProvider)
+        .importImage(_note!, File(image.path));
     _note = saved;
     _body.text = saved.body;
     if (mounted) setState(() {});
@@ -140,33 +338,53 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
 
   @override
   Widget build(BuildContext context) => Scaffold(
-        appBar: AppBar(
-          title: Text(_note == null ? 'New note' : 'Edit note'),
-          actions: [
-            IconButton(onPressed: () => _addImage(ImageSource.camera), icon: const Icon(Icons.photo_camera)),
-            IconButton(onPressed: () => _addImage(ImageSource.gallery), icon: const Icon(Icons.photo_library)),
-            IconButton(onPressed: _saving ? null : _save, icon: _saving ? const CircularProgressIndicator() : const Icon(Icons.done)),
-          ],
+    appBar: AppBar(
+      title: Text(_note == null ? 'New note' : 'Edit note'),
+      actions: [
+        IconButton(
+          onPressed: () => _addImage(ImageSource.camera),
+          icon: const Icon(Icons.photo_camera),
         ),
-        body: _loading
-            ? const Center(child: CircularProgressIndicator())
-            : Padding(
-                padding: const EdgeInsets.all(16),
-                child: Column(children: [
-                  TextField(controller: _title, decoration: const InputDecoration(labelText: 'Title')),
-                  const SizedBox(height: 12),
-                  Expanded(
-                    child: TextField(
-                      controller: _body,
-                      expands: true,
-                      maxLines: null,
-                      textAlignVertical: TextAlignVertical.top,
-                      decoration: const InputDecoration(labelText: 'Markdown', alignLabelWithHint: true, border: OutlineInputBorder()),
+        IconButton(
+          onPressed: () => _addImage(ImageSource.gallery),
+          icon: const Icon(Icons.photo_library),
+        ),
+        IconButton(
+          onPressed: _saving ? null : _save,
+          icon: _saving
+              ? const CircularProgressIndicator()
+              : const Icon(Icons.done),
+        ),
+      ],
+    ),
+    body: _loading
+        ? const Center(child: CircularProgressIndicator())
+        : Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              children: [
+                TextField(
+                  controller: _title,
+                  decoration: const InputDecoration(labelText: 'Title'),
+                ),
+                const SizedBox(height: 12),
+                Expanded(
+                  child: TextField(
+                    controller: _body,
+                    expands: true,
+                    maxLines: null,
+                    textAlignVertical: TextAlignVertical.top,
+                    decoration: const InputDecoration(
+                      labelText: 'Markdown',
+                      alignLabelWithHint: true,
+                      border: OutlineInputBorder(),
                     ),
                   ),
-                ]),
-              ),
-      );
+                ),
+              ],
+            ),
+          ),
+  );
 }
 
 class SearchScreen extends ConsumerStatefulWidget {
@@ -179,35 +397,85 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
   var _query = '';
   @override
   Widget build(BuildContext context) => Scaffold(
-        appBar: AppBar(title: TextField(autofocus: true, onChanged: (value) => setState(() => _query = value), decoration: const InputDecoration(hintText: 'Search notes'))),
-        body: StreamBuilder<List<Note>>(
-          stream: ref.read(noteRepositoryProvider).search(_query),
-          builder: (_, snapshot) => ListView(children: [for (final note in snapshot.data ?? const <Note>[]) _NoteTile(note: note)]),
-        ),
-      );
+    appBar: AppBar(
+      title: TextField(
+        autofocus: true,
+        onChanged: (value) => setState(() => _query = value),
+        decoration: const InputDecoration(hintText: 'Search notes'),
+      ),
+    ),
+    body: StreamBuilder<List<Note>>(
+      stream: ref.read(noteRepositoryProvider).search(_query),
+      builder: (_, snapshot) => ListView(
+        children: [
+          for (final note in snapshot.data ?? const <Note>[])
+            _NoteTile(note: note),
+        ],
+      ),
+    ),
+  );
 }
 
 class TodoScreen extends ConsumerWidget {
   const TodoScreen({super.key});
   @override
   Widget build(BuildContext context, WidgetRef ref) => Scaffold(
-        appBar: AppBar(title: const Text('To-dos')),
-        body: ref.watch(todosProvider).when(
-              loading: () => const Center(child: CircularProgressIndicator()),
-              error: (error, _) => Center(child: Text('$error')),
-              data: (todos) => ListView(
-                children: [
-                  for (final todo in todos)
-                    CheckboxListTile(
-                      value: todo.isCompleted,
-                      title: Text(todo.text),
-                      subtitle: Text(todo.noteTitle),
-                      onChanged: (_) => ref.read(noteRepositoryProvider).toggleTodo(todo),
-                    ),
-                ],
+    appBar: AppBar(title: const Text('To-dos')),
+    body: ref
+        .watch(todosProvider)
+        .when(
+          loading: () => const Center(child: CircularProgressIndicator()),
+          error: (error, _) => Center(child: Text('$error')),
+          data: (todos) => ListView(
+            children: [for (final todo in todos) _TodoRow(todo: todo)],
+          ),
+        ),
+  );
+}
+
+class _TodoRow extends ConsumerWidget {
+  const _TodoRow({required this.todo});
+  final TodoItem todo;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) => Padding(
+    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+    child: Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          // Align the checkbox glyph with the first line, rather than centering
+          // it beside a task that wraps over several lines.
+          padding: const EdgeInsets.only(top: 1, right: 8),
+          child: Checkbox(
+            value: todo.isCompleted,
+            semanticLabel: 'Mark ${todo.text} complete',
+            materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            visualDensity: VisualDensity.compact,
+            onChanged: (_) => ref.read(noteRepositoryProvider).toggleTodo(todo),
+          ),
+        ),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              MarkdownBody(
+                data: todo.text,
+                styleSheet: MarkdownStyleSheet.fromTheme(
+                  Theme.of(context),
+                ).copyWith(p: Theme.of(context).textTheme.bodyLarge),
               ),
-            ),
-      );
+              const SizedBox(height: 2),
+              Text(
+                todo.noteTitle,
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ],
+          ),
+        ),
+      ],
+    ),
+  );
 }
 
 class VoiceCaptureScreen extends ConsumerStatefulWidget {
@@ -235,10 +503,20 @@ class _VoiceCaptureScreenState extends ConsumerState<VoiceCaptureScreen> {
   Future<void> _stop() async {
     setState(() => _busy = true);
     try {
-      final transcript = await ref.read(voiceServiceProvider).stopAndTranscribe();
-      if (mounted) setState(() { _transcript.text = transcript; _recording = false; });
+      final transcript = await ref
+          .read(voiceServiceProvider)
+          .stopAndTranscribe();
+      if (mounted)
+        setState(() {
+          _transcript.text = transcript;
+          _recording = false;
+        });
     } catch (error) {
-      if (mounted) setState(() { _recording = false; _error = '$error'; });
+      if (mounted)
+        setState(() {
+          _recording = false;
+          _error = '$error';
+        });
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -248,7 +526,11 @@ class _VoiceCaptureScreenState extends ConsumerState<VoiceCaptureScreen> {
     if (_transcript.text.trim().isEmpty) return;
     setState(() => _busy = true);
     try {
-      final note = await ref.read(noteRepositoryProvider).appendToToday(_asTodo ? '- [ ] ${_transcript.text.trim()}' : _transcript.text);
+      final note = await ref
+          .read(noteRepositoryProvider)
+          .appendToToday(
+            _asTodo ? '- [ ] ${_transcript.text.trim()}' : _transcript.text,
+          );
       if (mounted) context.go('/note/${Uri.encodeComponent(note.id)}');
     } catch (error) {
       if (mounted) setState(() => _error = '$error');
@@ -266,28 +548,65 @@ class _VoiceCaptureScreenState extends ConsumerState<VoiceCaptureScreen> {
 
   @override
   Widget build(BuildContext context) => Scaffold(
-        appBar: AppBar(title: const Text('Voice capture')),
-        body: Padding(
-          padding: const EdgeInsets.all(20),
-          child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-            const Text('Record a thought or to-do, then review its transcript before adding it to today.'),
-            if (_error != null) Padding(padding: const EdgeInsets.only(top: 12), child: Text(_error!, style: TextStyle(color: Theme.of(context).colorScheme.error))),
-            const SizedBox(height: 20),
-            if (_transcript.text.isNotEmpty)
-              Expanded(child: TextField(controller: _transcript, maxLines: null, expands: true, decoration: const InputDecoration(labelText: 'Transcript', border: OutlineInputBorder()))),
-            if (_transcript.text.isEmpty) const Spacer(),
-            SwitchListTile(value: _asTodo, onChanged: _busy ? null : (value) => setState(() => _asTodo = value), title: const Text('Save as to-do')),
-            if (_transcript.text.isNotEmpty)
-              FilledButton(onPressed: _busy ? null : _save, child: Text(_asTodo ? 'Add to-do to today' : 'Add thought to today'))
-            else
-              FilledButton.icon(
-                onPressed: _busy ? null : (_recording ? _stop : _start),
-                icon: Icon(_recording ? Icons.stop : Icons.mic),
-                label: Text(_busy ? 'Transcribing…' : (_recording ? 'Stop and transcribe' : 'Start recording')),
+    appBar: AppBar(title: const Text('Voice capture')),
+    body: Padding(
+      padding: const EdgeInsets.all(20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const Text(
+            'Record a thought or to-do, then review its transcript before adding it to today.',
+          ),
+          if (_error != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 12),
+              child: Text(
+                _error!,
+                style: TextStyle(color: Theme.of(context).colorScheme.error),
               ),
-          ]),
-        ),
-      );
+            ),
+          const SizedBox(height: 20),
+          if (_transcript.text.isNotEmpty)
+            Expanded(
+              child: TextField(
+                controller: _transcript,
+                maxLines: null,
+                expands: true,
+                decoration: const InputDecoration(
+                  labelText: 'Transcript',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+            ),
+          if (_transcript.text.isEmpty) const Spacer(),
+          SwitchListTile(
+            value: _asTodo,
+            onChanged: _busy
+                ? null
+                : (value) => setState(() => _asTodo = value),
+            title: const Text('Save as to-do'),
+          ),
+          if (_transcript.text.isNotEmpty)
+            FilledButton(
+              onPressed: _busy ? null : _save,
+              child: Text(
+                _asTodo ? 'Add to-do to today' : 'Add thought to today',
+              ),
+            )
+          else
+            FilledButton.icon(
+              onPressed: _busy ? null : (_recording ? _stop : _start),
+              icon: Icon(_recording ? Icons.stop : Icons.mic),
+              label: Text(
+                _busy
+                    ? 'Transcribing…'
+                    : (_recording ? 'Stop and transcribe' : 'Start recording'),
+              ),
+            ),
+        ],
+      ),
+    ),
+  );
 }
 
 class SettingsScreen extends ConsumerStatefulWidget {
@@ -324,7 +643,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     _voiceModel.text = await storage.read(key: 'voice_model_id') ?? '';
     _voiceEndpoint.text = await storage.read(key: 'voice_endpoint') ?? '';
     _voiceKey.text = await storage.read(key: 'voice_api_key') ?? '';
-    _usePreviewKey = await storage.read(key: 'voice_use_preview_key') != 'false';
+    _usePreviewKey =
+        await storage.read(key: 'voice_use_preview_key') != 'false';
     if (mounted) setState(() {});
   }
 
@@ -335,14 +655,26 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     await storage.write(key: 'repo_name', value: _repo.text.trim());
     await storage.write(key: 'ai_provider_url', value: _aiUrl.text.trim());
     await storage.write(key: 'ai_provider_api_key', value: _aiKey.text.trim());
-    await storage.write(key: 'ai_provider_model_id', value: _aiModel.text.trim());
+    await storage.write(
+      key: 'ai_provider_model_id',
+      value: _aiModel.text.trim(),
+    );
     await storage.write(key: 'voice_provider', value: _voiceProvider);
     await storage.write(key: 'voice_model_id', value: _voiceModel.text.trim());
-    await storage.write(key: 'voice_endpoint', value: _voiceEndpoint.text.trim());
+    await storage.write(
+      key: 'voice_endpoint',
+      value: _voiceEndpoint.text.trim(),
+    );
     await storage.write(key: 'voice_api_key', value: _voiceKey.text.trim());
-    await storage.write(key: 'voice_use_preview_key', value: _usePreviewKey.toString());
+    await storage.write(
+      key: 'voice_use_preview_key',
+      value: _usePreviewKey.toString(),
+    );
     final sync = await ref.read(syncEngineProvider).sync();
-    if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(sync.message)));
+    if (mounted)
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(sync.message)));
   }
 
   @override
@@ -366,35 +698,90 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       appBar: AppBar(title: const Text('Settings')),
       body: Padding(
         padding: const EdgeInsets.all(16),
-        child: ListView(children: [
-          TextField(controller: _token, obscureText: true, decoration: const InputDecoration(labelText: 'GitHub personal access token')),
-          TextField(controller: _owner, decoration: const InputDecoration(labelText: 'Repository owner')),
-          TextField(controller: _repo, decoration: const InputDecoration(labelText: 'Repository name')),
-          ExpansionTile(
-            title: const Text('AI snippet provider'),
-            children: [
-              TextField(controller: _aiUrl, decoration: const InputDecoration(labelText: 'OpenAI-compatible endpoint')),
-              TextField(controller: _aiKey, obscureText: true, decoration: const InputDecoration(labelText: 'API key')),
-              TextField(controller: _aiModel, decoration: const InputDecoration(labelText: 'Model')),
-            ],
-          ),
-          ExpansionTile(
-            title: const Text('Voice transcription'),
-            children: [
-              DropdownButtonFormField<String>(initialValue: _voiceProvider, items: const [
-                DropdownMenuItem(value: 'OPENAI', child: Text('OpenAI')),
-                DropdownMenuItem(value: 'OPENROUTER', child: Text('OpenRouter')),
-                DropdownMenuItem(value: 'CUSTOM_OPENAI_COMPATIBLE', child: Text('Custom OpenAI-compatible')),
-              ], onChanged: (value) => setState(() => _voiceProvider = value!)),
-              TextField(controller: _voiceModel, decoration: const InputDecoration(labelText: 'Voice model')),
-              TextField(controller: _voiceEndpoint, decoration: const InputDecoration(labelText: 'Custom endpoint (only for custom)')),
-              SwitchListTile(value: _usePreviewKey, onChanged: (value) => setState(() => _usePreviewKey = value), title: const Text('Use AI snippet API key')),
-              if (!_usePreviewKey) TextField(controller: _voiceKey, obscureText: true, decoration: const InputDecoration(labelText: 'Voice API key')),
-            ],
-          ),
-          const SizedBox(height: 16),
-          FilledButton(onPressed: _save, child: const Text('Save and sync')),
-        ]),
+        child: ListView(
+          children: [
+            TextField(
+              controller: _token,
+              obscureText: true,
+              decoration: const InputDecoration(
+                labelText: 'GitHub personal access token',
+              ),
+            ),
+            TextField(
+              controller: _owner,
+              decoration: const InputDecoration(labelText: 'Repository owner'),
+            ),
+            TextField(
+              controller: _repo,
+              decoration: const InputDecoration(labelText: 'Repository name'),
+            ),
+            ExpansionTile(
+              title: const Text('AI snippet provider'),
+              children: [
+                TextField(
+                  controller: _aiUrl,
+                  decoration: const InputDecoration(
+                    labelText: 'OpenAI-compatible endpoint',
+                  ),
+                ),
+                TextField(
+                  controller: _aiKey,
+                  obscureText: true,
+                  decoration: const InputDecoration(labelText: 'API key'),
+                ),
+                TextField(
+                  controller: _aiModel,
+                  decoration: const InputDecoration(labelText: 'Model'),
+                ),
+              ],
+            ),
+            ExpansionTile(
+              title: const Text('Voice transcription'),
+              children: [
+                DropdownButtonFormField<String>(
+                  initialValue: _voiceProvider,
+                  items: const [
+                    DropdownMenuItem(value: 'OPENAI', child: Text('OpenAI')),
+                    DropdownMenuItem(
+                      value: 'OPENROUTER',
+                      child: Text('OpenRouter'),
+                    ),
+                    DropdownMenuItem(
+                      value: 'CUSTOM_OPENAI_COMPATIBLE',
+                      child: Text('Custom OpenAI-compatible'),
+                    ),
+                  ],
+                  onChanged: (value) => setState(() => _voiceProvider = value!),
+                ),
+                TextField(
+                  controller: _voiceModel,
+                  decoration: const InputDecoration(labelText: 'Voice model'),
+                ),
+                TextField(
+                  controller: _voiceEndpoint,
+                  decoration: const InputDecoration(
+                    labelText: 'Custom endpoint (only for custom)',
+                  ),
+                ),
+                SwitchListTile(
+                  value: _usePreviewKey,
+                  onChanged: (value) => setState(() => _usePreviewKey = value),
+                  title: const Text('Use AI snippet API key'),
+                ),
+                if (!_usePreviewKey)
+                  TextField(
+                    controller: _voiceKey,
+                    obscureText: true,
+                    decoration: const InputDecoration(
+                      labelText: 'Voice API key',
+                    ),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            FilledButton(onPressed: _save, child: const Text('Save and sync')),
+          ],
+        ),
       ),
     );
   }
