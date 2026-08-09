@@ -2,7 +2,9 @@ package com.specular.android.ui.screens
 
 import android.text.method.LinkMovementMethod
 import android.text.Spannable
+import android.text.Layout
 import android.text.style.ClickableSpan
+import android.text.style.LeadingMarginSpan
 import android.text.style.URLSpan
 import android.util.TypedValue
 import android.widget.TextView
@@ -26,6 +28,7 @@ import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavController
@@ -34,7 +37,8 @@ import io.noties.markwon.Markwon
 import io.noties.markwon.AbstractMarkwonPlugin
 import io.noties.markwon.core.MarkwonTheme
 import io.noties.markwon.ext.tasklist.TaskListPlugin
-import io.noties.markwon.ext.tasklist.TaskListSpan
+import io.noties.markwon.ext.tasklist.TaskListItem
+import io.noties.markwon.ext.tasklist.TaskListProps
 import com.specular.android.ui.navigation.Screen
 import com.specular.android.data.local.countTodoItems
 import com.specular.android.data.local.NoteLinkPathResolver
@@ -82,7 +86,10 @@ fun NoteDetailScreen(
                 title = {
                     Text(
                         note?.title ?: "…",
-                        style = MaterialTheme.typography.titleLarge,
+                        style = MaterialTheme.typography.titleLarge.copy(
+                            fontSize = 17.6.sp,
+                            lineHeight = 22.4.sp
+                        ),
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.padding(end = 8.dp)
@@ -92,9 +99,6 @@ fun NoteDetailScreen(
                     IconButton(onClick = { navController.popBackStack() }) { Icon(Icons.Default.ArrowBack, "Back") }
                 },
                 actions = {
-                    IconButton(onClick = { navController.navigate(Screen.Editor.routeFor(id)) }) {
-                        Icon(Icons.Default.Edit, "Edit")
-                    }
                     Box {
                         IconButton(onClick = { showActions = true }) {
                             Icon(Icons.Default.MoreVert, "More actions")
@@ -137,6 +141,13 @@ fun NoteDetailScreen(
                     }
                 }
             )
+        },
+        floatingActionButton = {
+            SmallFloatingActionButton(
+                onClick = { navController.navigate(Screen.Editor.routeFor(id)) }
+            ) {
+                Icon(Icons.Default.Edit, contentDescription = "Edit note")
+            }
         }
     ) { padding ->
         val n = note
@@ -153,7 +164,7 @@ fun NoteDetailScreen(
                     .fillMaxSize()
                     .padding(padding)
                     .verticalScroll(rememberScrollState())
-                    .padding(horizontal = 20.dp, vertical = 16.dp)
+                    .padding(start = 20.dp, top = 16.dp, end = 20.dp, bottom = 96.dp)
             ) {
                 val isRegenerating by vm.isRegenerating.collectAsState()
                 Surface(
@@ -323,10 +334,11 @@ internal fun MarkdownText(
     val textColor = MaterialTheme.colorScheme.onBackground.toArgb()
     val accentColor = MaterialTheme.colorScheme.primary.toArgb()
     val dividerColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.24f).toArgb()
-    val markwon = remember(context, accentColor, dividerColor) {
+    val markwon = remember(context, accentColor, textColor, dividerColor) {
         Markwon.builder(context)
             .usePlugin(PreviewMarkdownThemePlugin(context, accentColor, dividerColor))
             .usePlugin(TaskListPlugin.create(context))
+            .usePlugin(AccessibleTaskListPlugin(context, accentColor, textColor))
             .build()
     }
 
@@ -374,28 +386,64 @@ internal fun MarkdownText(
                         )
                     }
                 }
-            rendered.getSpans(0, rendered.length, TaskListSpan::class.java)
+            val taskSpans = rendered.getSpans(0, rendered.length, AccessibleTaskListSpan::class.java)
                 .sortedBy { rendered.getSpanStart(it) }
-                .forEachIndexed { localIndex, taskSpan ->
-                    val start = rendered.getSpanStart(taskSpan)
-                    val end = rendered.getSpanEnd(taskSpan)
-                    if (start >= 0 && end > start) {
-                        rendered.setSpan(
-                            object : ClickableSpan() {
-                                override fun onClick(widget: View) {
-                                    onTaskClick(taskOffset + localIndex)
-                                }
+            taskSpans.forEachIndexed { localIndex, taskSpan ->
+                val start = rendered.getSpanStart(taskSpan)
+                val end = rendered.getSpanEnd(taskSpan)
+                if (start >= 0 && end > start) {
+                    rendered.setSpan(
+                        object : ClickableSpan() {
+                            override fun onClick(widget: View) {
+                                onTaskClick(taskOffset + localIndex)
+                            }
 
-                                override fun updateDrawState(ds: android.text.TextPaint) {
-                                    // Keep task text styled as normal Markdown, without an underline.
-                                }
-                            },
-                            start,
-                            end,
-                            Spannable.SPAN_EXCLUSIVE_EXCLUSIVE
-                        )
-                    }
+                            override fun updateDrawState(ds: android.text.TextPaint) {
+                                // Keep task text styled as normal Markdown, without an underline.
+                            }
+                        },
+                        start,
+                        end,
+                        Spannable.SPAN_EXCLUSIVE_EXCLUSIVE
+                    )
                 }
+            }
+            var pressedTask: AccessibleTaskListSpan? = null
+            textView.setOnTouchListener { _, event ->
+                val layout = textView.layout ?: return@setOnTouchListener false
+                val line = layout.getLineForVertical(
+                    (event.y - textView.totalPaddingTop + textView.scrollY).toInt().coerceAtLeast(0)
+                )
+                val task = rendered.getSpans(
+                    layout.getLineStart(line),
+                    layout.getLineEnd(line),
+                    AccessibleTaskListSpan::class.java
+                ).firstOrNull()
+                // Text begins to the right of the task margin. Its full left margin
+                // acts as a standard, forgiving tap target for the checkbox.
+                val isTaskTarget = task != null && event.x <= layout.getLineLeft(line)
+                when (event.actionMasked) {
+                    android.view.MotionEvent.ACTION_DOWN -> {
+                        pressedTask = task?.takeIf { isTaskTarget }
+                        pressedTask != null
+                    }
+                    android.view.MotionEvent.ACTION_UP -> {
+                        val pressed = pressedTask
+                        pressedTask = null
+                        if (pressed != null && pressed == task && isTaskTarget) {
+                            taskSpans.indexOf(pressed).takeIf { it >= 0 }?.let { localIndex ->
+                                onTaskClick(taskOffset + localIndex)
+                            }
+                            true
+                        } else false
+                    }
+                    android.view.MotionEvent.ACTION_CANCEL -> {
+                        pressedTask = null
+                        false
+                    }
+                    else -> pressedTask != null
+                }
+            }
         }
     )
 }
@@ -415,9 +463,95 @@ private class PreviewMarkdownThemePlugin(
             .headingBreakColor(dividerColor)
             .thematicBreakHeight((1f * density).roundToInt())
             .thematicBreakColor(dividerColor)
-            .blockMargin((8f * density).roundToInt())
-            .bulletWidth((5f * density).roundToInt())
-            .bulletListItemStrokeWidth((1f * density).roundToInt())
+            .blockMargin((16f * density).roundToInt())
+            .bulletWidth((16f * density).roundToInt())
+            .bulletListItemStrokeWidth((1.5f * density).roundToInt())
             .listItemColor(accentColor)
+    }
+}
+
+/** A fixed-size task control that remains accessible when reading text is compact. */
+private class AccessibleTaskListSpan(
+    private val done: Boolean,
+    private val controlSize: Int,
+    private val margin: Int,
+    private val accentColor: Int,
+    private val textColor: Int
+) : LeadingMarginSpan {
+    override fun getLeadingMargin(first: Boolean): Int = margin
+
+    override fun drawLeadingMargin(
+        canvas: android.graphics.Canvas,
+        paint: android.graphics.Paint,
+        x: Int,
+        dir: Int,
+        top: Int,
+        baseline: Int,
+        bottom: Int,
+        text: CharSequence,
+        start: Int,
+        end: Int,
+        first: Boolean,
+        layout: Layout
+    ) {
+        if (!first || text !is Spannable || text.getSpanStart(this) != start) return
+        val left = if (dir > 0) x + (margin - controlSize) / 2 else x - margin + (margin - controlSize) / 2
+        val topOffset = top + ((bottom - top - controlSize) / 2)
+        val rect = android.graphics.RectF(
+            left.toFloat(),
+            topOffset.toFloat(),
+            (left + controlSize).toFloat(),
+            (topOffset + controlSize).toFloat()
+        )
+        val savedColor = paint.color
+        val savedStyle = paint.style
+        val savedStrokeWidth = paint.strokeWidth
+        val savedStrokeCap = paint.strokeCap
+        paint.strokeWidth = controlSize / 10f
+        if (done) {
+            paint.style = android.graphics.Paint.Style.FILL
+            paint.color = accentColor
+            canvas.drawRoundRect(rect, controlSize / 5f, controlSize / 5f, paint)
+            paint.style = android.graphics.Paint.Style.STROKE
+            paint.strokeCap = android.graphics.Paint.Cap.ROUND
+            paint.strokeWidth = controlSize / 9f
+            paint.color = textColor
+            val check = android.graphics.Path().apply {
+                moveTo(left + controlSize * 0.23f, topOffset + controlSize * 0.52f)
+                lineTo(left + controlSize * 0.43f, topOffset + controlSize * 0.72f)
+                lineTo(left + controlSize * 0.78f, topOffset + controlSize * 0.30f)
+            }
+            canvas.drawPath(check, paint)
+        } else {
+            paint.style = android.graphics.Paint.Style.STROKE
+            paint.color = accentColor
+            canvas.drawRoundRect(rect, controlSize / 5f, controlSize / 5f, paint)
+        }
+        paint.color = savedColor
+        paint.style = savedStyle
+        paint.strokeWidth = savedStrokeWidth
+        paint.strokeCap = savedStrokeCap
+    }
+}
+
+/** Overrides Markwon's text-sized task control while retaining its task parser. */
+private class AccessibleTaskListPlugin(
+    context: android.content.Context,
+    private val accentColor: Int,
+    private val textColor: Int
+) : AbstractMarkwonPlugin() {
+    private val controlSize = (20f * context.resources.displayMetrics.density).roundToInt()
+    private val margin = (36f * context.resources.displayMetrics.density).roundToInt()
+
+    override fun configureSpansFactory(builder: io.noties.markwon.MarkwonSpansFactory.Builder) {
+        builder.setFactory(TaskListItem::class.java) { _, props ->
+            AccessibleTaskListSpan(
+                done = TaskListProps.DONE.require(props),
+                controlSize = controlSize,
+                margin = margin,
+                accentColor = accentColor,
+                textColor = textColor
+            )
+        }
     }
 }
