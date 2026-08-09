@@ -1,0 +1,6 @@
+# Copy to key.properties (which must stay untracked) for a production release.
+# It must reference the same certificate that signs com.specular.android today.
+storeFile=/absolute/path/to/release.keystore
+storePassword=
+keyAlias=
+keyPassword=
