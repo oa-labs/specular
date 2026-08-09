@@ -114,7 +114,14 @@ fun EditorScreen(navController: NavController, id: String, vm: EditorViewModel =
             )
         }
     ) { padding ->
-        Column(modifier = Modifier.fillMaxSize().padding(padding).padding(16.dp)) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+                // Keep the editor's viewport above the on-screen keyboard.
+                .imePadding()
+                .padding(16.dp)
+        ) {
             OutlinedTextField(value = title, onValueChange = { vm.setTitle(it) }, label = { Text("Title") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
             if (isNewNote) {
                 Box(modifier = Modifier.padding(top = 8.dp)) {
@@ -188,7 +195,9 @@ fun EditorScreen(navController: NavController, id: String, vm: EditorViewModel =
             OutlinedTextField(
                 value = body, onValueChange = { vm.setBody(it) },
                 label = { Text("Markdown") },
-                modifier = Modifier.fillMaxSize(),
+                // A weighted height gives this field the remaining screen space, which
+                // lets its built-in scroll behavior work when the IME is visible.
+                modifier = Modifier.fillMaxWidth().weight(1f),
                 placeholder = { Text("Type [[ to link…\nUse camera or gallery to add images") }
             )
         }
