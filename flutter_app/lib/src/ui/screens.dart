@@ -1,12 +1,16 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
 import 'dart:io';
+import 'package:appflowy_editor/appflowy_editor.dart';
 
+import '../data/note_repository.dart';
 import '../domain/markdown.dart';
 import '../domain/note.dart';
+import 'note_body_editor.dart';
 import 'specular_app.dart';
 
 enum NoteListSort { lastUpdated, alphabetical }
@@ -384,7 +388,7 @@ class _NoteTile extends StatelessWidget {
     final folder = noteFolderLabel(note);
     final snippet = note.snippet?.trim().isNotEmpty == true
         ? note.snippet!
-        : note.body.replaceAll(RegExp(r'^#.+$', multiLine: true), '').trim();
+        : MarkdownContract.snippet(note.body);
     return ListTile(
       title: Row(
         children: [
@@ -396,26 +400,20 @@ class _NoteTile extends StatelessWidget {
           Expanded(child: Text(note.title.isEmpty ? 'Untitled' : note.title)),
         ],
       ),
-      subtitle: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          if (folder != null) ...[
-            _FolderBadge(label: folder),
-            const SizedBox(width: 8),
-          ],
-          if (snippet.isNotEmpty)
-            Expanded(
-              child: Text(
-                snippet,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-              ),
+      subtitle: snippet.isEmpty
+          ? null
+          : Text(snippet, maxLines: 2, overflow: TextOverflow.ellipsis),
+      trailing: folder == null && !note.isConflict
+          ? null
+          : Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (note.isConflict)
+                  const Icon(Icons.warning_amber_rounded, color: Colors.orange),
+                if (note.isConflict && folder != null) const SizedBox(width: 8),
+                if (folder != null) _FolderBadge(label: folder),
+              ],
             ),
-        ],
-      ),
-      trailing: note.isConflict
-          ? const Icon(Icons.warning_amber_rounded, color: Colors.orange)
-          : null,
       onTap: () => context.push('/note/${Uri.encodeComponent(note.id)}'),
     );
   }
@@ -723,10 +721,12 @@ class EditorScreen extends ConsumerStatefulWidget {
 class _EditorScreenState extends ConsumerState<EditorScreen> {
   static const _inboxFolderOption = '__specular_inbox__';
   final _title = TextEditingController();
-  final _body = TextEditingController();
   Note? _note;
+  EditorState? _editorState;
+  final _stagedImages = <StagedImage>[];
   var _loading = true;
   var _saving = false;
+  var _willRewriteUnsupportedMarkdown = false;
   String? _selectedFolder;
   final _images = ImagePicker();
 
@@ -740,27 +740,81 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
     if (widget.id != null) {
       _note = await ref.read(noteRepositoryProvider).get(widget.id!);
       _title.text = _note?.title ?? '';
-      _body.text = _note?.body ?? '';
+      if (_note != null) {
+        _willRewriteUnsupportedMarkdown =
+            MarkdownCompatibility.requiresRewriteWarning(_note!.body);
+      }
     } else if (widget.newTodo) {
       _title.text = 'New to-do';
-      _body.text = '- [ ] ';
+    }
+    _editorState = await NoteBodyEditorCodec.load(
+      _note,
+      ref.read(noteRepositoryProvider),
+    );
+    if (widget.newTodo) {
+      _editorState = EditorState(document: markdownToDocument('- [ ] '));
     }
     if (mounted) setState(() => _loading = false);
   }
 
   Future<void> _save() async {
+    final editorState = _editorState;
+    if (editorState == null) return;
+    if (_willRewriteUnsupportedMarkdown &&
+        !await _confirmUnsupportedMarkdownRewrite()) {
+      return;
+    }
     setState(() => _saving = true);
-    final repo = ref.read(noteRepositoryProvider);
-    final saved = widget.newTodo
-        ? await repo.appendToToday(_body.text)
-        : _note == null
-        ? await repo.create(
-            title: _title.text,
-            body: _body.text,
-            folder: _selectedFolder,
-          )
-        : await repo.save(_note!, title: _title.text, body: _body.text);
-    if (mounted) context.go('/note/${Uri.encodeComponent(saved.id)}');
+    try {
+      final repo = ref.read(noteRepositoryProvider);
+      final body = NoteBodyEditorCodec.export(editorState);
+      // The editor only enables images for persisted notes, so their stable
+      // repository-relative paths are available before they are inserted.
+      await repo.commitStagedImages(_stagedImages);
+      _stagedImages.clear();
+      final saved = widget.newTodo
+          ? await repo.appendToToday(body)
+          : _note == null
+          ? await repo.create(
+              title: _title.text,
+              body: body,
+              folder: _selectedFolder,
+            )
+          : await repo.save(_note!, title: _title.text, body: body);
+      if (mounted) context.go('/note/${Uri.encodeComponent(saved.id)}');
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Unable to save note: $error')));
+      }
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  Future<bool> _confirmUnsupportedMarkdownRewrite() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Rewrite unsupported Markdown?'),
+        content: const Text(
+          'This note contains Markdown that the rich editor cannot preserve '
+          'exactly. Saving will rewrite it using the supported Markdown set.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Save anyway'),
+          ),
+        ],
+      ),
+    );
+    return confirmed == true;
   }
 
   Future<void> _addImage(ImageSource source) async {
@@ -772,18 +826,31 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
     }
     final image = await _images.pickImage(source: source, imageQuality: 90);
     if (image == null) return;
-    final saved = await ref
-        .read(noteRepositoryProvider)
-        .importImage(_note!, File(image.path));
-    _note = saved;
-    _body.text = saved.body;
-    if (mounted) setState(() {});
+    try {
+      final repository = ref.read(noteRepositoryProvider);
+      final staged = await repository.stageImage(File(image.path));
+      await NoteBodyEditorCodec.insertStagedImage(
+        _editorState!,
+        staged,
+        repository.attachmentReference(_note!.path, staged.attachmentPath),
+      );
+      if (mounted) setState(() => _stagedImages.add(staged));
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Unable to add image: $error')));
+      }
+    }
   }
 
   @override
   void dispose() {
+    unawaited(
+      ref.read(noteRepositoryProvider).discardStagedImages(_stagedImages),
+    );
+    _editorState?.dispose();
     _title.dispose();
-    _body.dispose();
     super.dispose();
   }
 
@@ -801,11 +868,11 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
         ),
         actions: [
           IconButton(
-            onPressed: () => _addImage(ImageSource.camera),
+            onPressed: _saving ? null : () => _addImage(ImageSource.camera),
             icon: const Icon(Icons.photo_camera),
           ),
           IconButton(
-            onPressed: () => _addImage(ImageSource.gallery),
+            onPressed: _saving ? null : () => _addImage(ImageSource.gallery),
             icon: const Icon(Icons.photo_library),
           ),
           IconButton(
@@ -862,18 +929,58 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
                         ),
                       ),
                     ),
+                  if (_willRewriteUnsupportedMarkdown) ...[
+                    const SizedBox(height: 12),
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Theme.of(context).colorScheme.errorContainer,
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Text(
+                        'Saving this note will rewrite unsupported Markdown.',
+                        style: TextStyle(
+                          color: Theme.of(context).colorScheme.onErrorContainer,
+                        ),
+                      ),
+                    ),
+                  ],
                   const SizedBox(height: 12),
                   Expanded(
-                    child: TextField(
-                      controller: _body,
-                      expands: true,
-                      maxLines: null,
-                      textAlignVertical: TextAlignVertical.top,
-                      decoration: const InputDecoration(
-                        labelText: 'Markdown',
-                        alignLabelWithHint: true,
-                        border: OutlineInputBorder(),
-                      ),
+                    child: Column(
+                      children: [
+                        Expanded(
+                          child: AppFlowyEditor(
+                            editorState: _editorState!,
+                            autoFocus: true,
+                            editorStyle: EditorStyle.mobile(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 4,
+                              ),
+                              cursorColor: Theme.of(
+                                context,
+                              ).colorScheme.primary,
+                              textStyleConfiguration: TextStyleConfiguration(
+                                text: Theme.of(context).textTheme.bodyLarge!,
+                              ),
+                            ),
+                          ),
+                        ),
+                        MobileToolbar(
+                          editorState: _editorState!,
+                          toolbarItems: [
+                            headingMobileToolbarItem,
+                            textDecorationMobileToolbarItem,
+                            codeMobileToolbarItem,
+                            linkMobileToolbarItem,
+                            listMobileToolbarItem,
+                            todoListMobileToolbarItem,
+                            quoteMobileToolbarItem,
+                            dividerMobileToolbarItem,
+                          ],
+                        ),
+                      ],
                     ),
                   ),
                 ],
@@ -1119,6 +1226,9 @@ class SettingsScreen extends ConsumerStatefulWidget {
 }
 
 class _SettingsScreenState extends ConsumerState<SettingsScreen> {
+  static const _defaultSnippetModel = 'deepseek/deepseek-v4-flash-0731';
+  static const _defaultVoiceModel = 'openai/gpt-4o-mini-transcribe';
+
   final _token = TextEditingController();
   final _owner = TextEditingController();
   final _repo = TextEditingController();
@@ -1128,9 +1238,10 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   final _voiceModel = TextEditingController();
   final _voiceEndpoint = TextEditingController();
   final _voiceKey = TextEditingController();
-  var _voiceProvider = 'OPENAI';
+  var _voiceProvider = 'OPENROUTER';
   var _usePreviewKey = true;
   var _loaded = false;
+  var _saving = false;
 
   Future<void> _load() async {
     if (_loaded) return;
@@ -1141,9 +1252,11 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     _repo.text = await storage.read(key: 'repo_name') ?? '';
     _aiUrl.text = await storage.read(key: 'ai_provider_url') ?? '';
     _aiKey.text = await storage.read(key: 'ai_provider_api_key') ?? '';
-    _aiModel.text = await storage.read(key: 'ai_provider_model_id') ?? '';
-    _voiceProvider = await storage.read(key: 'voice_provider') ?? 'OPENAI';
-    _voiceModel.text = await storage.read(key: 'voice_model_id') ?? '';
+    _aiModel.text =
+        await storage.read(key: 'ai_provider_model_id') ?? _defaultSnippetModel;
+    _voiceProvider = await storage.read(key: 'voice_provider') ?? 'OPENROUTER';
+    _voiceModel.text =
+        await storage.read(key: 'voice_model_id') ?? _defaultVoiceModel;
     _voiceEndpoint.text = await storage.read(key: 'voice_endpoint') ?? '';
     _voiceKey.text = await storage.read(key: 'voice_api_key') ?? '';
     _usePreviewKey =
@@ -1152,32 +1265,45 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   }
 
   Future<void> _save() async {
-    final storage = ref.read(secureStorageProvider);
-    await storage.write(key: 'github_token', value: _token.text.trim());
-    await storage.write(key: 'repo_owner', value: _owner.text.trim());
-    await storage.write(key: 'repo_name', value: _repo.text.trim());
-    await storage.write(key: 'ai_provider_url', value: _aiUrl.text.trim());
-    await storage.write(key: 'ai_provider_api_key', value: _aiKey.text.trim());
-    await storage.write(
-      key: 'ai_provider_model_id',
-      value: _aiModel.text.trim(),
-    );
-    await storage.write(key: 'voice_provider', value: _voiceProvider);
-    await storage.write(key: 'voice_model_id', value: _voiceModel.text.trim());
-    await storage.write(
-      key: 'voice_endpoint',
-      value: _voiceEndpoint.text.trim(),
-    );
-    await storage.write(key: 'voice_api_key', value: _voiceKey.text.trim());
-    await storage.write(
-      key: 'voice_use_preview_key',
-      value: _usePreviewKey.toString(),
-    );
-    final sync = await ref.read(syncEngineProvider).sync();
-    if (mounted)
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(sync.message)));
+    if (_saving) return;
+    setState(() => _saving = true);
+    try {
+      final storage = ref.read(secureStorageProvider);
+      await storage.write(key: 'github_token', value: _token.text.trim());
+      await storage.write(key: 'repo_owner', value: _owner.text.trim());
+      await storage.write(key: 'repo_name', value: _repo.text.trim());
+      await storage.write(key: 'ai_provider_url', value: _aiUrl.text.trim());
+      await storage.write(
+        key: 'ai_provider_api_key',
+        value: _aiKey.text.trim(),
+      );
+      await storage.write(
+        key: 'ai_provider_model_id',
+        value: _aiModel.text.trim(),
+      );
+      await storage.write(key: 'voice_provider', value: _voiceProvider);
+      await storage.write(
+        key: 'voice_model_id',
+        value: _voiceModel.text.trim(),
+      );
+      await storage.write(
+        key: 'voice_endpoint',
+        value: _voiceEndpoint.text.trim(),
+      );
+      await storage.write(key: 'voice_api_key', value: _voiceKey.text.trim());
+      await storage.write(
+        key: 'voice_use_preview_key',
+        value: _usePreviewKey.toString(),
+      );
+      final sync = await ref.read(syncEngineProvider).sync();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Settings saved. ${sync.message}')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
   }
 
   @override
@@ -1282,7 +1408,17 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               ],
             ),
             const SizedBox(height: 16),
-            FilledButton(onPressed: _save, child: const Text('Save and sync')),
+            FilledButton.icon(
+              onPressed: _saving ? null : _save,
+              icon: _saving
+                  ? const SizedBox(
+                      height: 18,
+                      width: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.cloud_sync),
+              label: Text(_saving ? 'Saving and syncing…' : 'Save and sync'),
+            ),
           ],
         ),
       ),

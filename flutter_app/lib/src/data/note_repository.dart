@@ -411,6 +411,57 @@ class NoteRepository {
     );
   }
 
+  /// Copies an image out of the picker cache without making it part of the
+  /// synced attachment set yet. The editor commits these only with Done.
+  Future<StagedImage> stageImage(File source) async {
+    if (!await source.exists()) {
+      throw StateError('The selected image is no longer available.');
+    }
+    var extension = p.extension(source.path).toLowerCase();
+    if (extension.isEmpty || extension.length > 8) extension = '.jpg';
+    final id = _uuid.v4();
+    final attachmentPath = 'attachments/$id$extension';
+    final stagingFile = _file('.editor-staging/$id$extension');
+    await stagingFile.parent.create(recursive: true);
+    await source.copy(stagingFile.path);
+    return StagedImage(
+      localPath: stagingFile.path,
+      attachmentPath: attachmentPath,
+      mimeType: _mimeFor(extension),
+    );
+  }
+
+  Future<void> commitStagedImages(Iterable<StagedImage> images) async {
+    for (final image in images) {
+      final source = File(image.localPath);
+      if (!await source.exists()) {
+        throw StateError('A selected image is no longer available.');
+      }
+      final destination = _file(image.attachmentPath);
+      await destination.parent.create(recursive: true);
+      await source.copy(destination.path);
+      await _db
+          .into(_db.attachments)
+          .insertOnConflictUpdate(
+            AttachmentsCompanion.insert(
+              path: image.attachmentPath,
+              mimeType: Value(image.mimeType),
+              lastRemoteSha: const Value.absent(),
+              isDirty: true,
+              updatedAt: DateTime.now().millisecondsSinceEpoch,
+            ),
+          );
+      await source.delete();
+    }
+  }
+
+  Future<void> discardStagedImages(Iterable<StagedImage> images) async {
+    for (final image in images) {
+      final file = File(image.localPath);
+      if (await file.exists()) await file.delete();
+    }
+  }
+
   Future<List<Attachment>> dirtyAttachments() async => (await (_db.select(
     _db.attachments,
   )..where((row) => row.isDirty.equals(true))).get());
@@ -485,10 +536,11 @@ class NoteRepository {
   }
 
   Future<void> updateSnippet(Note note, String snippet) async {
+    final plainSnippet = MarkdownContract.plainText(snippet);
     final raw = MarkdownContract.upsertSnippet(
       note.rawMarkdown,
       note.id,
-      snippet,
+      plainSnippet,
     );
     await _put(
       NoteRowsCompanion(
@@ -498,7 +550,7 @@ class NoteRepository {
         rawMarkdown: Value(raw),
         body: Value(note.body),
         aliases: Value(_encodeAliases(note.aliases)),
-        snippet: Value(snippet),
+        snippet: Value(plainSnippet),
         isDaily: Value(note.isDaily),
         isPinned: Value(note.isPinned),
         lastRemoteSha: Value(note.lastRemoteSha),
@@ -666,7 +718,9 @@ class NoteRepository {
     path: row.path,
     rawMarkdown: row.rawMarkdown,
     body: row.body,
-    snippet: row.snippet,
+    snippet: row.snippet == null
+        ? null
+        : MarkdownContract.plainText(row.snippet!),
     aliases: RegExp(
       r'"([^"]+)"',
     ).allMatches(row.aliases).map((match) => match.group(1)!).toList(),
@@ -680,4 +734,16 @@ class NoteRepository {
     isConflict: row.isConflict,
     updatedAt: DateTime.fromMillisecondsSinceEpoch(row.updatedAt),
   );
+}
+
+class StagedImage {
+  const StagedImage({
+    required this.localPath,
+    required this.attachmentPath,
+    required this.mimeType,
+  });
+
+  final String localPath;
+  final String attachmentPath;
+  final String mimeType;
 }

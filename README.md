@@ -14,6 +14,19 @@ See [`docs/reflect-contract.md`](docs/reflect-contract.md) for the GitHub repo f
 
 ## Build
 
+The current app is built from the Flutter project. From the repository root:
+
+```bash
+make build-debug      # build/app/outputs/flutter-apk/app-debug.apk
+make install-debug    # build and install on a connected Android device
+make clean            # remove Flutter build artifacts
+```
+
+`make build` and `make install` are aliases for their debug counterparts.
+Install requires an Android device or emulator recognized by `flutter devices`.
+
+The legacy Compose project remains available for migration compatibility:
+
 ```bash
 ./gradlew assembleGmsFreeDebug      # debug APK
 ./gradlew assembleGmsFreeRelease    # signed release (needs keystore)

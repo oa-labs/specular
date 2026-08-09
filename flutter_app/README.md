@@ -6,6 +6,16 @@ mirror, and `databases/reflect.db` compatibility schema for an in-place update.
 
 ## Local checks
 
+From the repository root, use the shared build commands:
+
+```bash
+make build-debug
+make install-debug
+make clean
+```
+
+For additional Flutter checks, run from this directory:
+
 ```bash
 flutter pub get
 dart run build_runner build

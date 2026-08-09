@@ -1,4 +1,6 @@
+import 'package:appflowy_editor/appflowy_editor.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
@@ -91,6 +93,12 @@ class SpecularApp extends ConsumerWidget {
     return MaterialApp.router(
       title: 'Specular',
       debugShowCheckedModeBanner: false,
+      localizationsDelegates: const [
+        AppFlowyEditorLocalizations.delegate,
+        GlobalMaterialLocalizations.delegate,
+        GlobalWidgetsLocalizations.delegate,
+        GlobalCupertinoLocalizations.delegate,
+      ],
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(
           seedColor: amber,

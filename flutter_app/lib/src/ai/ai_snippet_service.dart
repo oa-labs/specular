@@ -1,6 +1,8 @@
 import 'package:dio/dio.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
+import '../domain/markdown.dart';
+
 class AiSnippetService {
   AiSnippetService(this._storage, {Dio? dio}) : _dio = dio ?? Dio();
 
@@ -31,7 +33,7 @@ class AiSnippetService {
           {
             'role': 'user',
             'content':
-                'Provide a high-level phrase, under 7 words, summarizing the core subject of the content below for a UI list preview. Do not include specific data points such as emails, dates, or phone numbers, and do not reference the note, its tags, or its type.\n\n$noteBody',
+                'Provide a plain-text high-level phrase, under 7 words, summarizing the core subject of the content below for a UI list preview. Do not use Markdown. Do not include specific data points such as emails, dates, or phone numbers, and do not reference the note, its tags, or its type.\n\n$noteBody',
           },
         ],
       },
@@ -46,8 +48,9 @@ class AiSnippetService {
               .trim()
               .replaceAll(RegExp(r'''^["']|["']$'''), '')
         : '';
-    if (normalized.isEmpty)
+    final plainText = MarkdownContract.plainText(normalized);
+    if (plainText.isEmpty)
       throw StateError('The AI provider returned no snippet.');
-    return normalized.split(' ').take(6).join(' ');
+    return plainText.split(' ').take(6).join(' ');
   }
 }

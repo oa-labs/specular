@@ -36,7 +36,8 @@ class MarkdownContract {
           if (line.startsWith('id:')) id = line.substring(3).trim();
           if (line.startsWith('snippet:')) {
             final value = _decodeScalar(line.substring('snippet:'.length));
-            snippet = value.isEmpty ? null : value;
+            final plainSnippet = plainText(value);
+            snippet = plainSnippet.isEmpty ? null : plainSnippet;
           }
           if (line.startsWith('aliases:')) {
             for (
@@ -70,11 +71,12 @@ class MarkdownContract {
     List<String> aliases = const [],
     String? snippet,
   ]) {
+    final plainSnippet = snippet == null ? null : plainText(snippet);
     final aliasLines = aliases.isEmpty
         ? ''
         : 'aliases:\n${aliases.map((value) => '  - $value').join('\n')}\n';
-    final snippetLine = snippet?.trim().isNotEmpty == true
-        ? 'snippet: ${_encodeScalar(snippet!)}\n'
+    final snippetLine = plainSnippet?.isNotEmpty == true
+        ? 'snippet: ${_encodeScalar(plainSnippet!)}\n'
         : '';
     return '---\nid: $id\n$aliasLines$snippetLine---\n';
   }
@@ -82,11 +84,12 @@ class MarkdownContract {
   /// Persists a generated summary in the portable note metadata.
   static String upsertSnippet(String raw, String id, String snippet) {
     final parsed = parse(raw);
+    final plainSnippet = plainText(snippet);
     if (parsed.frontmatter == null) {
-      return '${frontmatter(id, parsed.aliases, snippet)}${parsed.body}';
+      return '${frontmatter(id, parsed.aliases, plainSnippet)}${parsed.body}';
     }
     final lines = parsed.frontmatter!.split('\n');
-    final encoded = 'snippet: ${_encodeScalar(snippet)}';
+    final encoded = 'snippet: ${_encodeScalar(plainSnippet)}';
     var foundId = false;
     var foundSnippet = false;
     for (var index = 0; index < lines.length; index++) {
@@ -117,10 +120,46 @@ class MarkdownContract {
     return scalar.replaceAll(RegExp(r"^'|'$"), '');
   }
 
-  static String snippet(String body) => body
-      .replaceAll(RegExp(r'^#.+$', multiLine: true), '')
-      .replaceAll(RegExp(r'\s+'), ' ')
-      .trim();
+  /// Converts Markdown into a concise, one-line plain-text summary.
+  ///
+  /// Snippets are displayed as UI metadata rather than rendered Markdown, so
+  /// this strips presentation syntax from both generated and imported values.
+  static String plainText(String markdown) {
+    var text = markdown
+        .replaceAll(RegExp(r'^\s*```[^\n]*$', multiLine: true), '')
+        .replaceAll(RegExp(r'^\s*(?:[-*_]\s*){3,}$', multiLine: true), '')
+        .replaceAll(RegExp(r'^\s{0,3}#{1,6}\s+', multiLine: true), '')
+        .replaceAll(RegExp(r'^\s*>\s?', multiLine: true), '')
+        .replaceAll(
+          RegExp(r'^\s*(?:[-+*]|\d+[.)])\s+(?:\[[ xX]\]\s*)?', multiLine: true),
+          '',
+        )
+        .replaceAll(RegExp(r'^\s*\[[^\]]+\]:\s*\S+.*$', multiLine: true), '');
+    text = text.replaceAllMapped(
+      RegExp(r'!\[([^\]]*)\]\([^)]*\)'),
+      (match) => match.group(1) ?? '',
+    );
+    text = text.replaceAllMapped(
+      RegExp(r'\[([^\]]+)\]\([^)]*\)'),
+      (match) => match.group(1) ?? '',
+    );
+    text = text.replaceAllMapped(
+      RegExp(r'\[([^\]]+)\]\[[^\]]*\]'),
+      (match) => match.group(1) ?? '',
+    );
+    return text
+        .replaceAllMapped(
+          RegExp(r'<(https?://[^>\s]+)>'),
+          (match) => match.group(1) ?? '',
+        )
+        .replaceAll(RegExp(r'<[^>]+>'), '')
+        .replaceAll(RegExp(r'[*_~`]+'), '')
+        .replaceAll(RegExp(r'\\([\\`*_{}\[\]<>()#+\-.!|])'), r'$1')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
+  }
+
+  static String snippet(String body) => plainText(body);
 }
 
 class TodoMarkdown {

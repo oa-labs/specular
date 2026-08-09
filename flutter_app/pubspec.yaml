@@ -7,7 +7,15 @@ environment:
   sdk: ^3.12.2
 
 dependencies:
+  # Pub's 6.2.0 release predates Flutter 3.44's TextInputClient API. Pin the
+  # upstream compatibility fix until AppFlowy publishes a newer release.
+  appflowy_editor:
+    git:
+      url: https://github.com/AppFlowy-IO/appflowy-editor.git
+      ref: 01eccc6ee36bd07698bd80915289fe7070478cd2
   flutter:
+    sdk: flutter
+  flutter_localizations:
     sdk: flutter
   collection: ^1.19.1
   dio: ^5.9.0
@@ -20,7 +28,7 @@ dependencies:
   image_picker: ^1.2.1
   path: ^1.9.1
   path_provider: ^2.1.6
-  record: ^6.1.2
+  record: ^7.1.1
   uuid: ^4.5.2
   workmanager: ^0.10.7
 

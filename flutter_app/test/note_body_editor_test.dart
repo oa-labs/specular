@@ -1,0 +1,69 @@
+import 'package:appflowy_editor/appflowy_editor.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:specular/src/domain/note.dart';
+import 'package:specular/src/ui/note_body_editor.dart';
+
+Note _note({required String title, required String body}) => Note(
+  id: 'note-id',
+  title: title,
+  path: 'notes/example.md',
+  rawMarkdown: body,
+  body: body,
+  snippet: null,
+  aliases: const [],
+  isDaily: false,
+  isPinned: false,
+  lastRemoteSha: null,
+  isDirty: false,
+  isPendingDeletion: false,
+  pendingRenameFromPath: null,
+  pendingRenameFromSha: null,
+  isConflict: false,
+  updatedAt: DateTime(2026),
+);
+
+void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
+  test('excludes the matching persisted title from the editable body', () {
+    final note = _note(title: 'Project', body: '# Project\n\nBody text\n');
+
+    expect(NoteBodyEditorCodec.editableBody(note), 'Body text\n');
+  });
+
+  test('keeps a nonmatching heading rather than silently dropping it', () {
+    final note = _note(
+      title: 'Project',
+      body: '# Different title\n\nBody text\n',
+    );
+
+    expect(NoteBodyEditorCodec.editableBody(note), note.body);
+  });
+
+  test('exports AppFlowy to-do blocks as portable Markdown', () {
+    final editorState = EditorState(
+      document: markdownToDocument('- [ ] Ship the editor'),
+    );
+    addTearDown(editorState.dispose);
+
+    expect(
+      NoteBodyEditorCodec.export(editorState),
+      contains('- [ ] Ship the editor'),
+    );
+  });
+
+  test('warns for Markdown outside the supported rich-text subset', () {
+    expect(
+      MarkdownCompatibility.requiresRewriteWarning('[[Project plan]]'),
+      isTrue,
+    );
+    expect(
+      MarkdownCompatibility.requiresRewriteWarning('```dart\nprint(1);\n```'),
+      isTrue,
+    );
+    expect(
+      MarkdownCompatibility.requiresRewriteWarning('## Heading\n\n- [ ] Task'),
+      isFalse,
+    );
+  });
+}

@@ -39,6 +39,27 @@ Body text
       expect(parsed.body, raw);
     });
 
+    test('normalizes snippets to plain text', () {
+      const markdown = '''## **Project** update
+
+- [ ] Review [the plan](https://example.com/plan)
+> `Before` ~~Friday~~
+''';
+
+      expect(
+        MarkdownContract.plainText(markdown),
+        'Project update Review the plan Before Friday',
+      );
+
+      final parsed = MarkdownContract.parse('''---
+id: 01snippet
+snippet: "**Project** [plan](https://example.com)"
+---
+# A note
+''');
+      expect(parsed.snippet, 'Project plan');
+    });
+
     test('daily paths remain stable identities without frontmatter', () {
       final parsed = MarkdownContract.parse('# 2026-08-08\n');
       expect(
