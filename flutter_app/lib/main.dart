@@ -21,6 +21,9 @@ Future<void> main() async {
     platformRoute: WidgetsBinding.instance.platformDispatcher.defaultRouteName,
     savedRoute: await secureStorage.read(key: lastRouteStorageKey),
   );
+  final themeMode = themeModeFromStorage(
+    await secureStorage.read(key: themeModeStorageKey),
+  );
   await SyncScheduler.initialize();
   final database = AppDatabase.openLegacy(state);
   final repository = NoteRepository(
@@ -34,6 +37,9 @@ Future<void> main() async {
         appDatabaseProvider.overrideWithValue(database),
         noteRepositoryProvider.overrideWithValue(repository),
         secureStorageProvider.overrideWithValue(secureStorage),
+        themeModeControllerProvider.overrideWith(
+          (_) => ThemeModeController(themeMode),
+        ),
       ],
       child: SpecularApp(initialLocation: initialLocation),
     ),

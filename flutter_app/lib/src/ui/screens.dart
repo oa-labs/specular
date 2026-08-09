@@ -1044,39 +1044,36 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
                   ],
                   const SizedBox(height: 12),
                   Expanded(
-                    child: Column(
-                      children: [
-                        Expanded(
-                          child: AppFlowyEditor(
-                            editorState: _editorState!,
-                            autoFocus: true,
-                            editorStyle: EditorStyle.mobile(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 4,
-                              ),
-                              cursorColor: Theme.of(
-                                context,
-                              ).colorScheme.primary,
-                              textStyleConfiguration: TextStyleConfiguration(
-                                text: Theme.of(context).textTheme.bodyLarge!,
-                              ),
-                            ),
+                    // MobileToolbar reserves a keyboard-height spacer inside
+                    // this flex layout. On Android that repeatedly relayouts
+                    // the editor while IME insets animate, and can starve the
+                    // UI thread on a sufficiently large document. The V2
+                    // toolbar is AppFlowy's supported mobile integration: it
+                    // renders in an overlay and only reserves its fixed height
+                    // in the editor layout.
+                    child: MobileToolbarV2(
+                      editorState: _editorState!,
+                      toolbarItems: [
+                        headingMobileToolbarItem,
+                        textDecorationMobileToolbarItemV2,
+                        codeMobileToolbarItem,
+                        linkMobileToolbarItem,
+                        listMobileToolbarItem,
+                        todoListMobileToolbarItem,
+                        quoteMobileToolbarItem,
+                        dividerMobileToolbarItem,
+                      ],
+                      child: AppFlowyEditor(
+                        editorState: _editorState!,
+                        autoFocus: true,
+                        editorStyle: EditorStyle.mobile(
+                          padding: const EdgeInsets.symmetric(horizontal: 4),
+                          cursorColor: Theme.of(context).colorScheme.primary,
+                          textStyleConfiguration: TextStyleConfiguration(
+                            text: Theme.of(context).textTheme.bodyLarge!,
                           ),
                         ),
-                        MobileToolbar(
-                          editorState: _editorState!,
-                          toolbarItems: [
-                            headingMobileToolbarItem,
-                            textDecorationMobileToolbarItem,
-                            codeMobileToolbarItem,
-                            linkMobileToolbarItem,
-                            listMobileToolbarItem,
-                            todoListMobileToolbarItem,
-                            quoteMobileToolbarItem,
-                            dividerMobileToolbarItem,
-                          ],
-                        ),
-                      ],
+                      ),
                     ),
                   ),
                 ],
@@ -1432,6 +1429,14 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     }
   }
 
+  Future<void> _setDarkMode(bool value) async {
+    final mode = value ? ThemeMode.dark : ThemeMode.light;
+    ref.read(themeModeControllerProvider).setThemeMode(mode);
+    await ref
+        .read(secureStorageProvider)
+        .write(key: themeModeStorageKey, value: themeModeStorageValue(mode));
+  }
+
   Future<void> _chooseRepository() async {
     if (_loadingRepositories || _selectingRepository) return;
     final token = _token.text.trim();
@@ -1553,6 +1558,16 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         padding: const EdgeInsets.all(16),
         child: ListView(
           children: [
+            SwitchListTile(
+              value:
+                  ref.watch(themeModeControllerProvider).themeMode ==
+                  ThemeMode.dark,
+              onChanged: _setDarkMode,
+              secondary: const Icon(Icons.dark_mode),
+              title: const Text('Dark mode'),
+              subtitle: const Text('Turn off for light mode.'),
+            ),
+            const Divider(),
             TextField(
               controller: _token,
               obscureText: true,

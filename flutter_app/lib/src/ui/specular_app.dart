@@ -4,6 +4,7 @@ import 'package:appflowy_editor/appflowy_editor.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_riverpod/legacy.dart';
 import 'package:go_router/go_router.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
@@ -37,6 +38,9 @@ final voiceServiceProvider = Provider<VoiceService>(
 final aiSnippetServiceProvider = Provider<AiSnippetService>(
   (ref) => AiSnippetService(ref.watch(secureStorageProvider)),
 );
+final themeModeControllerProvider = ChangeNotifierProvider<ThemeModeController>(
+  (_) => ThemeModeController(ThemeMode.light),
+);
 final notesProvider = StreamProvider<List<Note>>(
   (ref) => ref.watch(noteRepositoryProvider).watchNotes(),
 );
@@ -55,6 +59,27 @@ final todosProvider = StreamProvider.family<List<TodoItem>, TodoFilter>(
 );
 
 const lastRouteStorageKey = 'last_route';
+const themeModeStorageKey = 'theme_mode';
+
+ThemeMode themeModeFromStorage(String? value) =>
+    value == 'dark' ? ThemeMode.dark : ThemeMode.light;
+
+String themeModeStorageValue(ThemeMode mode) =>
+    mode == ThemeMode.dark ? 'dark' : 'light';
+
+class ThemeModeController extends ChangeNotifier {
+  ThemeModeController(this._themeMode);
+
+  ThemeMode _themeMode;
+
+  ThemeMode get themeMode => _themeMode;
+
+  void setThemeMode(ThemeMode mode) {
+    if (_themeMode == mode) return;
+    _themeMode = mode;
+    notifyListeners();
+  }
+}
 
 /// Explicit launch destinations, such as an Android widget tap, take
 /// precedence over the page from the previous app session.
@@ -148,6 +173,7 @@ class _SpecularAppState extends ConsumerState<SpecularApp> {
   @override
   Widget build(BuildContext context) {
     const amber = Color(0xffd97706);
+    final themeMode = ref.watch(themeModeControllerProvider).themeMode;
     return MaterialApp.router(
       title: 'Specular',
       debugShowCheckedModeBanner: false,
@@ -171,26 +197,29 @@ class _SpecularAppState extends ConsumerState<SpecularApp> {
         ),
         useMaterial3: true,
       ),
+      themeMode: themeMode,
       routerConfig: _router,
     );
   }
 }
 
-/// Secondary screens can be opened directly by the Android widget, leaving no
-/// home route in the navigator stack. A system back gesture must still return
-/// the user to the app's home screen rather than closing the app or exposing a
-/// stale route beneath it.
+/// Secondary screens opened directly by the Android widget have no home route
+/// beneath them. Fall back to home only in that case; otherwise preserve the
+/// navigation history of the page that opened this screen.
 class _BackToHome extends StatelessWidget {
   const _BackToHome({required this.child});
 
   final Widget child;
 
   @override
-  Widget build(BuildContext context) => PopScope(
-    canPop: false,
-    onPopInvokedWithResult: (didPop, _) {
-      if (!didPop) context.go('/');
-    },
-    child: child,
-  );
+  Widget build(BuildContext context) {
+    final canPop = GoRouter.of(context).canPop();
+    return PopScope(
+      canPop: canPop,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) context.go('/');
+      },
+      child: child,
+    );
+  }
 }
