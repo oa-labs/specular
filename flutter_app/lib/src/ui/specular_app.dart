@@ -53,6 +53,10 @@ class SpecularApp extends ConsumerWidget {
         GoRoute(path: '/voice', builder: (_, _) => const VoiceCaptureScreen()),
         GoRoute(path: '/editor/new', builder: (_, _) => const EditorScreen()),
         GoRoute(
+          path: '/editor/todo',
+          builder: (_, _) => const EditorScreen(newTodo: true),
+        ),
+        GoRoute(
           path: '/note/:id',
           builder: (_, state) =>
               NoteDetailScreen(id: state.pathParameters['id']!),

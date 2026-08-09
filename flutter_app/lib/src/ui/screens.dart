@@ -5,85 +5,432 @@ import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
 import 'dart:io';
 
+import '../domain/markdown.dart';
 import '../domain/note.dart';
 import 'specular_app.dart';
 
-class NoteListScreen extends ConsumerWidget {
+enum NoteListSort { lastUpdated, alphabetical }
+
+/// Returns the top-level note folder displayed in the Kotlin app's home list.
+/// Files at the repository root, and internal asset folders, have no badge.
+String? noteFolderLabel(Note note) {
+  final separator = note.path.indexOf('/');
+  if (separator <= 0) return null;
+  final folder = note.path.substring(0, separator);
+  if (folder.toLowerCase() == 'assets' ||
+      folder.toLowerCase() == 'attachments') {
+    return null;
+  }
+  return folder;
+}
+
+List<String> noteFolders(Iterable<Note> notes) {
+  final folders = <String>{
+    for (final note in notes)
+      if (noteFolderLabel(note) case final folder?) folder,
+  };
+  return folders.toList()
+    ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+}
+
+/// Folders offered while creating a regular note. Daily and attachment
+/// directories are managed by their own flows and cannot be selected here.
+List<String> creationFolders(Iterable<Note> notes) => noteFolders(
+  notes,
+).where((folder) => folder.toLowerCase() != 'daily').toList();
+
+List<Note> sortAndFilterNotes(
+  Iterable<Note> notes, {
+  required NoteListSort sort,
+  required Set<String> deselectedFolders,
+}) {
+  final visible = notes
+      .where((note) => !deselectedFolders.contains(noteFolderLabel(note)))
+      .toList();
+  int compareText(Note a, Note b) {
+    final byTitle = a.title.toLowerCase().compareTo(b.title.toLowerCase());
+    return byTitle != 0 ? byTitle : a.path.compareTo(b.path);
+  }
+
+  visible.sort((a, b) {
+    if (a.isPinned != b.isPinned) return a.isPinned ? -1 : 1;
+    if (sort == NoteListSort.alphabetical) return compareText(a, b);
+    final byUpdated = b.updatedAt.compareTo(a.updatedAt);
+    return byUpdated != 0 ? byUpdated : compareText(a, b);
+  });
+  return visible;
+}
+
+class NoteListScreen extends ConsumerStatefulWidget {
   const NoteListScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) => Scaffold(
-    appBar: AppBar(
-      title: const Text('Specular'),
-      actions: [
-        IconButton(
-          onPressed: () => context.push('/search'),
-          icon: const Icon(Icons.search),
-        ),
-        IconButton(
-          onPressed: () => context.push('/todos'),
-          icon: const Icon(Icons.checklist),
-        ),
-        IconButton(
-          onPressed: () => context.push('/voice'),
-          icon: const Icon(Icons.mic),
-        ),
-        IconButton(
-          onPressed: () => context.push('/settings'),
-          icon: const Icon(Icons.settings),
-        ),
-      ],
-    ),
-    body: ref
-        .watch(notesProvider)
-        .when(
-          data: (notes) => notes.isEmpty
-              ? const Center(
-                  child: Text('No notes yet. Create one to get started.'),
-                )
-              : ListView.separated(
-                  itemCount: notes.length,
-                  separatorBuilder: (_, _) => const Divider(height: 1),
-                  itemBuilder: (_, index) => _NoteTile(note: notes[index]),
-                ),
-          error: (error, _) =>
-              Center(child: Text('Unable to load notes: $error')),
-          loading: () => const Center(child: CircularProgressIndicator()),
-        ),
-    floatingActionButton: FloatingActionButton(
-      onPressed: () => context.push('/editor/new'),
-      child: const Icon(Icons.add),
-    ),
-  );
+  ConsumerState<NoteListScreen> createState() => _NoteListScreenState();
 }
+
+class _NoteListScreenState extends ConsumerState<NoteListScreen> {
+  static const _deselectedFoldersKey = 'deselected_folders';
+  var _sort = NoteListSort.lastUpdated;
+  var _deselectedFolders = <String>{};
+  var _loadedPreferences = false;
+  var _createExpanded = false;
+  var _openingToday = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadPreferences();
+  }
+
+  Future<void> _loadPreferences() async {
+    final value = await ref
+        .read(secureStorageProvider)
+        .read(key: _deselectedFoldersKey);
+    if (!mounted) return;
+    setState(() {
+      _deselectedFolders =
+          value?.split('\u001f').where((it) => it.isNotEmpty).toSet() ?? {};
+      _loadedPreferences = true;
+    });
+  }
+
+  Future<void> _saveDeselectedFolders() => ref
+      .read(secureStorageProvider)
+      .write(
+        key: _deselectedFoldersKey,
+        value: _deselectedFolders.join('\u001f'),
+      );
+
+  void _toggleFolder(String folder) {
+    setState(() {
+      if (!_deselectedFolders.add(folder)) _deselectedFolders.remove(folder);
+    });
+    _saveDeselectedFolders();
+  }
+
+  void _showAllFolders() {
+    setState(() => _deselectedFolders = {});
+    _saveDeselectedFolders();
+  }
+
+  Future<void> _openToday() async {
+    if (_openingToday) return;
+    setState(() => _openingToday = true);
+    try {
+      final note = await ref.read(noteRepositoryProvider).getOrCreateToday();
+      if (mounted) context.push('/editor/${Uri.encodeComponent(note.id)}');
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Unable to open today\'s note: $error')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _openingToday = false);
+    }
+  }
+
+  void _showViewOptions(List<Note> notes) {
+    final folders = noteFolders(notes);
+    showModalBottomSheet<void>(
+      context: context,
+      builder: (sheetContext) => SafeArea(
+        child: StatefulBuilder(
+          builder: (context, setSheetState) => Padding(
+            padding: const EdgeInsets.fromLTRB(24, 16, 24, 28),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'View options',
+                  style: Theme.of(context).textTheme.headlineSmall,
+                ),
+                const SizedBox(height: 4),
+                const Text(
+                  'Sort and choose the folders shown on your home screen.',
+                ),
+                const SizedBox(height: 16),
+                Text('Sort', style: Theme.of(context).textTheme.titleSmall),
+                RadioGroup<NoteListSort>(
+                  groupValue: _sort,
+                  onChanged: (value) {
+                    if (value == null) return;
+                    setState(() => _sort = value);
+                    setSheetState(() {});
+                  },
+                  child: Column(
+                    children: const [
+                      RadioListTile<NoteListSort>(
+                        value: NoteListSort.lastUpdated,
+                        contentPadding: EdgeInsets.zero,
+                        title: Text('Last updated'),
+                      ),
+                      RadioListTile<NoteListSort>(
+                        value: NoteListSort.alphabetical,
+                        contentPadding: EdgeInsets.zero,
+                        title: Text('Title, A–Z'),
+                      ),
+                    ],
+                  ),
+                ),
+                if (folders.isNotEmpty) ...[
+                  const Divider(height: 24),
+                  Row(
+                    children: [
+                      const Icon(Icons.filter_list),
+                      const SizedBox(width: 12),
+                      Text(
+                        'Folders',
+                        style: Theme.of(context).textTheme.titleSmall,
+                      ),
+                      const Spacer(),
+                      if (_deselectedFolders.isNotEmpty)
+                        TextButton(
+                          onPressed: () {
+                            _showAllFolders();
+                            setSheetState(() {});
+                          },
+                          child: const Text('Show all'),
+                        ),
+                    ],
+                  ),
+                  for (final folder in folders)
+                    CheckboxListTile(
+                      value: !_deselectedFolders.contains(folder),
+                      contentPadding: EdgeInsets.zero,
+                      title: Text(folder),
+                      onChanged: (_) {
+                        _toggleFolder(folder);
+                        setSheetState(() {});
+                      },
+                    ),
+                ],
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final notesState = ref.watch(notesProvider);
+    final allNotes = notesState.asData?.value ?? const <Note>[];
+    final notes = sortAndFilterNotes(
+      allNotes,
+      sort: _sort,
+      deselectedFolders: _deselectedFolders,
+    );
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Specular'),
+        actions: [
+          IconButton(
+            tooltip: 'View to-dos',
+            onPressed: () => context.push('/todos'),
+            icon: const Icon(Icons.checklist),
+          ),
+          IconButton(
+            tooltip: 'Open today\'s note',
+            onPressed: _openingToday ? null : _openToday,
+            icon: _openingToday
+                ? const SizedBox.square(
+                    dimension: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.calendar_today),
+          ),
+          IconButton(
+            tooltip: 'Search notes',
+            onPressed: () => context.push('/search'),
+            icon: const Icon(Icons.search),
+          ),
+          PopupMenuButton<_HomeAction>(
+            tooltip: 'More actions',
+            onSelected: (action) {
+              switch (action) {
+                case _HomeAction.viewOptions:
+                  _showViewOptions(allNotes);
+                  break;
+                case _HomeAction.settings:
+                  context.push('/settings');
+                  break;
+              }
+            },
+            itemBuilder: (_) => [
+              PopupMenuItem(
+                value: _HomeAction.viewOptions,
+                child: Row(
+                  children: const [
+                    Icon(Icons.tune),
+                    SizedBox(width: 12),
+                    Text('View options'),
+                  ],
+                ),
+              ),
+              const PopupMenuDivider(),
+              PopupMenuItem(
+                value: _HomeAction.settings,
+                child: Row(
+                  children: const [
+                    Icon(Icons.settings),
+                    SizedBox(width: 12),
+                    Text('Settings'),
+                  ],
+                ),
+              ),
+            ],
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Badge(
+                isLabelVisible: _deselectedFolders.isNotEmpty,
+                child: const Icon(Icons.more_vert),
+              ),
+            ),
+          ),
+        ],
+      ),
+      body: !_loadedPreferences || notesState.isLoading
+          ? const Center(child: CircularProgressIndicator())
+          : notesState.when(
+              data: (_) => notes.isEmpty
+                  ? Center(
+                      child: Padding(
+                        padding: const EdgeInsets.all(24),
+                        child: Text(
+                          allNotes.isEmpty
+                              ? 'No notes yet. Tap the calendar to start today\'s note.'
+                              : 'No notes in selected folders. Open View options to change them.',
+                          textAlign: TextAlign.center,
+                        ),
+                      ),
+                    )
+                  : ListView.separated(
+                      padding: const EdgeInsets.only(bottom: 88),
+                      itemCount: notes.length,
+                      separatorBuilder: (_, _) => const Divider(height: 1),
+                      itemBuilder: (_, index) => _NoteTile(note: notes[index]),
+                    ),
+              error: (error, _) =>
+                  Center(child: Text('Unable to load notes: $error')),
+              loading: () => const Center(child: CircularProgressIndicator()),
+            ),
+      floatingActionButton: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.end,
+        children: [
+          if (_createExpanded) ...[
+            FloatingActionButton.extended(
+              heroTag: 'new-note',
+              onPressed: () {
+                setState(() => _createExpanded = false);
+                context.push('/editor/new');
+              },
+              icon: const Icon(Icons.add),
+              label: const Text('New note'),
+            ),
+            const SizedBox(height: 12),
+            FloatingActionButton.extended(
+              heroTag: 'new-todo',
+              onPressed: () {
+                setState(() => _createExpanded = false);
+                context.push('/editor/todo');
+              },
+              icon: const Icon(Icons.checklist),
+              label: const Text('New to-do'),
+            ),
+            const SizedBox(height: 12),
+            FloatingActionButton.extended(
+              heroTag: 'voice-capture',
+              onPressed: () {
+                setState(() => _createExpanded = false);
+                context.push('/voice');
+              },
+              icon: const Icon(Icons.mic),
+              label: const Text('Voice capture'),
+            ),
+            const SizedBox(height: 12),
+          ],
+          FloatingActionButton(
+            heroTag: 'create-menu',
+            tooltip: _createExpanded ? 'Close create menu' : 'Create new item',
+            onPressed: () => setState(() => _createExpanded = !_createExpanded),
+            child: Icon(_createExpanded ? Icons.close : Icons.add),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+enum _HomeAction { viewOptions, settings }
 
 class _NoteTile extends StatelessWidget {
   const _NoteTile({required this.note});
   final Note note;
 
   @override
-  Widget build(BuildContext context) => ListTile(
-    title: Row(
-      children: [
-        if (note.isPinned)
-          const Padding(
-            padding: EdgeInsets.only(right: 6),
-            child: Icon(Icons.push_pin, size: 16),
-          ),
-        Expanded(child: Text(note.title.isEmpty ? 'Untitled' : note.title)),
-      ],
+  Widget build(BuildContext context) {
+    final folder = noteFolderLabel(note);
+    final snippet = note.snippet?.trim().isNotEmpty == true
+        ? note.snippet!
+        : note.body.replaceAll(RegExp(r'^#.+$', multiLine: true), '').trim();
+    return ListTile(
+      title: Row(
+        children: [
+          if (note.isPinned)
+            const Padding(
+              padding: EdgeInsets.only(right: 6),
+              child: Icon(Icons.push_pin, size: 16),
+            ),
+          Expanded(child: Text(note.title.isEmpty ? 'Untitled' : note.title)),
+        ],
+      ),
+      subtitle: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (folder != null) ...[
+            _FolderBadge(label: folder),
+            const SizedBox(width: 8),
+          ],
+          if (snippet.isNotEmpty)
+            Expanded(
+              child: Text(
+                snippet,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+        ],
+      ),
+      trailing: note.isConflict
+          ? const Icon(Icons.warning_amber_rounded, color: Colors.orange)
+          : null,
+      onTap: () => context.push('/note/${Uri.encodeComponent(note.id)}'),
+    );
+  }
+}
+
+class _FolderBadge extends StatelessWidget {
+  const _FolderBadge({required this.label});
+  final String label;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    margin: const EdgeInsets.only(top: 2),
+    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+    decoration: BoxDecoration(
+      color: Theme.of(context).colorScheme.primary.withValues(alpha: .12),
+      borderRadius: BorderRadius.circular(8),
     ),
-    subtitle: Text(
-      note.snippet?.trim().isNotEmpty == true
-          ? note.snippet!
-          : note.body.replaceAll(RegExp(r'^#.+$', multiLine: true), '').trim(),
-      maxLines: 2,
-      overflow: TextOverflow.ellipsis,
+    child: Text(
+      label,
+      style: Theme.of(context).textTheme.labelMedium?.copyWith(
+        color: Theme.of(context).colorScheme.primary,
+      ),
     ),
-    trailing: note.isConflict
-        ? const Icon(Icons.warning_amber_rounded, color: Colors.orange)
-        : null,
-    onTap: () => context.push('/note/${Uri.encodeComponent(note.id)}'),
   );
 }
 
@@ -92,54 +439,61 @@ class NoteDetailScreen extends ConsumerWidget {
   final String id;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) => FutureBuilder<Note?>(
-    future: ref.read(noteRepositoryProvider).get(id),
-    builder: (context, snapshot) {
-      final note = snapshot.data;
-      if (!snapshot.hasData)
-        return const Scaffold(body: Center(child: CircularProgressIndicator()));
-      if (note == null)
-        return const Scaffold(body: Center(child: Text('Note not found')));
-      return Scaffold(
-        appBar: AppBar(
-          actions: [
-            IconButton(
-              tooltip: 'Generate AI snippet',
-              onPressed: () => _generateSnippet(context, ref, note),
-              icon: const Icon(Icons.auto_awesome),
-            ),
-            IconButton(
-              onPressed: () =>
-                  context.push('/editor/${Uri.encodeComponent(note.id)}'),
-              icon: const Icon(Icons.edit),
-            ),
-            PopupMenuButton<_NoteAction>(
-              onSelected: (action) {
-                switch (action) {
-                  case _NoteAction.rename:
-                    _rename(context, ref, note);
-                    break;
-                  case _NoteAction.delete:
-                    _delete(context, ref, note);
-                    break;
-                }
-              },
-              itemBuilder: (_) => const [
-                PopupMenuItem(value: _NoteAction.rename, child: Text('Rename')),
-                PopupMenuItem(value: _NoteAction.delete, child: Text('Delete')),
-              ],
-            ),
-          ],
-        ),
-        body: Markdown(
-          data: note.body,
-          padding: const EdgeInsets.all(16),
-          imageBuilder: (uri, title, alt) =>
-              _AttachmentImage(notePath: note.path, uri: uri),
-        ),
-      );
-    },
-  );
+  Widget build(BuildContext context, WidgetRef ref) {
+    // Keep this preview in sync after a checkbox mutates its source note.
+    ref.watch(notesProvider);
+    return FutureBuilder<Note?>(
+      future: ref.read(noteRepositoryProvider).get(id),
+      builder: (context, snapshot) {
+        final note = snapshot.data;
+        if (!snapshot.hasData)
+          return const Scaffold(
+            body: Center(child: CircularProgressIndicator()),
+          );
+        if (note == null)
+          return const Scaffold(body: Center(child: Text('Note not found')));
+        return Scaffold(
+          appBar: AppBar(
+            actions: [
+              IconButton(
+                tooltip: 'Generate AI snippet',
+                onPressed: () => _generateSnippet(context, ref, note),
+                icon: const Icon(Icons.auto_awesome),
+              ),
+              IconButton(
+                onPressed: () =>
+                    context.push('/editor/${Uri.encodeComponent(note.id)}'),
+                icon: const Icon(Icons.edit),
+              ),
+              PopupMenuButton<_NoteAction>(
+                onSelected: (action) {
+                  switch (action) {
+                    case _NoteAction.rename:
+                      _rename(context, ref, note);
+                      break;
+                    case _NoteAction.delete:
+                      _delete(context, ref, note);
+                      break;
+                  }
+                },
+                itemBuilder: (_) => const [
+                  PopupMenuItem(
+                    value: _NoteAction.rename,
+                    child: Text('Rename'),
+                  ),
+                  PopupMenuItem(
+                    value: _NoteAction.delete,
+                    child: Text('Delete'),
+                  ),
+                ],
+              ),
+            ],
+          ),
+          body: _NotePreviewBody(note: note),
+        );
+      },
+    );
+  }
 
   static Future<void> _generateSnippet(
     BuildContext context,
@@ -242,6 +596,43 @@ class NoteDetailScreen extends ConsumerWidget {
   }
 }
 
+class _NotePreviewBody extends ConsumerWidget {
+  const _NotePreviewBody({required this.note});
+  final Note note;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    var taskIndex = 0;
+    return Markdown(
+      data: note.body,
+      padding: const EdgeInsets.all(16),
+      imageBuilder: (uri, title, alt) =>
+          _AttachmentImage(notePath: note.path, uri: uri),
+      checkboxBuilder: (checked) {
+        final index = taskIndex++;
+        return Checkbox(
+          value: checked,
+          materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          visualDensity: VisualDensity.compact,
+          onChanged: (_) => _toggleTodo(ref, note, index),
+        );
+      },
+    );
+  }
+
+  Future<void> _toggleTodo(WidgetRef ref, Note displayed, int taskIndex) async {
+    final repository = ref.read(noteRepositoryProvider);
+    final current = await repository.get(displayed.id);
+    if (current == null) return;
+    await repository.save(
+      current,
+      title: current.title,
+      body: TodoMarkdown.toggleAt(current.body, taskIndex),
+    );
+    ref.invalidate(notesProvider);
+  }
+}
+
 enum _NoteAction { rename, delete }
 
 class _AttachmentImage extends ConsumerWidget {
@@ -273,19 +664,22 @@ class _AttachmentImage extends ConsumerWidget {
 }
 
 class EditorScreen extends ConsumerStatefulWidget {
-  const EditorScreen({super.key, this.id});
+  const EditorScreen({super.key, this.id, this.newTodo = false});
   final String? id;
+  final bool newTodo;
 
   @override
   ConsumerState<EditorScreen> createState() => _EditorScreenState();
 }
 
 class _EditorScreenState extends ConsumerState<EditorScreen> {
+  static const _inboxFolderOption = '__specular_inbox__';
   final _title = TextEditingController();
   final _body = TextEditingController();
   Note? _note;
   var _loading = true;
   var _saving = false;
+  String? _selectedFolder;
   final _images = ImagePicker();
 
   @override
@@ -299,6 +693,9 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
       _note = await ref.read(noteRepositoryProvider).get(widget.id!);
       _title.text = _note?.title ?? '';
       _body.text = _note?.body ?? '';
+    } else if (widget.newTodo) {
+      _title.text = 'New to-do';
+      _body.text = '- [ ] ';
     }
     if (mounted) setState(() => _loading = false);
   }
@@ -307,7 +704,11 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
     setState(() => _saving = true);
     final repo = ref.read(noteRepositoryProvider);
     final saved = _note == null
-        ? await repo.create(title: _title.text, body: _body.text)
+        ? await repo.create(
+            title: _title.text,
+            body: _body.text,
+            folder: _selectedFolder,
+          )
         : await repo.save(_note!, title: _title.text, body: _body.text);
     if (mounted) context.go('/note/${Uri.encodeComponent(saved.id)}');
   }
@@ -337,54 +738,99 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
   }
 
   @override
-  Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(
-      title: Text(_note == null ? 'New note' : 'Edit note'),
-      actions: [
-        IconButton(
-          onPressed: () => _addImage(ImageSource.camera),
-          icon: const Icon(Icons.photo_camera),
+  Widget build(BuildContext context) {
+    final folders = creationFolders(
+      ref.watch(notesProvider).asData?.value ?? const <Note>[],
+    );
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(
+          _note == null
+              ? (widget.newTodo ? 'New to-do' : 'New note')
+              : 'Edit note',
         ),
-        IconButton(
-          onPressed: () => _addImage(ImageSource.gallery),
-          icon: const Icon(Icons.photo_library),
-        ),
-        IconButton(
-          onPressed: _saving ? null : _save,
-          icon: _saving
-              ? const CircularProgressIndicator()
-              : const Icon(Icons.done),
-        ),
-      ],
-    ),
-    body: _loading
-        ? const Center(child: CircularProgressIndicator())
-        : Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              children: [
-                TextField(
-                  controller: _title,
-                  decoration: const InputDecoration(labelText: 'Title'),
-                ),
-                const SizedBox(height: 12),
-                Expanded(
-                  child: TextField(
-                    controller: _body,
-                    expands: true,
-                    maxLines: null,
-                    textAlignVertical: TextAlignVertical.top,
-                    decoration: const InputDecoration(
-                      labelText: 'Markdown',
-                      alignLabelWithHint: true,
-                      border: OutlineInputBorder(),
+        actions: [
+          IconButton(
+            onPressed: () => _addImage(ImageSource.camera),
+            icon: const Icon(Icons.photo_camera),
+          ),
+          IconButton(
+            onPressed: () => _addImage(ImageSource.gallery),
+            icon: const Icon(Icons.photo_library),
+          ),
+          IconButton(
+            onPressed: _saving ? null : _save,
+            icon: _saving
+                ? const CircularProgressIndicator()
+                : const Icon(Icons.done),
+          ),
+        ],
+      ),
+      body: _loading
+          ? const Center(child: CircularProgressIndicator())
+          : Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                children: [
+                  TextField(
+                    controller: _title,
+                    decoration: const InputDecoration(labelText: 'Title'),
+                  ),
+                  if (_note == null && !widget.newTodo)
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: PopupMenuButton<String>(
+                        tooltip: 'Choose note folder',
+                        initialValue: _selectedFolder ?? _inboxFolderOption,
+                        onSelected: (folder) => setState(
+                          () => _selectedFolder = folder == _inboxFolderOption
+                              ? null
+                              : folder,
+                        ),
+                        itemBuilder: (_) => [
+                          const PopupMenuItem<String>(
+                            value: _inboxFolderOption,
+                            child: Text('Inbox'),
+                          ),
+                          for (final folder in folders)
+                            PopupMenuItem<String>(
+                              value: folder,
+                              child: Text(folder),
+                            ),
+                        ],
+                        child: Padding(
+                          padding: const EdgeInsets.only(top: 6),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Icon(Icons.folder_outlined),
+                              const SizedBox(width: 8),
+                              Text('Save to: ${_selectedFolder ?? 'Inbox'}'),
+                              const Icon(Icons.arrow_drop_down),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  const SizedBox(height: 12),
+                  Expanded(
+                    child: TextField(
+                      controller: _body,
+                      expands: true,
+                      maxLines: null,
+                      textAlignVertical: TextAlignVertical.top,
+                      decoration: const InputDecoration(
+                        labelText: 'Markdown',
+                        alignLabelWithHint: true,
+                        border: OutlineInputBorder(),
+                      ),
                     ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
-          ),
-  );
+    );
+  }
 }
 
 class SearchScreen extends ConsumerStatefulWidget {
@@ -456,21 +902,28 @@ class _TodoRow extends ConsumerWidget {
           ),
         ),
         Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              MarkdownBody(
-                data: todo.text,
-                styleSheet: MarkdownStyleSheet.fromTheme(
-                  Theme.of(context),
-                ).copyWith(p: Theme.of(context).textTheme.bodyLarge),
+          child: InkWell(
+            onTap: () =>
+                context.push('/note/${Uri.encodeComponent(todo.noteId)}'),
+            child: Padding(
+              padding: const EdgeInsets.only(bottom: 2),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  MarkdownBody(
+                    data: todo.text,
+                    styleSheet: MarkdownStyleSheet.fromTheme(
+                      Theme.of(context),
+                    ).copyWith(p: Theme.of(context).textTheme.bodyLarge),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    todo.noteTitle,
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ],
               ),
-              const SizedBox(height: 2),
-              Text(
-                todo.noteTitle,
-                style: Theme.of(context).textTheme.bodySmall,
-              ),
-            ],
+            ),
           ),
         ),
       ],
