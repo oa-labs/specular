@@ -134,6 +134,19 @@ class _NoteListScreenState extends ConsumerState<NoteListScreen> {
     }
   }
 
+  Future<void> _refresh() async {
+    final result = await ref.read(syncEngineProvider).sync();
+    if (!mounted) return;
+
+    // The database watch normally updates the list after a pull. Invalidating
+    // also makes a completed refresh visibly re-check the stream when the
+    // remote contained no changes.
+    ref.invalidate(notesProvider);
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(result.message)));
+  }
+
   void _showViewOptions(List<Note> notes) {
     final folders = noteFolders(notes);
     showModalBottomSheet<void>(
@@ -306,28 +319,26 @@ class _NoteListScreenState extends ConsumerState<NoteListScreen> {
       ),
       body: !_loadedPreferences || notesState.isLoading
           ? const Center(child: CircularProgressIndicator())
-          : notesState.when(
-              data: (_) => notes.isEmpty
-                  ? Center(
-                      child: Padding(
-                        padding: const EdgeInsets.all(24),
-                        child: Text(
-                          allNotes.isEmpty
-                              ? 'No notes yet. Tap the calendar to start today\'s note.'
-                              : 'No notes in selected folders. Open View options to change them.',
-                          textAlign: TextAlign.center,
-                        ),
+          : RefreshIndicator(
+              onRefresh: _refresh,
+              child: notesState.when(
+                data: (_) => notes.isEmpty
+                    ? _RefreshableMessage(
+                        allNotes.isEmpty
+                            ? 'No notes yet. Tap the calendar to start today\'s note.'
+                            : 'No notes in selected folders. Open View options to change them.',
+                      )
+                    : ListView.separated(
+                        physics: const AlwaysScrollableScrollPhysics(),
+                        padding: const EdgeInsets.only(bottom: 88),
+                        itemCount: notes.length,
+                        separatorBuilder: (_, _) => const Divider(height: 1),
+                        itemBuilder: (_, index) => _NoteTile(note: notes[index]),
                       ),
-                    )
-                  : ListView.separated(
-                      padding: const EdgeInsets.only(bottom: 88),
-                      itemCount: notes.length,
-                      separatorBuilder: (_, _) => const Divider(height: 1),
-                      itemBuilder: (_, index) => _NoteTile(note: notes[index]),
-                    ),
-              error: (error, _) =>
-                  Center(child: Text('Unable to load notes: $error')),
-              loading: () => const Center(child: CircularProgressIndicator()),
+                error: (error, _) =>
+                    _RefreshableMessage('Unable to load notes: $error'),
+                loading: () => const Center(child: CircularProgressIndicator()),
+              ),
             ),
       floatingActionButton: Column(
         mainAxisSize: MainAxisSize.min,
@@ -378,6 +389,30 @@ class _NoteListScreenState extends ConsumerState<NoteListScreen> {
 }
 
 enum _HomeAction { viewOptions, settings }
+
+class _RefreshableMessage extends StatelessWidget {
+  const _RefreshableMessage(this.message);
+
+  final String message;
+
+  @override
+  Widget build(BuildContext context) => LayoutBuilder(
+    builder: (context, constraints) => ListView(
+      physics: const AlwaysScrollableScrollPhysics(),
+      children: [
+        SizedBox(
+          height: constraints.maxHeight,
+          child: Center(
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: Text(message, textAlign: TextAlign.center),
+            ),
+          ),
+        ),
+      ],
+    ),
+  );
+}
 
 class _NoteTile extends StatelessWidget {
   const _NoteTile({required this.note});
