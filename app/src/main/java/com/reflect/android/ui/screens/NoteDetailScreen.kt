@@ -7,6 +7,7 @@ import android.text.style.URLSpan
 import android.util.TypedValue
 import android.widget.TextView
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -23,18 +24,22 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavController
 import coil.compose.AsyncImage
 import io.noties.markwon.Markwon
+import io.noties.markwon.AbstractMarkwonPlugin
+import io.noties.markwon.core.MarkwonTheme
 import io.noties.markwon.ext.tasklist.TaskListPlugin
 import io.noties.markwon.ext.tasklist.TaskListSpan
 import com.specular.android.ui.navigation.Screen
 import com.specular.android.data.local.countTodoItems
 import com.specular.android.data.local.NoteLinkPathResolver
 import android.view.View
+import kotlin.math.roundToInt
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -71,9 +76,18 @@ fun NoteDetailScreen(
     }
 
     Scaffold(
+        containerColor = MaterialTheme.colorScheme.background,
         topBar = {
             TopAppBar(
-                title = { Text(note?.title ?: "…") },
+                title = {
+                    Text(
+                        note?.title ?: "…",
+                        style = MaterialTheme.typography.titleLarge,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(end = 8.dp)
+                    )
+                },
                 navigationIcon = {
                     IconButton(onClick = { navController.popBackStack() }) { Icon(Icons.Default.ArrowBack, "Back") }
                 },
@@ -134,28 +148,47 @@ fun NoteDetailScreen(
             // Read the token so Compose tracks it as a dependency of the rendered note.
             @Suppress("UNUSED_VARIABLE")
             val attachmentRefresh = attachmentChangeToken
-            Column(modifier = Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()).padding(16.dp)) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(padding)
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = 20.dp, vertical = 16.dp)
+            ) {
                 val isRegenerating by vm.isRegenerating.collectAsState()
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
+                Surface(
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+                    shape = RoundedCornerShape(16.dp)
                 ) {
-                    Text(
-                        text = n.snippet ?: "No snippet available",
-                        fontStyle = FontStyle.Italic,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.weight(1f)
-                    )
-                    if (isRegenerating) {
-                        CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
-                    } else {
-                        IconButton(onClick = { vm.regenerateSnippet(id) }) {
-                            Icon(Icons.Default.Refresh, contentDescription = "Regenerate snippet")
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                "Summary",
+                                style = MaterialTheme.typography.labelLarge,
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.weight(1f)
+                            )
+                            if (isRegenerating) {
+                                CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                            } else {
+                                IconButton(onClick = { vm.regenerateSnippet(id) }, modifier = Modifier.size(32.dp)) {
+                                    Icon(Icons.Default.Refresh, contentDescription = "Regenerate summary", modifier = Modifier.size(20.dp))
+                                }
+                            }
                         }
+                        Text(
+                            text = n.snippet ?: "No summary available",
+                            style = MaterialTheme.typography.bodyLarge,
+                            fontStyle = FontStyle.Italic,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(top = 4.dp)
+                        )
                     }
                 }
-                Spacer(Modifier.height(8.dp))
+                Spacer(Modifier.height(20.dp))
                 if (n.isConflict) {
                     Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)) {
                         Text("Conflict — this note has a conflicting copy. Resolve in editor.", modifier = Modifier.padding(12.dp))
@@ -287,19 +320,24 @@ internal fun MarkdownText(
     onBodyClick: (() -> Unit)? = null
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
-    val markwon = remember(context) {
+    val textColor = MaterialTheme.colorScheme.onBackground.toArgb()
+    val accentColor = MaterialTheme.colorScheme.primary.toArgb()
+    val dividerColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.24f).toArgb()
+    val markwon = remember(context, accentColor, dividerColor) {
         Markwon.builder(context)
+            .usePlugin(PreviewMarkdownThemePlugin(context, accentColor, dividerColor))
             .usePlugin(TaskListPlugin.create(context))
             .build()
     }
-    val textColor = MaterialTheme.colorScheme.onBackground.toArgb()
 
     AndroidView(
         modifier = Modifier.fillMaxWidth(),
         factory = {
             TextView(it).apply {
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
                 setTextColor(textColor)
+                setLineSpacing(4f * resources.displayMetrics.density, 1f)
+                includeFontPadding = false
                 movementMethod = LinkMovementMethod.getInstance()
                 linksClickable = true
                 setPadding(0, 0, 0, 0)
@@ -360,4 +398,26 @@ internal fun MarkdownText(
                 }
         }
     )
+}
+
+/** Keeps Markdown headings and lists compact enough for an in-app reading view. */
+private class PreviewMarkdownThemePlugin(
+    context: android.content.Context,
+    private val accentColor: Int,
+    private val dividerColor: Int
+) : AbstractMarkwonPlugin() {
+    private val density = context.resources.displayMetrics.density
+
+    override fun configureTheme(builder: MarkwonTheme.Builder) {
+        builder
+            .headingTextSizeMultipliers(floatArrayOf(1.45f, 1.3f, 1.18f, 1.08f, 1f, 1f))
+            .headingBreakHeight(0)
+            .headingBreakColor(dividerColor)
+            .thematicBreakHeight((1f * density).roundToInt())
+            .thematicBreakColor(dividerColor)
+            .blockMargin((8f * density).roundToInt())
+            .bulletWidth((5f * density).roundToInt())
+            .bulletListItemStrokeWidth((1f * density).roundToInt())
+            .listItemColor(accentColor)
+    }
 }
