@@ -7,9 +7,11 @@ import 'package:image_picker/image_picker.dart';
 import 'dart:io';
 import 'package:appflowy_editor/appflowy_editor.dart';
 
+import '../ai/ai_snippet_service.dart';
 import '../data/note_repository.dart';
 import '../domain/markdown.dart';
 import '../domain/note.dart';
+import '../sync/github_sync.dart';
 import 'note_body_editor.dart';
 import 'specular_app.dart';
 
@@ -79,6 +81,7 @@ class _NoteListScreenState extends ConsumerState<NoteListScreen> {
   var _loadedPreferences = false;
   var _createExpanded = false;
   var _openingToday = false;
+  final _snippetJobs = <String>{};
 
   @override
   void initState() {
@@ -145,6 +148,46 @@ class _NoteListScreenState extends ConsumerState<NoteListScreen> {
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
       ..showSnackBar(SnackBar(content: Text(result.message)));
+  }
+
+  Future<void> _generateMissingSnippets(List<Note> notes) async {
+    final generator = ref.read(aiSnippetServiceProvider);
+    if (!await generator.isConfigured()) return;
+    for (final note in notes) {
+      if (note.isPendingDeletion ||
+          note.snippet?.trim().isNotEmpty == true ||
+          !_snippetJobs.add(note.id)) {
+        continue;
+      }
+      unawaited(_generateSnippet(note, generator));
+    }
+  }
+
+  Future<void> _generateSnippet(Note note, AiSnippetService generator) async {
+    try {
+      // Always use the current version so an edit or pull that happened after
+      // this job was queued cannot have its snippet written to stale content.
+      final current = await ref.read(noteRepositoryProvider).get(note.id);
+      if (current == null ||
+          current.isPendingDeletion ||
+          current.snippet?.trim().isNotEmpty == true) {
+        return;
+      }
+      final snippet = await generator.generate(current.body);
+      final latest = await ref.read(noteRepositoryProvider).get(note.id);
+      if (latest == null ||
+          latest.isPendingDeletion ||
+          latest.snippet?.trim().isNotEmpty == true) {
+        return;
+      }
+      await ref.read(noteRepositoryProvider).updateSnippet(latest, snippet);
+      ref.invalidate(notesProvider);
+    } catch (_) {
+      // A missing provider configuration or a transient API error should not
+      // interrupt the note list. The note remains eligible for a later retry.
+    } finally {
+      _snippetJobs.remove(note.id);
+    }
   }
 
   void _showViewOptions(List<Note> notes) {
@@ -243,6 +286,7 @@ class _NoteListScreenState extends ConsumerState<NoteListScreen> {
   Widget build(BuildContext context) {
     final notesState = ref.watch(notesProvider);
     final allNotes = notesState.asData?.value ?? const <Note>[];
+    if (notesState.hasValue) unawaited(_generateMissingSnippets(allNotes));
     final notes = sortAndFilterNotes(
       allNotes,
       sort: _sort,
@@ -333,7 +377,8 @@ class _NoteListScreenState extends ConsumerState<NoteListScreen> {
                         padding: const EdgeInsets.only(bottom: 88),
                         itemCount: notes.length,
                         separatorBuilder: (_, _) => const Divider(height: 1),
-                        itemBuilder: (_, index) => _NoteTile(note: notes[index]),
+                        itemBuilder: (_, index) =>
+                            _NoteTile(note: notes[index]),
                       ),
                 error: (error, _) =>
                     _RefreshableMessage('Unable to load notes: $error'),
@@ -509,6 +554,9 @@ class NoteDetailScreen extends ConsumerWidget {
               PopupMenuButton<_NoteAction>(
                 onSelected: (action) {
                   switch (action) {
+                    case _NoteAction.pin:
+                      _setPinned(ref, note, !note.isPinned);
+                      break;
                     case _NoteAction.rename:
                       _rename(context, ref, note);
                       break;
@@ -517,12 +565,16 @@ class NoteDetailScreen extends ConsumerWidget {
                       break;
                   }
                 },
-                itemBuilder: (_) => const [
+                itemBuilder: (_) => [
                   PopupMenuItem(
+                    value: _NoteAction.pin,
+                    child: Text(note.isPinned ? 'Unpin' : 'Pin'),
+                  ),
+                  const PopupMenuItem(
                     value: _NoteAction.rename,
                     child: Text('Rename'),
                   ),
-                  PopupMenuItem(
+                  const PopupMenuItem(
                     value: _NoteAction.delete,
                     child: Text('Delete'),
                   ),
@@ -560,6 +612,15 @@ class NoteDetailScreen extends ConsumerWidget {
           context,
         ).showSnackBar(SnackBar(content: Text('$error')));
     }
+  }
+
+  static Future<void> _setPinned(
+    WidgetRef ref,
+    Note note,
+    bool isPinned,
+  ) async {
+    await ref.read(noteRepositoryProvider).setPinned(note, isPinned);
+    ref.invalidate(notesProvider);
   }
 
   static Future<void> _rename(
@@ -714,7 +775,7 @@ class _NotePreviewBody extends ConsumerWidget {
   }
 }
 
-enum _NoteAction { rename, delete }
+enum _NoteAction { pin, rename, delete }
 
 class _AttachmentImage extends ConsumerWidget {
   const _AttachmentImage({required this.notePath, required this.uri});
@@ -1277,6 +1338,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   var _usePreviewKey = true;
   var _loaded = false;
   var _saving = false;
+  var _loadingRepositories = false;
+  var _selectingRepository = false;
+  String? _repositoryError;
 
   Future<void> _load() async {
     if (_loaded) return;
@@ -1341,6 +1405,104 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     }
   }
 
+  Future<void> _chooseRepository() async {
+    if (_loadingRepositories || _selectingRepository) return;
+    final token = _token.text.trim();
+    if (token.isEmpty) {
+      setState(() {
+        _repositoryError = 'Enter a GitHub personal access token first.';
+      });
+      return;
+    }
+    setState(() {
+      _loadingRepositories = true;
+      _repositoryError = null;
+    });
+    try {
+      final repositories = await ref
+          .read(syncEngineProvider)
+          .listRepositories(token);
+      if (!mounted) return;
+      if (repositories.isEmpty) {
+        setState(() {
+          _repositoryError =
+              'No accessible repositories were found for this token.';
+        });
+        return;
+      }
+      final selected = await showModalBottomSheet<GitHubRepository>(
+        context: context,
+        isScrollControlled: true,
+        builder: (sheetContext) => SafeArea(
+          child: ConstrainedBox(
+            constraints: BoxConstraints(
+              maxHeight: MediaQuery.sizeOf(sheetContext).height * .8,
+            ),
+            child: Column(
+              children: [
+                const Padding(
+                  padding: EdgeInsets.fromLTRB(24, 20, 24, 8),
+                  child: Text('Choose a GitHub repository'),
+                ),
+                const Padding(
+                  padding: EdgeInsets.fromLTRB(24, 0, 24, 12),
+                  child: Text(
+                    'Only repositories containing Markdown notes can be selected.',
+                  ),
+                ),
+                Expanded(
+                  child: ListView.builder(
+                    itemCount: repositories.length,
+                    itemBuilder: (_, index) {
+                      final repository = repositories[index];
+                      return ListTile(
+                        title: Text(repository.fullName),
+                        subtitle: Text(
+                          '${repository.isPrivate ? 'Private' : 'Public'} · ${repository.defaultBranch}',
+                        ),
+                        onTap: () => Navigator.pop(sheetContext, repository),
+                      );
+                    },
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+      if (selected != null) await _selectRepository(token, selected);
+    } catch (error) {
+      if (mounted) setState(() => _repositoryError = '$error');
+    } finally {
+      if (mounted) setState(() => _loadingRepositories = false);
+    }
+  }
+
+  Future<void> _selectRepository(
+    String token,
+    GitHubRepository repository,
+  ) async {
+    setState(() {
+      _selectingRepository = true;
+      _repositoryError = null;
+    });
+    try {
+      await ref.read(syncEngineProvider).validateRepository(token, repository);
+      if (!mounted) return;
+      setState(() {
+        _owner.text = repository.owner;
+        _repo.text = repository.name;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('${repository.fullName} is ready to connect.')),
+      );
+    } catch (error) {
+      if (mounted) setState(() => _repositoryError = '$error');
+    } finally {
+      if (mounted) setState(() => _selectingRepository = false);
+    }
+  }
+
   @override
   void dispose() {
     _token.dispose();
@@ -1371,6 +1533,33 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 labelText: 'GitHub personal access token',
               ),
             ),
+            const SizedBox(height: 8),
+            OutlinedButton.icon(
+              onPressed: _loadingRepositories || _selectingRepository
+                  ? null
+                  : _chooseRepository,
+              icon: _loadingRepositories || _selectingRepository
+                  ? const SizedBox.square(
+                      dimension: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.folder_open),
+              label: Text(
+                _selectingRepository
+                    ? 'Validating repository…'
+                    : (_loadingRepositories
+                          ? 'Loading repositories…'
+                          : 'Choose repository'),
+              ),
+            ),
+            if (_repositoryError != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: Text(
+                  _repositoryError!,
+                  style: TextStyle(color: Theme.of(context).colorScheme.error),
+                ),
+              ),
             TextField(
               controller: _owner,
               decoration: const InputDecoration(labelText: 'Repository owner'),

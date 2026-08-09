@@ -38,17 +38,46 @@ class GitHubSettings {
   }
 }
 
+class GitHubRepository {
+  const GitHubRepository({
+    required this.id,
+    required this.owner,
+    required this.name,
+    required this.fullName,
+    required this.defaultBranch,
+    required this.isPrivate,
+  });
+
+  final int id;
+  final String owner;
+  final String name;
+  final String fullName;
+  final String defaultBranch;
+  final bool isPrivate;
+}
+
+class GitHubRepositoryException implements Exception {
+  const GitHubRepositoryException(this.message);
+
+  final String message;
+
+  @override
+  String toString() => message;
+}
+
 class GitHubSyncEngine {
-  GitHubSyncEngine(this._repository, this._storage)
-    : _dio = Dio(
-        BaseOptions(
-          baseUrl: 'https://api.github.com',
-          headers: const {
-            'Accept': 'application/vnd.github+json',
-            'X-GitHub-Api-Version': '2022-11-28',
-          },
-        ),
-      );
+  GitHubSyncEngine(this._repository, this._storage, {Dio? dio})
+    : _dio =
+          dio ??
+          Dio(
+            BaseOptions(
+              baseUrl: 'https://api.github.com',
+              headers: const {
+                'Accept': 'application/vnd.github+json',
+                'X-GitHub-Api-Version': '2022-11-28',
+              },
+            ),
+          );
 
   final NoteRepository _repository;
   final FlutterSecureStorage _storage;
@@ -78,6 +107,93 @@ class GitHubSyncEngine {
   Options _options(GitHubSettings settings) =>
       Options(headers: {'Authorization': 'Bearer ${settings.token}'});
 
+  /// Lists repositories the supplied token can access for the Settings picker.
+  Future<List<GitHubRepository>> listRepositories(String token) async {
+    final normalizedToken = token.trim();
+    if (normalizedToken.isEmpty) {
+      throw const GitHubRepositoryException(
+        'Enter a GitHub personal access token first.',
+      );
+    }
+    try {
+      final repositories = <GitHubRepository>[];
+      for (var page = 1; ; page++) {
+        final response = await _dio.get<List<dynamic>>(
+          '/user/repos',
+          queryParameters: {
+            'affiliation': 'owner,collaborator,organization_member',
+            'per_page': 100,
+            'page': page,
+            'sort': 'updated',
+          },
+          options: Options(
+            headers: {'Authorization': 'Bearer $normalizedToken'},
+          ),
+        );
+        final rows = response.data ?? const <dynamic>[];
+        repositories.addAll(
+          rows.whereType<Map>().map((row) {
+            final owner = Map<String, dynamic>.from(
+              row['owner'] as Map? ?? const <String, dynamic>{},
+            );
+            return GitHubRepository(
+              id: row['id'] as int,
+              owner: owner['login'] as String,
+              name: row['name'] as String,
+              fullName: row['full_name'] as String,
+              defaultBranch: row['default_branch'] as String? ?? 'main',
+              isPrivate: row['private'] as bool? ?? true,
+            );
+          }),
+        );
+        if (rows.length < 100) return repositories;
+      }
+    } on DioException catch (error) {
+      throw GitHubRepositoryException(_friendlyError(error));
+    }
+  }
+
+  /// Confirms that a selected repository contains Markdown before saving it.
+  Future<void> validateRepository(
+    String token,
+    GitHubRepository repository,
+  ) async {
+    final normalizedToken = token.trim();
+    if (normalizedToken.isEmpty) {
+      throw const GitHubRepositoryException(
+        'Enter a GitHub personal access token first.',
+      );
+    }
+    final settings = GitHubSettings(
+      token: normalizedToken,
+      owner: repository.owner,
+      repo: repository.name,
+    );
+    try {
+      final ref = await _dio.get<Map<String, dynamic>>(
+        '/repos/${repository.owner}/${repository.name}/git/ref/heads/${Uri.encodeComponent(repository.defaultBranch)}',
+        options: _options(settings),
+      );
+      final sha =
+          (ref.data!['object'] as Map<String, dynamic>)['sha'] as String;
+      final tree = await _dio.get<Map<String, dynamic>>(
+        '/repos/${repository.owner}/${repository.name}/git/trees/$sha',
+        queryParameters: const {'recursive': 1},
+        options: _options(settings),
+      );
+      final entries = List<Map<String, dynamic>>.from(
+        tree.data!['tree'] as List,
+      );
+      if (!entries.any(_isMarkdownNote)) {
+        throw GitHubRepositoryException(
+          '${repository.fullName} has no Markdown notes on ${repository.defaultBranch}.',
+        );
+      }
+    } on DioException catch (error) {
+      throw GitHubRepositoryException(_friendlyError(error));
+    }
+  }
+
   Future<String> _pull(GitHubSettings settings) async {
     final repository = await _dio.get<Map<String, dynamic>>(
       '/repos/${settings.owner}/${settings.repo}',
@@ -101,7 +217,8 @@ class GitHubSyncEngine {
     final entries = List<Map<String, dynamic>>.from(
       treeResponse.data!['tree'] as List,
     );
-    for (final entry in entries.where(_isMarkdownNote)) {
+    final markdownEntries = entries.where(_isMarkdownNote).toList();
+    for (final entry in markdownEntries) {
       final path = entry['path'] as String;
       final remoteSha = entry['sha'] as String;
       final local = await _repository.findByPath(path);
@@ -117,6 +234,9 @@ class GitHubSyncEngine {
         await _repository.preserveConflict(sameId);
       await _repository.applyRemote(path: path, sha: remoteSha, raw: content);
     }
+    await _repository.reconcileRemoteRemovals(
+      markdownEntries.map((entry) => entry['path'] as String).toSet(),
+    );
     for (final entry in entries.where(_isAttachment)) {
       final path = entry['path'] as String;
       final remoteSha = entry['sha'] as String;
@@ -156,15 +276,20 @@ class GitHubSyncEngine {
     for (final note in await _repository.dirtyNotes()) {
       if (note.isPendingDeletion) {
         if (note.lastRemoteSha != null) {
-          await _dio.delete<void>(
-            '/repos/${settings.owner}/${settings.repo}/contents/${note.path}',
-            data: {
-              'message': 'Delete ${note.title}',
-              'sha': note.lastRemoteSha,
-              'branch': branch,
-            },
-            options: _options(settings),
-          );
+          try {
+            await _dio.delete<void>(
+              '/repos/${settings.owner}/${settings.repo}/contents/${note.path}',
+              data: {
+                'message': 'Delete ${note.title}',
+                'sha': note.lastRemoteSha,
+                'branch': branch,
+              },
+              options: _options(settings),
+            );
+          } on DioException catch (error) {
+            // Another client may have completed the deletion already.
+            if (error.response?.statusCode != 404) rethrow;
+          }
         }
         await _repository.completeDeletion(note);
         continue;

@@ -155,6 +155,38 @@ class NoteRepository {
     });
   }
 
+  /// Applies remote deletions without treating unsynced local notes as lost.
+  /// Local edits to an already-synced note are retained as conflict copies.
+  Future<void> reconcileRemoteRemovals(Set<String> remotePaths) async {
+    final localNotes = (await _db.select(_db.noteRows).get()).map(_toNote);
+    for (final note in localNotes) {
+      if (remotePaths.contains(note.path) ||
+          note.isConflict ||
+          note.pendingRenameFromPath != null) {
+        continue;
+      }
+
+      // A note with no remote SHA has never been published, so its absence from
+      // the remote tree is expected. A pending unsynced deletion can be
+      // completed immediately because there is no remote counterpart to remove.
+      if (note.lastRemoteSha == null) {
+        if (note.isPendingDeletion) await completeDeletion(note);
+        continue;
+      }
+      if (note.isPendingDeletion) {
+        await _removeStoredNote(note);
+        continue;
+      }
+      if (note.isDirty) await preserveConflict(note);
+      await _removeStoredNote(note);
+    }
+  }
+
+  Future<void> setPinned(Note note, bool isPinned) =>
+      (_db.update(_db.noteRows)..where((row) => row.id.equals(note.id))).write(
+        NoteRowsCompanion(isPinned: Value(isPinned)),
+      );
+
   Future<void> preserveConflict(Note note) async {
     final suffix = DateTime.now().toIso8601String().substring(0, 10);
     final directory = p.dirname(note.path);
@@ -182,6 +214,12 @@ class NoteRepository {
       ),
       writeFile: true,
     );
+  }
+
+  Future<void> _removeStoredNote(Note note) async {
+    await completeDeletion(note);
+    final file = _file(note.path);
+    if (await file.exists()) await file.delete();
   }
 
   Future<Note> create({

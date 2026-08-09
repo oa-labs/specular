@@ -9,6 +9,15 @@ class AiSnippetService {
   final FlutterSecureStorage _storage;
   final Dio _dio;
 
+  Future<bool> isConfigured() async {
+    final values = await Future.wait([
+      _storage.read(key: 'ai_provider_url'),
+      _storage.read(key: 'ai_provider_api_key'),
+      _storage.read(key: 'ai_provider_model_id'),
+    ]);
+    return values.every((value) => value?.trim().isNotEmpty == true);
+  }
+
   Future<String> generate(String noteBody) async {
     final endpoint =
         (await _storage.read(key: 'ai_provider_url'))?.trim() ?? '';

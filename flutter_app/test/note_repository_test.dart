@@ -51,4 +51,94 @@ void main() {
     expect(daily.isDaily, isTrue);
     expect(daily.path, startsWith('daily/'));
   });
+
+  test('removes a clean note deleted remotely', () async {
+    final root = await Directory.systemTemp.createTemp('specular-notes-test-');
+    final database = AppDatabase.forTesting(NativeDatabase.memory());
+    addTearDown(() async {
+      await database.close();
+      await root.delete(recursive: true);
+    });
+    final repository = NoteRepository(
+      database,
+      Directory('${root.path}/notes'),
+    );
+    final note = await repository.create(title: 'Removed remotely');
+    await repository.markSynced(note, 'remote-sha');
+
+    await repository.reconcileRemoteRemovals({});
+
+    expect(await repository.get(note.id), isNull);
+    expect(await File('${root.path}/notes/${note.path}').exists(), isFalse);
+  });
+
+  test('preserves a locally edited remote deletion as a conflict', () async {
+    final root = await Directory.systemTemp.createTemp('specular-notes-test-');
+    final database = AppDatabase.forTesting(NativeDatabase.memory());
+    addTearDown(() async {
+      await database.close();
+      await root.delete(recursive: true);
+    });
+    final repository = NoteRepository(
+      database,
+      Directory('${root.path}/notes'),
+    );
+    final created = await repository.create(title: 'Edited locally');
+    await repository.markSynced(created, 'remote-sha');
+    final synced = (await repository.get(created.id))!;
+    await repository.save(
+      synced,
+      title: synced.title,
+      body: '# Edited locally\n\nLocal edit',
+    );
+
+    await repository.reconcileRemoteRemovals({});
+
+    final notes = await repository.watchNotes().first;
+    expect(notes, hasLength(1));
+    expect(notes.single.isConflict, isTrue);
+    expect(notes.single.isDirty, isTrue);
+    expect(notes.single.title, 'Edited locally (conflict)');
+  });
+
+  test('does not treat an unsynced note as a remote deletion', () async {
+    final root = await Directory.systemTemp.createTemp('specular-notes-test-');
+    final database = AppDatabase.forTesting(NativeDatabase.memory());
+    addTearDown(() async {
+      await database.close();
+      await root.delete(recursive: true);
+    });
+    final repository = NoteRepository(
+      database,
+      Directory('${root.path}/notes'),
+    );
+    final note = await repository.create(title: 'Offline note');
+
+    await repository.reconcileRemoteRemovals({});
+
+    expect(await repository.get(note.id), isNotNull);
+  });
+
+  test('pins and unpins locally without creating a sync change', () async {
+    final root = await Directory.systemTemp.createTemp('specular-notes-test-');
+    final database = AppDatabase.forTesting(NativeDatabase.memory());
+    addTearDown(() async {
+      await database.close();
+      await root.delete(recursive: true);
+    });
+    final repository = NoteRepository(
+      database,
+      Directory('${root.path}/notes'),
+    );
+    final note = await repository.create(title: 'Pin me');
+    await repository.markSynced(note, 'remote-sha');
+
+    await repository.setPinned(note, true);
+    final pinned = (await repository.get(note.id))!;
+    expect(pinned.isPinned, isTrue);
+    expect(pinned.isDirty, isFalse);
+
+    await repository.setPinned(pinned, false);
+    expect((await repository.get(note.id))!.isPinned, isFalse);
+  });
 }
