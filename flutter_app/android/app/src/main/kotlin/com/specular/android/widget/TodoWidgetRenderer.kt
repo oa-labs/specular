@@ -28,26 +28,26 @@ object TodoWidgetRenderer {
             data = Uri.parse("specular://widget/list/$id")
         })
         setEmptyView(R.id.todo_widget_list, R.id.todo_widget_empty)
-        setPendingIntentTemplate(R.id.todo_widget_list, broadcast(context, TodoWidgetProvider.ACTION_OPEN_NOTE, id, mutable = true))
+        setPendingIntentTemplate(R.id.todo_widget_list, broadcast(context, id))
         setOnClickPendingIntent(R.id.todo_widget_header, activity(context, TodoWidgetProvider.ACTION_OPEN_TODOS, id))
         setOnClickPendingIntent(R.id.todo_widget_add, activity(context, TodoWidgetProvider.ACTION_NEW_TODO, id))
     }
 
-    fun rowIntent(context: Context, action: String, todo: WidgetTodo): Intent = Intent().apply {
-        this.action = action
+    fun rowIntent(interaction: String, todo: WidgetTodo): Intent = Intent().apply {
+        putExtra(TodoWidgetProvider.EXTRA_INTERACTION, interaction)
         putExtra(TodoWidgetProvider.EXTRA_NOTE_ID, todo.noteId)
         putExtra(TodoWidgetProvider.EXTRA_TASK_INDEX, todo.taskIndex)
     }
 
-    private fun broadcast(context: Context, action: String, id: Int, mutable: Boolean): PendingIntent =
+    private fun broadcast(context: Context, id: Int): PendingIntent =
         PendingIntent.getBroadcast(
             context,
             id,
             Intent(context, TodoWidgetProvider::class.java).apply {
-                this.action = action
-                data = Uri.parse("specular://widget/interaction/$id/$action")
+                action = TodoWidgetProvider.ACTION_TODO_INTERACTION
+                data = Uri.parse("specular://widget/interaction/$id")
             },
-            PendingIntent.FLAG_UPDATE_CURRENT or if (mutable) PendingIntent.FLAG_MUTABLE else PendingIntent.FLAG_IMMUTABLE,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE,
         )
 
     private fun activity(context: Context, action: String, id: Int): PendingIntent =

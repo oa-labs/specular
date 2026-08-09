@@ -27,10 +27,12 @@ private class TodoFactory(private val context: Context) : RemoteViewsService.Rem
         return RemoteViews(context.packageName, R.layout.widget_todo_row).apply {
             setTextViewText(R.id.todo_widget_text, renderWidgetMarkdown(todo.text.ifBlank { "Untitled task" }))
             setTextViewText(R.id.todo_widget_note, todo.noteTitle)
-            setOnClickFillInIntent(R.id.todo_widget_complete, TodoWidgetRenderer.rowIntent(context, TodoWidgetProvider.ACTION_COMPLETE, todo))
-            val open = TodoWidgetRenderer.rowIntent(context, TodoWidgetProvider.ACTION_OPEN_NOTE, todo)
+            setOnClickFillInIntent(R.id.todo_widget_complete, TodoWidgetRenderer.rowIntent(TodoWidgetProvider.INTERACTION_COMPLETE, todo))
+            val open = TodoWidgetRenderer.rowIntent(TodoWidgetProvider.INTERACTION_OPEN, todo)
             setOnClickFillInIntent(R.id.todo_widget_row, open)
             setOnClickFillInIntent(R.id.todo_widget_content, open)
+            setOnClickFillInIntent(R.id.todo_widget_text, open)
+            setOnClickFillInIntent(R.id.todo_widget_note, open)
         }
     }
 }

@@ -606,6 +606,9 @@ class _NotePreviewBody extends ConsumerWidget {
     return Markdown(
       data: note.body,
       padding: const EdgeInsets.all(16),
+      // Task text and its interactive checkbox must share the same top edge,
+      // including when the task spans multiple lines.
+      listItemCrossAxisAlignment: MarkdownListItemCrossAxisAlignment.start,
       imageBuilder: (uri, title, alt) =>
           _AttachmentImage(notePath: note.path, uri: uri),
       checkboxBuilder: (checked) {

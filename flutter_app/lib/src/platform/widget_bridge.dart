@@ -6,6 +6,18 @@ import 'package:flutter/services.dart';
 class WidgetBridge {
   static const _channel = MethodChannel('com.specular.android/widget');
 
+  static void setNavigationHandler(void Function(String route) handler) {
+    _channel.setMethodCallHandler((call) async {
+      if (call.method == 'navigate') {
+        final arguments = Map<Object?, Object?>.from(
+          call.arguments as Map? ?? const {},
+        );
+        final route = arguments['route'] as String?;
+        if (route != null) handler(route);
+      }
+    });
+  }
+
   static Future<void> refresh() async {
     try {
       await _channel.invokeMethod<void>('refreshTodoWidget');

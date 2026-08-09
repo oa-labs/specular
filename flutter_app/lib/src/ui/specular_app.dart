@@ -9,6 +9,7 @@ import '../ai/ai_snippet_service.dart';
 import '../domain/note.dart';
 import '../sync/github_sync.dart';
 import '../voice/voice_service.dart';
+import '../platform/widget_bridge.dart';
 import 'screens.dart';
 
 final appDatabaseProvider = Provider<AppDatabase>(
@@ -67,6 +68,7 @@ class SpecularApp extends ConsumerWidget {
         ),
       ],
     );
+    WidgetBridge.setNavigationHandler(router.go);
     const amber = Color(0xffd97706);
     return MaterialApp.router(
       title: 'Specular',

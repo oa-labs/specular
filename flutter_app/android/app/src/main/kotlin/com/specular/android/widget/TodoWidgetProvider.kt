@@ -14,7 +14,8 @@ class TodoWidgetProvider : AppWidgetProvider() {
     override fun onReceive(context: Context, intent: Intent) {
         super.onReceive(context, intent)
         when (intent.action) {
-            ACTION_COMPLETE -> {
+            ACTION_TODO_INTERACTION -> when (intent.getStringExtra(EXTRA_INTERACTION)) {
+                INTERACTION_COMPLETE -> {
                 val noteId = intent.getStringExtra(EXTRA_NOTE_ID) ?: return
                 val taskIndex = intent.getIntExtra(EXTRA_TASK_INDEX, -1)
                 if (taskIndex < 0) return
@@ -27,9 +28,18 @@ class TodoWidgetProvider : AppWidgetProvider() {
                         pending.finish()
                     }
                 }.start()
+                }
+                INTERACTION_OPEN -> openNote(context, intent.getStringExtra(EXTRA_NOTE_ID) ?: return)
             }
             ACTION_OPEN_NOTE, ACTION_OPEN_TODOS, ACTION_NEW_TODO -> openApp(context, intent)
         }
+    }
+
+    private fun openNote(context: Context, noteId: String) {
+        openApp(context, Intent().apply {
+            action = ACTION_OPEN_NOTE
+            putExtra(EXTRA_NOTE_ID, noteId)
+        })
     }
 
     private fun openApp(context: Context, source: Intent) {
@@ -41,11 +51,14 @@ class TodoWidgetProvider : AppWidgetProvider() {
     }
 
     companion object {
-        const val ACTION_COMPLETE = "com.specular.android.widget.COMPLETE"
+        const val ACTION_TODO_INTERACTION = "com.specular.android.widget.TODO_INTERACTION"
         const val ACTION_OPEN_NOTE = "com.specular.android.widget.OPEN_NOTE"
         const val ACTION_OPEN_TODOS = "com.specular.android.widget.OPEN_TODOS"
         const val ACTION_NEW_TODO = "com.specular.android.widget.NEW_TODO"
         const val EXTRA_NOTE_ID = "note_id"
         const val EXTRA_TASK_INDEX = "task_index"
+        const val EXTRA_INTERACTION = "interaction"
+        const val INTERACTION_COMPLETE = "complete"
+        const val INTERACTION_OPEN = "open"
     }
 }

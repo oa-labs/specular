@@ -1,12 +1,14 @@
 package com.specular.android
 
 import android.content.Context
+import android.content.Intent
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 import com.specular.android.widget.TodoWidgetRenderer
+import com.specular.android.widget.TodoWidgetProvider
 
 /**
  * Intentionally small Android boundary for the Flutter rewrite.
@@ -16,6 +18,8 @@ import com.specular.android.widget.TodoWidgetRenderer
  * lets Flutter open those exact paths after an ordinary app-store upgrade.
  */
 class MainActivity : FlutterActivity() {
+    private var widgetChannel: MethodChannel? = null
+
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL)
@@ -27,13 +31,35 @@ class MainActivity : FlutterActivity() {
                             .edit().putBoolean(MIGRATION_COMPLETE, true).apply()
                         result.success(null)
                     }
-                    "refreshTodoWidget" -> {
-                        TodoWidgetRenderer.requestUpdate(this)
-                        result.success(null)
-                    }
                     else -> result.notImplemented()
                 }
             }
+        widgetChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, WIDGET_CHANNEL).also { channel ->
+            channel.setMethodCallHandler { call, result ->
+                if (call.method == "refreshTodoWidget") {
+                    TodoWidgetRenderer.requestUpdate(this)
+                    result.success(null)
+                } else {
+                    result.notImplemented()
+                }
+            }
+        }
+    }
+
+    override fun getInitialRoute(): String? = routeFor(intent)
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        val route = routeFor(intent) ?: return
+        widgetChannel?.invokeMethod("navigate", mapOf("route" to route))
+    }
+
+    private fun routeFor(intent: Intent): String? = when (intent.action) {
+        TodoWidgetProvider.ACTION_OPEN_NOTE -> intent.getStringExtra(TodoWidgetProvider.EXTRA_NOTE_ID)?.let { "/note/$it" }
+        TodoWidgetProvider.ACTION_OPEN_TODOS -> "/todos"
+        TodoWidgetProvider.ACTION_NEW_TODO -> "/editor/new"
+        else -> null
     }
 
     private fun readLegacyState(): Map<String, Any> {
@@ -76,6 +102,7 @@ class MainActivity : FlutterActivity() {
 
     private companion object {
         const val CHANNEL = "com.specular.android/legacy"
+        const val WIDGET_CHANNEL = "com.specular.android/widget"
         const val MIGRATION_PREFS = "flutter_migration"
         const val MIGRATION_COMPLETE = "complete"
     }
