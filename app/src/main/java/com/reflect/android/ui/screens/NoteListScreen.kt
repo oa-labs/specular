@@ -30,6 +30,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.Alignment
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavController
@@ -110,7 +112,9 @@ fun NoteListScreen(navController: NavController, vm: NoteListViewModel = hiltVie
                         IconButton(onClick = { overflowExpanded = true }) {
                             BadgedBox(
                                 badge = {
-                                    if (deselectedFolders.isNotEmpty()) Badge()
+                                    if (deselectedFolders.isNotEmpty()) {
+                                        Badge(containerColor = MaterialTheme.colorScheme.primary)
+                                    }
                                 }
                             ) {
                                 Icon(Icons.Default.MoreVert, "More actions")
@@ -206,7 +210,7 @@ fun NoteListScreen(navController: NavController, vm: NoteListViewModel = hiltVie
                         )
                         Text(
                             if (folders.isEmpty()) {
-                                "Notes sync automatically in the background once GitHub is configured. Tap Add to today to start one."
+                                "Notes sync automatically in the background once GitHub is configured. Tap the calendar to start today’s note."
                             } else {
                                 "Open the menu to select one or more folders."
                             },
@@ -218,13 +222,34 @@ fun NoteListScreen(navController: NavController, vm: NoteListViewModel = hiltVie
             } else {
                 LazyColumn(
                     modifier = Modifier.fillMaxSize().weight(1f),
-                    contentPadding = PaddingValues(bottom = 88.dp)
+                    // Keep text and metadata out of the floating create button's hit area.
+                    contentPadding = PaddingValues(end = 72.dp, bottom = 88.dp)
                 ) {
                     items(notes, key = { it.id }) { item ->
                         ListItem(
-                            headlineContent = { Text(item.title) },
+                            headlineContent = {
+                                Text(
+                                    item.title,
+                                    style = MaterialTheme.typography.titleMedium,
+                                    maxLines = 2
+                                )
+                            },
                             supportingContent = {
-                                if (!item.snippet.isNullOrBlank()) Text(item.snippet, maxLines = 2)
+                                Row(
+                                    verticalAlignment = Alignment.Top,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    noteFolderLabel(item)?.let { label -> NoteTypeChip(label) }
+                                    item.snippet?.takeIf { it.isNotBlank() }?.let { snippet ->
+                                        Text(
+                                            snippet,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            maxLines = 2,
+                                            modifier = Modifier.weight(1f, fill = false)
+                                        )
+                                    }
+                                }
                             },
                             trailingContent = {
                                 Row {
@@ -233,9 +258,6 @@ fun NoteListScreen(navController: NavController, vm: NoteListViewModel = hiltVie
                                     }
                                     if (item.isDirty) Badge { Text("•") }
                                     if (item.isConflict) Badge(containerColor = MaterialTheme.colorScheme.error) { Text("!") }
-                                    noteFolderLabel(item)?.let { label ->
-                                        Text(" $label", style = MaterialTheme.typography.labelSmall)
-                                    }
                                 }
                             },
                             modifier = Modifier.clickable { navController.navigate(Screen.Detail.routeFor(item.id)) }
@@ -328,6 +350,21 @@ private fun SortOption(label: String, selected: Boolean, onClick: () -> Unit) {
         RadioButton(selected = selected, onClick = onClick)
         Spacer(Modifier.width(12.dp))
         Text(label, style = MaterialTheme.typography.bodyLarge)
+    }
+}
+
+@Composable
+private fun NoteTypeChip(label: String) {
+    Surface(
+        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
+        contentColor = MaterialTheme.colorScheme.primary,
+        shape = RoundedCornerShape(8.dp)
+    ) {
+        Text(
+            label,
+            style = MaterialTheme.typography.labelMedium,
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+        )
     }
 }
 
