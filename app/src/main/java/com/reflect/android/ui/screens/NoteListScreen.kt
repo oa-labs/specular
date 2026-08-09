@@ -14,7 +14,6 @@ import androidx.compose.material.icons.filled.Checklist
 import androidx.compose.material.icons.filled.CalendarToday
 import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material.icons.filled.PushPin
-import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Close
@@ -88,12 +87,23 @@ fun NoteListScreen(navController: NavController, vm: NoteListViewModel = hiltVie
             TopAppBar(
                 title = { Text("Specular") },
                 actions = {
-                    IconButton(onClick = vm::refresh, enabled = !isRefreshing) {
-                        if (isRefreshing) CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
-                        else Icon(Icons.Default.Refresh, "Sync now")
+                    if (isRefreshing) {
+                        Box(
+                            modifier = Modifier.size(48.dp),
+                            contentAlignment = androidx.compose.ui.Alignment.Center
+                        ) {
+                            CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                        }
                     }
                     IconButton(onClick = { navController.navigate(Screen.Todos.route) }) {
                         Icon(Icons.Default.Checklist, "View todos")
+                    }
+                    IconButton(onClick = openTodayEditor, enabled = !isOpeningToday) {
+                        if (isOpeningToday) {
+                            CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                        } else {
+                            Icon(Icons.Default.CalendarToday, "Open today's note")
+                        }
                     }
                     IconButton(onClick = { navController.navigate(Screen.Search.route) }) { Icon(Icons.Default.Search, "Search") }
                     Box {
@@ -169,16 +179,6 @@ fun NoteListScreen(navController: NavController, vm: NoteListViewModel = hiltVie
                         contentColor = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
-                ExtendedFloatingActionButton(
-                    onClick = openTodayEditor,
-                    icon = {
-                        if (isOpeningToday) CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
-                        else Icon(Icons.Default.CalendarToday, contentDescription = null)
-                    },
-                    text = { Text("Add to today") },
-                    containerColor = MaterialTheme.colorScheme.primary,
-                    contentColor = MaterialTheme.colorScheme.onPrimary
-                )
                 SmallFloatingActionButton(
                     onClick = { createExpanded = !createExpanded },
                     containerColor = MaterialTheme.colorScheme.surfaceVariant,
@@ -218,7 +218,7 @@ fun NoteListScreen(navController: NavController, vm: NoteListViewModel = hiltVie
             } else {
                 LazyColumn(
                     modifier = Modifier.fillMaxSize().weight(1f),
-                    contentPadding = PaddingValues(bottom = 168.dp)
+                    contentPadding = PaddingValues(bottom = 88.dp)
                 ) {
                     items(notes, key = { it.id }) { item ->
                         ListItem(
