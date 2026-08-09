@@ -6,9 +6,9 @@ See [`docs/reflect-contract.md`](docs/reflect-contract.md) for the GitHub repo f
 
 ## Project
 
-- `specular/` is the Android project root (this directory).
+- `flutter_app/` is the Android application project.
 - Package: `com.specular.android`
-- minSdk 26, target 35, Compose + Material 3 + amber accent (`#D97706`), no Play Services (`gmsFree` flavor).
+- minSdk 26, Flutter + Material 3, no Play Services.
 
 **Note:** Specular is an Android application that works with a Reflect backend (via GitHub sync).
 
@@ -25,22 +25,14 @@ make clean            # remove Flutter build artifacts
 `make build` and `make install` are aliases for their debug counterparts.
 Install requires an Android device or emulator recognized by `flutter devices`.
 
-The legacy Compose project remains available for migration compatibility:
-
-```bash
-./gradlew assembleGmsFreeDebug      # debug APK
-./gradlew assembleGmsFreeRelease    # signed release (needs keystore)
-./gradlew testGmsFreeDebugUnitTest  # unit tests (FrontmatterParser etc.)
-```
-
-SDK at `/opt/android-sdk` (`local.properties` already set). JDK 17+ required.
+For Flutter checks, run `flutter analyze` and `flutter test` from `flutter_app/`.
 
 ## First run
 
-1. Create a GitHub fine-grained PAT with **Contents: Read & Write** on your Reflect repo (e.g. `joelwreed/reflect-notes`), or configure `GitHubAuth.OAUTH_CLIENT_ID` for OAuth.
-2. Install APK (sideload — no Play Services):
+1. Create a GitHub fine-grained PAT with **Contents: Read & Write** on your Reflect repo (e.g. `joelwreed/reflect-notes`).
+2. Build and install the APK (sideload — no Play Services):
    ```bash
-   adb install app/build/outputs/apk/gmsFree/debug/app-gmsFree-debug.apk
+   make install-debug
    ```
 3. Open **Settings** → paste token + `owner`/`repo` (e.g. `joelwreed` / `reflect-notes`) → Save.
 4. Save the GitHub settings — an initial sync is queued in the background, followed by automatic syncs at least every 15 minutes while connected. Edits set `isDirty` and push on the next sync. Conflicts create `Name (conflict YYYY-MM-DD).md`.
@@ -48,15 +40,10 @@ SDK at `/opt/android-sdk` (`local.properties` already set). JDK 17+ required.
 ## Structure
 
 ```
-app/src/main/java/com/reflect/android/
-  ui/           Compose screens (List, Detail, Editor + camera/gallery → assets/, Search, Settings, Onboarding)
-  ui/theme/     SpecularTheme (light/dark, accent #D97706 on neutral #1A1A1E)
-  domain/model/ Note, NoteListItem
-  data/local/   Room (notes + FTS), FileStore (filesDir/notes/), FrontmatterParser
-  data/remote/  GitHubApi (Retrofit + Moshi, no GMS), GitHubAuth (EncryptedSharedPreferences)
-  data/repo/    NoteRepository
-  sync/         SyncEngine (pull/push via Contents + Trees API, conflict copy), SyncWorker
-  di/           Hilt AppModule
+flutter_app/
+  lib/          Flutter UI, local note index, GitHub sync, AI, and voice flows
+  android/      Android migration boundary and native to-do widget
+  test/         Flutter unit tests
 ```
 
 ## GMS-free / Updates
