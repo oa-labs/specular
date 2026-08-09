@@ -8,6 +8,7 @@ void main() {
 id: 01kxp66n18p7vt6b5rsmd1taqy
 aliases:
   - OLLI - University of Pitt
+snippet: "An existing portable summary"
 ---
 # A note
 
@@ -18,13 +19,32 @@ Body text
 
       expect(note.id, '01kxp66n18p7vt6b5rsmd1taqy');
       expect(note.aliases, ['OLLI - University of Pitt']);
+      expect(note.snippet, 'An existing portable summary');
       expect(note.title, 'A note');
       expect(note.body, contains('Body text'));
     });
 
+    test('writes generated snippets back into frontmatter', () {
+      const raw = '# A note\n\nBody text\n';
+
+      final updated = MarkdownContract.upsertSnippet(
+        raw,
+        '01kxp66n18p7vt6b5rsmd1taqy',
+        'A "quoted" summary',
+      );
+      final parsed = MarkdownContract.parse(updated);
+
+      expect(parsed.id, '01kxp66n18p7vt6b5rsmd1taqy');
+      expect(parsed.snippet, 'A "quoted" summary');
+      expect(parsed.body, raw);
+    });
+
     test('daily paths remain stable identities without frontmatter', () {
       final parsed = MarkdownContract.parse('# 2026-08-08\n');
-      expect(MarkdownContract.identityFor('daily/2026-08-08.md', parsed.id), 'daily/2026-08-08.md');
+      expect(
+        MarkdownContract.identityFor('daily/2026-08-08.md', parsed.id),
+        'daily/2026-08-08.md',
+      );
     });
   });
 
@@ -34,7 +54,10 @@ Body text
       final tasks = TodoMarkdown.extract(source);
 
       expect(tasks.map((task) => task.completed), [false, true]);
-      expect(TodoMarkdown.toggleAt(source, 0), '- [x] First\n- [x] Second\nParagraph');
+      expect(
+        TodoMarkdown.toggleAt(source, 0),
+        '- [x] First\n- [x] Second\nParagraph',
+      );
     });
   });
 }

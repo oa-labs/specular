@@ -611,23 +611,60 @@ class _NotePreviewBody extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     var taskIndex = 0;
-    return Markdown(
-      data: note.body,
-      padding: const EdgeInsets.all(16),
-      // Task text and its interactive checkbox must share the same top edge,
-      // including when the task spans multiple lines.
-      listItemCrossAxisAlignment: MarkdownListItemCrossAxisAlignment.start,
-      imageBuilder: (uri, title, alt) =>
-          _AttachmentImage(notePath: note.path, uri: uri),
-      checkboxBuilder: (checked) {
-        final index = taskIndex++;
-        return Checkbox(
-          value: checked,
-          materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-          visualDensity: VisualDensity.compact,
-          onChanged: (_) => _toggleTodo(ref, note, index),
-        );
-      },
+    return Column(
+      children: [
+        Container(
+          width: double.infinity,
+          margin: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: Theme.of(context).colorScheme.surfaceContainerHighest,
+            borderRadius: BorderRadius.circular(16),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Summary',
+                style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                  color: Theme.of(context).colorScheme.primary,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                note.snippet?.trim().isNotEmpty == true
+                    ? note.snippet!
+                    : 'No summary available',
+                style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                  fontStyle: FontStyle.italic,
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
+              ),
+            ],
+          ),
+        ),
+        Expanded(
+          child: Markdown(
+            data: note.body,
+            padding: const EdgeInsets.all(16),
+            // Task text and its interactive checkbox must share the same top edge,
+            // including when the task spans multiple lines.
+            listItemCrossAxisAlignment:
+                MarkdownListItemCrossAxisAlignment.start,
+            imageBuilder: (uri, title, alt) =>
+                _AttachmentImage(notePath: note.path, uri: uri),
+            checkboxBuilder: (checked) {
+              final index = taskIndex++;
+              return Checkbox(
+                value: checked,
+                materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                visualDensity: VisualDensity.compact,
+                onChanged: (_) => _toggleTodo(ref, note, index),
+              );
+            },
+          ),
+        ),
+      ],
     );
   }
 
@@ -714,7 +751,9 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
   Future<void> _save() async {
     setState(() => _saving = true);
     final repo = ref.read(noteRepositoryProvider);
-    final saved = _note == null
+    final saved = widget.newTodo
+        ? await repo.appendToToday(_body.text)
+        : _note == null
         ? await repo.create(
             title: _title.text,
             body: _body.text,

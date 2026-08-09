@@ -58,11 +58,12 @@ class MainActivity : FlutterActivity() {
     private fun routeFor(intent: Intent): String? = when (intent.action) {
         TodoWidgetProvider.ACTION_OPEN_NOTE -> intent.getStringExtra(TodoWidgetProvider.EXTRA_NOTE_ID)?.let { "/note/$it" }
         TodoWidgetProvider.ACTION_OPEN_TODOS -> "/todos"
-        TodoWidgetProvider.ACTION_NEW_TODO -> "/editor/new"
+        TodoWidgetProvider.ACTION_NEW_TODO -> "/editor/todo"
         else -> null
     }
 
     private fun readLegacyState(): Map<String, Any> {
+        rebuildDatabaseForFlutterIfNeeded()
         val publicSettings = getSharedPreferences("note_list_filters", Context.MODE_PRIVATE)
         return buildMap {
             put("notesPath", java.io.File(filesDir, "notes").absolutePath)
@@ -73,6 +74,20 @@ class MainActivity : FlutterActivity() {
                 ?.toList() ?: emptyList<String>())
             put("secrets", readLegacySecrets())
         }
+    }
+
+    /**
+     * Flutter's bundled SQLite does not provide the old Room FTS4 extension.
+     * The canonical notes and all settings live outside this index, so rebuild
+     * the index once rather than carrying its unavailable FTS triggers forward.
+     */
+    private fun rebuildDatabaseForFlutterIfNeeded() {
+        val preferences = getSharedPreferences(MIGRATION_PREFS, Context.MODE_PRIVATE)
+        if (preferences.getBoolean(DATABASE_REBUILT_FOR_FLUTTER, false)) return
+
+        val database = getDatabasePath("reflect.db")
+        if (database.exists() && !deleteDatabase("reflect.db")) return
+        preferences.edit().putBoolean(DATABASE_REBUILT_FOR_FLUTTER, true).apply()
     }
 
     private fun readLegacySecrets(): Map<String, Any> = try {
@@ -105,5 +120,6 @@ class MainActivity : FlutterActivity() {
         const val WIDGET_CHANNEL = "com.specular.android/widget"
         const val MIGRATION_PREFS = "flutter_migration"
         const val MIGRATION_COMPLETE = "complete"
+        const val DATABASE_REBUILT_FOR_FLUTTER = "database_rebuilt_for_flutter_v1"
     }
 }

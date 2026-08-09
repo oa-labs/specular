@@ -48,23 +48,41 @@ class SpecularApp extends ConsumerWidget {
     final router = GoRouter(
       routes: [
         GoRoute(path: '/', builder: (_, _) => const NoteListScreen()),
-        GoRoute(path: '/search', builder: (_, _) => const SearchScreen()),
-        GoRoute(path: '/todos', builder: (_, _) => const TodoScreen()),
-        GoRoute(path: '/settings', builder: (_, _) => const SettingsScreen()),
-        GoRoute(path: '/voice', builder: (_, _) => const VoiceCaptureScreen()),
-        GoRoute(path: '/editor/new', builder: (_, _) => const EditorScreen()),
+        GoRoute(
+          path: '/search',
+          builder: (_, _) => const _BackToHome(child: SearchScreen()),
+        ),
+        GoRoute(
+          path: '/todos',
+          builder: (_, _) => const _BackToHome(child: TodoScreen()),
+        ),
+        GoRoute(
+          path: '/settings',
+          builder: (_, _) => const _BackToHome(child: SettingsScreen()),
+        ),
+        GoRoute(
+          path: '/voice',
+          builder: (_, _) => const _BackToHome(child: VoiceCaptureScreen()),
+        ),
+        GoRoute(
+          path: '/editor/new',
+          builder: (_, _) => const _BackToHome(child: EditorScreen()),
+        ),
         GoRoute(
           path: '/editor/todo',
-          builder: (_, _) => const EditorScreen(newTodo: true),
+          builder: (_, _) =>
+              const _BackToHome(child: EditorScreen(newTodo: true)),
         ),
         GoRoute(
           path: '/note/:id',
-          builder: (_, state) =>
-              NoteDetailScreen(id: state.pathParameters['id']!),
+          builder: (_, state) => _BackToHome(
+            child: NoteDetailScreen(id: state.pathParameters['id']!),
+          ),
         ),
         GoRoute(
           path: '/editor/:id',
-          builder: (_, state) => EditorScreen(id: state.pathParameters['id']),
+          builder: (_, state) =>
+              _BackToHome(child: EditorScreen(id: state.pathParameters['id'])),
         ),
       ],
     );
@@ -90,4 +108,23 @@ class SpecularApp extends ConsumerWidget {
       routerConfig: router,
     );
   }
+}
+
+/// Secondary screens can be opened directly by the Android widget, leaving no
+/// home route in the navigator stack. A system back gesture must still return
+/// the user to the app's home screen rather than closing the app or exposing a
+/// stale route beneath it.
+class _BackToHome extends StatelessWidget {
+  const _BackToHome({required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) => PopScope(
+    canPop: false,
+    onPopInvokedWithResult: (didPop, _) {
+      if (!didPop) context.go('/');
+    },
+    child: child,
+  );
 }

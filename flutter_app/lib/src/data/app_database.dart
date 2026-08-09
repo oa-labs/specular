@@ -75,6 +75,10 @@ class Attachments extends Table {
 class AppDatabase extends _$AppDatabase {
   AppDatabase._(super.executor);
 
+  /// Test seam for exercising the shared schema without platform plugins.
+  factory AppDatabase.forTesting(QueryExecutor executor) =>
+      AppDatabase._(executor);
+
   factory AppDatabase.openLegacy(LegacyState state) => AppDatabase._(
     driftDatabase(
       name: 'reflect',
@@ -92,8 +96,8 @@ class AppDatabase extends _$AppDatabase {
   MigrationStrategy get migration => MigrationStrategy(
     onCreate: (m) async {
       await m.createAll();
-      // Fresh installs use LIKE search until they receive their first sync.
-      // Existing Room databases retain their FTS4 table and triggers intact.
+      // Search uses LIKE. The Android migration rebuilds old Room FTS4 indexes
+      // because Flutter's bundled SQLite intentionally does not include FTS4.
     },
   );
 }

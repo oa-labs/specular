@@ -116,7 +116,7 @@ class NoteRepository {
         rawMarkdown: Value(raw),
         body: Value(parsed.body),
         aliases: Value(_encodeAliases(parsed.aliases)),
-        snippet: Value(MarkdownContract.snippet(parsed.body)),
+        snippet: Value(parsed.snippet ?? MarkdownContract.snippet(parsed.body)),
         isDaily: Value(path.startsWith('daily/')),
         isPinned: Value(previous?.isPinned ?? false),
         lastRemoteSha: Value(sha),
@@ -173,8 +173,10 @@ class NoteRepository {
         body: note.body,
         aliases: _encodeAliases(note.aliases),
         isDaily: false,
+        isPinned: const Value(false),
         lastRemoteSha: const Value.absent(),
         isDirty: const Value(true),
+        isPendingDeletion: const Value(false),
         isConflict: const Value(true),
         updatedAt: DateTime.now().millisecondsSinceEpoch,
       ),
@@ -201,8 +203,11 @@ class NoteRepository {
         body: '# $normalizedTitle\n\n${body.trim()}\n',
         aliases: '[]',
         isDaily: false,
+        isPinned: const Value(false),
         lastRemoteSha: const Value.absent(),
         isDirty: const Value(true),
+        isPendingDeletion: const Value(false),
+        isConflict: const Value(false),
         updatedAt: DateTime.now().millisecondsSinceEpoch,
       ),
       writeFile: true,
@@ -233,8 +238,11 @@ class NoteRepository {
         body: '# $title\n\n',
         aliases: '[]',
         isDaily: true,
+        isPinned: const Value(false),
         lastRemoteSha: const Value.absent(),
         isDirty: const Value(true),
+        isPendingDeletion: const Value(false),
+        isConflict: const Value(false),
         updatedAt: DateTime.now().millisecondsSinceEpoch,
       ),
       writeFile: true,
@@ -282,7 +290,9 @@ class NoteRepository {
         rawMarkdown: Value(raw),
         body: Value(normalizedBody),
         aliases: Value(_encodeAliases(parsed.aliases)),
-        snippet: Value(MarkdownContract.snippet(normalizedBody)),
+        snippet: Value(
+          parsed.snippet ?? MarkdownContract.snippet(normalizedBody),
+        ),
         isDaily: Value(original.isDaily),
         isPinned: Value(original.isPinned),
         lastRemoteSha: Value(original.lastRemoteSha),
@@ -474,13 +484,35 @@ class NoteRepository {
         .replaceAll('\\', '/');
   }
 
-  Future<void> updateSnippet(Note note, String snippet) =>
-      (_db.update(_db.noteRows)..where((row) => row.id.equals(note.id))).write(
-        NoteRowsCompanion(
-          snippet: Value(snippet),
-          updatedAt: Value(DateTime.now().millisecondsSinceEpoch),
-        ),
-      );
+  Future<void> updateSnippet(Note note, String snippet) async {
+    final raw = MarkdownContract.upsertSnippet(
+      note.rawMarkdown,
+      note.id,
+      snippet,
+    );
+    await _put(
+      NoteRowsCompanion(
+        id: Value(note.id),
+        title: Value(note.title),
+        path: Value(note.path),
+        rawMarkdown: Value(raw),
+        body: Value(note.body),
+        aliases: Value(_encodeAliases(note.aliases)),
+        snippet: Value(snippet),
+        isDaily: Value(note.isDaily),
+        isPinned: Value(note.isPinned),
+        lastRemoteSha: Value(note.lastRemoteSha),
+        isDirty: const Value(true),
+        isPendingDeletion: Value(note.isPendingDeletion),
+        pendingRenameFromPath: Value(note.pendingRenameFromPath),
+        pendingRenameFromSha: Value(note.pendingRenameFromSha),
+        isConflict: Value(note.isConflict),
+        updatedAt: Value(DateTime.now().millisecondsSinceEpoch),
+      ),
+      writeFile: true,
+    );
+    _scheduleSync();
+  }
 
   Future<void> importExistingFilesIfNeeded() async {
     final existing = await (_db.select(
@@ -512,7 +544,9 @@ class NoteRepository {
           rawMarkdown: Value(raw),
           body: Value(parsed.body),
           aliases: Value(_encodeAliases(parsed.aliases)),
-          snippet: Value(MarkdownContract.snippet(parsed.body)),
+          snippet: Value(
+            parsed.snippet ?? MarkdownContract.snippet(parsed.body),
+          ),
           isDaily: Value(relative.startsWith('daily/')),
           isPinned: Value(previous?.isPinned ?? false),
           lastRemoteSha: Value(previous?.lastRemoteSha),
