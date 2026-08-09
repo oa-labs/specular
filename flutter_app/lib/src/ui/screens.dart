@@ -1118,18 +1118,45 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
 class TodoScreen extends ConsumerWidget {
   const TodoScreen({super.key});
   @override
-  Widget build(BuildContext context, WidgetRef ref) => Scaffold(
-    appBar: AppBar(title: const Text('To-dos')),
-    body: ref
-        .watch(todosProvider)
-        .when(
-          loading: () => const Center(child: CircularProgressIndicator()),
-          error: (error, _) => Center(child: Text('$error')),
-          data: (todos) => ListView(
-            children: [for (final todo in todos) _TodoRow(todo: todo)],
-          ),
+  Widget build(BuildContext context, WidgetRef ref) => DefaultTabController(
+    length: TodoFilter.values.length,
+    child: Scaffold(
+      appBar: AppBar(
+        title: const Text('To-dos'),
+        bottom: const TabBar(
+          tabs: [
+            Tab(text: 'Open'),
+            Tab(text: 'Done'),
+            Tab(text: 'All'),
+          ],
         ),
+      ),
+      body: const TabBarView(
+        children: [
+          _TodoList(filter: TodoFilter.open),
+          _TodoList(filter: TodoFilter.done),
+          _TodoList(filter: TodoFilter.all),
+        ],
+      ),
+    ),
   );
+}
+
+class _TodoList extends ConsumerWidget {
+  const _TodoList({required this.filter});
+
+  final TodoFilter filter;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) => ref
+      .watch(todosProvider(filter))
+      .when(
+        loading: () => const Center(child: CircularProgressIndicator()),
+        error: (error, _) => Center(child: Text('$error')),
+        data: (todos) => ListView(
+          children: [for (final todo in todos) _TodoRow(todo: todo)],
+        ),
+      );
 }
 
 class _TodoRow extends ConsumerWidget {

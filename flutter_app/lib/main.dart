@@ -17,6 +17,10 @@ Future<void> main() async {
   final state = await bridge.readState();
   const secureStorage = FlutterSecureStorage();
   await bridge.migrateSecrets(state, secureStorage);
+  final initialLocation = initialLocationFor(
+    platformRoute: WidgetsBinding.instance.platformDispatcher.defaultRouteName,
+    savedRoute: await secureStorage.read(key: lastRouteStorageKey),
+  );
   await SyncScheduler.initialize();
   final database = AppDatabase.openLegacy(state);
   final repository = NoteRepository(
@@ -31,7 +35,7 @@ Future<void> main() async {
         noteRepositoryProvider.overrideWithValue(repository),
         secureStorageProvider.overrideWithValue(secureStorage),
       ],
-      child: const SpecularApp(),
+      child: SpecularApp(initialLocation: initialLocation),
     ),
   );
   // Existing Android installs already have a Room index. Never hold Flutter's

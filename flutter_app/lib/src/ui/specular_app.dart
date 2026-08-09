@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:appflowy_editor/appflowy_editor.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
@@ -38,16 +40,51 @@ final aiSnippetServiceProvider = Provider<AiSnippetService>(
 final notesProvider = StreamProvider<List<Note>>(
   (ref) => ref.watch(noteRepositoryProvider).watchNotes(),
 );
-final todosProvider = StreamProvider<List<TodoItem>>(
-  (ref) => ref.watch(noteRepositoryProvider).watchTodos(),
+
+enum TodoFilter { open, done, all }
+
+final todosProvider = StreamProvider.family<List<TodoItem>, TodoFilter>(
+  (ref, filter) => ref
+      .watch(noteRepositoryProvider)
+      .watchTodos(includeCompleted: filter != TodoFilter.open)
+      .map(
+        (todos) => filter == TodoFilter.done
+            ? todos.where((todo) => todo.isCompleted).toList()
+            : todos,
+      ),
 );
 
-class SpecularApp extends ConsumerWidget {
-  const SpecularApp({super.key});
+const lastRouteStorageKey = 'last_route';
+
+/// Explicit launch destinations, such as an Android widget tap, take
+/// precedence over the page from the previous app session.
+String initialLocationFor({
+  required String platformRoute,
+  required String? savedRoute,
+}) => platformRoute != Navigator.defaultRouteName
+    ? platformRoute
+    : savedRoute ?? Navigator.defaultRouteName;
+
+class SpecularApp extends ConsumerStatefulWidget {
+  const SpecularApp({
+    super.key,
+    this.initialLocation = Navigator.defaultRouteName,
+  });
+
+  final String initialLocation;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final router = GoRouter(
+  ConsumerState<SpecularApp> createState() => _SpecularAppState();
+}
+
+class _SpecularAppState extends ConsumerState<SpecularApp> {
+  late final GoRouter _router;
+
+  @override
+  void initState() {
+    super.initState();
+    _router = GoRouter(
+      initialLocation: widget.initialLocation,
       routes: [
         GoRoute(path: '/', builder: (_, _) => const NoteListScreen()),
         GoRoute(
@@ -88,7 +125,28 @@ class SpecularApp extends ConsumerWidget {
         ),
       ],
     );
-    WidgetBridge.setNavigationHandler(router.go);
+    _router.routerDelegate.addListener(_saveCurrentRoute);
+    WidgetBridge.setNavigationHandler(_router.go);
+  }
+
+  @override
+  void dispose() {
+    _router.routerDelegate.removeListener(_saveCurrentRoute);
+    _router.dispose();
+    super.dispose();
+  }
+
+  void _saveCurrentRoute() {
+    final location = _router.routerDelegate.currentConfiguration.uri.toString();
+    unawaited(
+      ref
+          .read(secureStorageProvider)
+          .write(key: lastRouteStorageKey, value: location),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
     const amber = Color(0xffd97706);
     return MaterialApp.router(
       title: 'Specular',
@@ -113,7 +171,7 @@ class SpecularApp extends ConsumerWidget {
         ),
         useMaterial3: true,
       ),
-      routerConfig: router,
+      routerConfig: _router,
     );
   }
 }
