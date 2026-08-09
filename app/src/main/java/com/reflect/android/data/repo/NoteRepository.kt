@@ -22,6 +22,7 @@ import com.specular.android.domain.model.TodoListItem
 import com.specular.android.sync.SyncScheduler
 import com.specular.android.widget.TodoWidgetUpdater
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -326,7 +327,7 @@ class NoteRepository @Inject constructor(
     }
 
     fun search(query: String): Flow<List<NoteListItem>> {
-        return if (query.length >= 2) {
+        return if (query.isNotBlank()) {
             dao.searchLike(query).map { list ->
                 list.map { e ->
                     NoteListItem(
@@ -343,7 +344,7 @@ class NoteRepository @Inject constructor(
                 }
             }
         } else {
-            observeNotes()
+            flowOf(emptyList())
         }
     }
 

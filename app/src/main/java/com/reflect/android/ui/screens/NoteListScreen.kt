@@ -16,6 +16,8 @@ import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.ExperimentalMaterialApi
 import androidx.compose.material.pullrefresh.PullRefreshIndicator
 import androidx.compose.material.pullrefresh.pullRefresh
@@ -50,6 +52,7 @@ fun NoteListScreen(navController: NavController, vm: NoteListViewModel = hiltVie
     val savedStateHandle = navController.currentBackStackEntry?.savedStateHandle
     var overflowExpanded by remember { mutableStateOf(false) }
     var createExpanded by remember { mutableStateOf(false) }
+    var showViewOptions by remember { mutableStateOf(false) }
     val pullRefreshState = rememberPullRefreshState(isRefreshing, vm::refresh)
     val openTodayEditor = {
         vm.openToday { noteId -> navController.navigate(Screen.Editor.routeFor(noteId)) }
@@ -95,62 +98,27 @@ fun NoteListScreen(navController: NavController, vm: NoteListViewModel = hiltVie
                     IconButton(onClick = { navController.navigate(Screen.Search.route) }) { Icon(Icons.Default.Search, "Search") }
                     Box {
                         IconButton(onClick = { overflowExpanded = true }) {
-                            Icon(Icons.Default.MoreVert, "More actions")
+                            BadgedBox(
+                                badge = {
+                                    if (deselectedFolders.isNotEmpty()) Badge()
+                                }
+                            ) {
+                                Icon(Icons.Default.MoreVert, "More actions")
+                            }
                         }
                         DropdownMenu(
                             expanded = overflowExpanded,
                             onDismissRequest = { overflowExpanded = false }
                         ) {
                             DropdownMenuItem(
-                                text = { Text("Sort by last updated") },
+                                text = { Text("View options") },
                                 onClick = {
-                                    vm.setSort(NoteSort.LAST_UPDATED)
                                     overflowExpanded = false
+                                    showViewOptions = true
                                 },
-                                trailingIcon = {
-                                    if (sort == NoteSort.LAST_UPDATED) {
-                                        Icon(Icons.Default.Check, contentDescription = null)
-                                    }
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text("Sort alphabetically") },
-                                onClick = {
-                                    vm.setSort(NoteSort.ALPHABETICAL)
-                                    overflowExpanded = false
-                                },
-                                trailingIcon = {
-                                    if (sort == NoteSort.ALPHABETICAL) {
-                                        Icon(Icons.Default.Check, contentDescription = null)
-                                    }
-                                }
+                                leadingIcon = { Icon(Icons.Default.Tune, contentDescription = null) }
                             )
                             HorizontalDivider()
-                            if (folders.isNotEmpty()) {
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(start = 16.dp, top = 8.dp, end = 12.dp, bottom = 4.dp),
-                                    verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
-                                ) {
-                                    Icon(Icons.Default.FilterList, contentDescription = null)
-                                    Spacer(Modifier.width(12.dp))
-                                    Text("Filter folders", style = MaterialTheme.typography.labelLarge)
-                                }
-                                folders.forEach { folder ->
-                                    DropdownMenuItem(
-                                        text = { Text(folder) },
-                                        onClick = { vm.toggleFolder(folder) },
-                                        trailingIcon = {
-                                            Checkbox(
-                                                checked = folder !in deselectedFolders,
-                                                onCheckedChange = null
-                                            )
-                                        }
-                                    )
-                                }
-                                HorizontalDivider()
-                            }
                             DropdownMenuItem(
                                 text = { Text("Settings") },
                                 onClick = {
@@ -169,39 +137,37 @@ fun NoteListScreen(navController: NavController, vm: NoteListViewModel = hiltVie
                 horizontalAlignment = androidx.compose.ui.Alignment.End,
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                Box {
-                    SmallFloatingActionButton(onClick = { createExpanded = true }) {
-                        Icon(Icons.Default.MoreVert, "More ways to add")
-                    }
-                    DropdownMenu(
-                        expanded = createExpanded,
-                        onDismissRequest = { createExpanded = false }
-                    ) {
-                        DropdownMenuItem(
-                            text = { Text("New note") },
-                            onClick = {
-                                createExpanded = false
-                                navController.navigate(Screen.Editor.routeForNew())
-                            },
-                            leadingIcon = { Icon(Icons.Default.Add, contentDescription = null) }
-                        )
-                        DropdownMenuItem(
-                            text = { Text("New to-do") },
-                            onClick = {
-                                createExpanded = false
-                                navController.navigate(Screen.Editor.routeForNewTodo())
-                            },
-                            leadingIcon = { Icon(Icons.Default.Checklist, contentDescription = null) }
-                        )
-                        DropdownMenuItem(
-                            text = { Text("Voice capture") },
-                            onClick = {
-                                createExpanded = false
-                                navController.navigate(Screen.VoiceCapture.route)
-                            },
-                            leadingIcon = { Icon(Icons.Default.Mic, contentDescription = null) }
-                        )
-                    }
+                if (createExpanded) {
+                    ExtendedFloatingActionButton(
+                        onClick = {
+                            createExpanded = false
+                            navController.navigate(Screen.Editor.routeForNew())
+                        },
+                        icon = { Icon(Icons.Default.Add, contentDescription = null) },
+                        text = { Text("New note") },
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant,
+                        contentColor = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    ExtendedFloatingActionButton(
+                        onClick = {
+                            createExpanded = false
+                            navController.navigate(Screen.Editor.routeForNewTodo())
+                        },
+                        icon = { Icon(Icons.Default.Checklist, contentDescription = null) },
+                        text = { Text("New to-do") },
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant,
+                        contentColor = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    ExtendedFloatingActionButton(
+                        onClick = {
+                            createExpanded = false
+                            navController.navigate(Screen.VoiceCapture.route)
+                        },
+                        icon = { Icon(Icons.Default.Mic, contentDescription = null) },
+                        text = { Text("Voice capture") },
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant,
+                        contentColor = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
                 ExtendedFloatingActionButton(
                     onClick = openTodayEditor,
@@ -209,8 +175,20 @@ fun NoteListScreen(navController: NavController, vm: NoteListViewModel = hiltVie
                         if (isOpeningToday) CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
                         else Icon(Icons.Default.CalendarToday, contentDescription = null)
                     },
-                    text = { Text("Add to today") }
+                    text = { Text("Add to today") },
+                    containerColor = MaterialTheme.colorScheme.primary,
+                    contentColor = MaterialTheme.colorScheme.onPrimary
                 )
+                SmallFloatingActionButton(
+                    onClick = { createExpanded = !createExpanded },
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant,
+                    contentColor = MaterialTheme.colorScheme.onSurfaceVariant
+                ) {
+                    Icon(
+                        if (createExpanded) Icons.Default.Close else Icons.Default.Add,
+                        if (createExpanded) "Close create menu" else "Create new item"
+                    )
+                }
             }
         }
     ) { padding ->
@@ -238,7 +216,10 @@ fun NoteListScreen(navController: NavController, vm: NoteListViewModel = hiltVie
                     }
                 }
             } else {
-                LazyColumn(modifier = Modifier.fillMaxSize().weight(1f)) {
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize().weight(1f),
+                    contentPadding = PaddingValues(bottom = 168.dp)
+                ) {
                     items(notes, key = { it.id }) { item ->
                         ListItem(
                             headlineContent = { Text(item.title) },
@@ -270,6 +251,83 @@ fun NoteListScreen(navController: NavController, vm: NoteListViewModel = hiltVie
             modifier = Modifier.align(androidx.compose.ui.Alignment.TopCenter)
         )
         }
+    }
+
+    if (showViewOptions) {
+        ModalBottomSheet(
+            onDismissRequest = { showViewOptions = false },
+            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 24.dp, end = 24.dp, bottom = 32.dp)
+            ) {
+                Text("View options", style = MaterialTheme.typography.headlineSmall)
+                Text(
+                    "Sort and choose the folders shown on your home screen.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 4.dp, bottom = 16.dp)
+                )
+                Text("Sort", style = MaterialTheme.typography.titleSmall)
+                SortOption(
+                    label = "Last updated",
+                    selected = sort == NoteSort.LAST_UPDATED,
+                    onClick = { vm.setSort(NoteSort.LAST_UPDATED) }
+                )
+                SortOption(
+                    label = "Title, A–Z",
+                    selected = sort == NoteSort.ALPHABETICAL,
+                    onClick = { vm.setSort(NoteSort.ALPHABETICAL) }
+                )
+                if (folders.isNotEmpty()) {
+                    HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
+                    ) {
+                        Icon(Icons.Default.FilterList, contentDescription = null)
+                        Spacer(Modifier.width(12.dp))
+                        Text("Folders", style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
+                        if (deselectedFolders.isNotEmpty()) {
+                            TextButton(onClick = vm::showAllFolders) { Text("Show all") }
+                        }
+                    }
+                    folders.forEach { folder ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { vm.toggleFolder(folder) }
+                                .padding(vertical = 8.dp),
+                            verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
+                        ) {
+                            Checkbox(
+                                checked = folder !in deselectedFolders,
+                                onCheckedChange = { vm.toggleFolder(folder) }
+                            )
+                            Spacer(Modifier.width(12.dp))
+                            Text(folder, style = MaterialTheme.typography.bodyLarge)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SortOption(label: String, selected: Boolean, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(vertical = 6.dp),
+        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
+    ) {
+        RadioButton(selected = selected, onClick = onClick)
+        Spacer(Modifier.width(12.dp))
+        Text(label, style = MaterialTheme.typography.bodyLarge)
     }
 }
 

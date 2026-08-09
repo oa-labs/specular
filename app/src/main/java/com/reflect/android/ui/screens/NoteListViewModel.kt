@@ -129,6 +129,11 @@ class NoteListViewModel @Inject constructor(
         folderFilterSettings.saveDeselectedFolders(updatedFolders)
     }
 
+    fun showAllFolders() {
+        _deselectedFolders.value = emptySet()
+        folderFilterSettings.saveDeselectedFolders(emptySet())
+    }
+
     fun refresh() {
         if (_isRefreshing.value) return
         viewModelScope.launch {
