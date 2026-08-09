@@ -134,79 +134,87 @@ class _NoteListScreenState extends ConsumerState<NoteListScreen> {
     final folders = noteFolders(notes);
     showModalBottomSheet<void>(
       context: context,
+      isScrollControlled: true,
       builder: (sheetContext) => SafeArea(
-        child: StatefulBuilder(
-          builder: (context, setSheetState) => Padding(
-            padding: const EdgeInsets.fromLTRB(24, 16, 24, 28),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'View options',
-                  style: Theme.of(context).textTheme.headlineSmall,
-                ),
-                const SizedBox(height: 4),
-                const Text(
-                  'Sort and choose the folders shown on your home screen.',
-                ),
-                const SizedBox(height: 16),
-                Text('Sort', style: Theme.of(context).textTheme.titleSmall),
-                RadioGroup<NoteListSort>(
-                  groupValue: _sort,
-                  onChanged: (value) {
-                    if (value == null) return;
-                    setState(() => _sort = value);
-                    setSheetState(() {});
-                  },
-                  child: Column(
-                    children: const [
-                      RadioListTile<NoteListSort>(
-                        value: NoteListSort.lastUpdated,
-                        contentPadding: EdgeInsets.zero,
-                        title: Text('Last updated'),
-                      ),
-                      RadioListTile<NoteListSort>(
-                        value: NoteListSort.alphabetical,
-                        contentPadding: EdgeInsets.zero,
-                        title: Text('Title, A–Z'),
-                      ),
-                    ],
-                  ),
-                ),
-                if (folders.isNotEmpty) ...[
-                  const Divider(height: 24),
-                  Row(
-                    children: [
-                      const Icon(Icons.filter_list),
-                      const SizedBox(width: 12),
-                      Text(
-                        'Folders',
-                        style: Theme.of(context).textTheme.titleSmall,
-                      ),
-                      const Spacer(),
-                      if (_deselectedFolders.isNotEmpty)
-                        TextButton(
-                          onPressed: () {
-                            _showAllFolders();
-                            setSheetState(() {});
-                          },
-                          child: const Text('Show all'),
-                        ),
-                    ],
-                  ),
-                  for (final folder in folders)
-                    CheckboxListTile(
-                      value: !_deselectedFolders.contains(folder),
-                      contentPadding: EdgeInsets.zero,
-                      title: Text(folder),
-                      onChanged: (_) {
-                        _toggleFolder(folder);
+        child: ConstrainedBox(
+          constraints: BoxConstraints(
+            maxHeight: MediaQuery.sizeOf(sheetContext).height * .85,
+          ),
+          child: StatefulBuilder(
+            builder: (context, setSheetState) => SingleChildScrollView(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(24, 16, 24, 28),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'View options',
+                      style: Theme.of(context).textTheme.headlineSmall,
+                    ),
+                    const SizedBox(height: 4),
+                    const Text(
+                      'Sort and choose the folders shown on your home screen.',
+                    ),
+                    const SizedBox(height: 16),
+                    Text('Sort', style: Theme.of(context).textTheme.titleSmall),
+                    RadioGroup<NoteListSort>(
+                      groupValue: _sort,
+                      onChanged: (value) {
+                        if (value == null) return;
+                        setState(() => _sort = value);
                         setSheetState(() {});
                       },
+                      child: Column(
+                        children: const [
+                          RadioListTile<NoteListSort>(
+                            value: NoteListSort.lastUpdated,
+                            contentPadding: EdgeInsets.zero,
+                            title: Text('Last updated'),
+                          ),
+                          RadioListTile<NoteListSort>(
+                            value: NoteListSort.alphabetical,
+                            contentPadding: EdgeInsets.zero,
+                            title: Text('Title, A–Z'),
+                          ),
+                        ],
+                      ),
                     ),
-                ],
-              ],
+                    if (folders.isNotEmpty) ...[
+                      const Divider(height: 24),
+                      Row(
+                        children: [
+                          const Icon(Icons.filter_list),
+                          const SizedBox(width: 12),
+                          Text(
+                            'Folders',
+                            style: Theme.of(context).textTheme.titleSmall,
+                          ),
+                          const Spacer(),
+                          if (_deselectedFolders.isNotEmpty)
+                            TextButton(
+                              onPressed: () {
+                                _showAllFolders();
+                                setSheetState(() {});
+                              },
+                              child: const Text('Show all'),
+                            ),
+                        ],
+                      ),
+                      for (final folder in folders)
+                        CheckboxListTile(
+                          value: !_deselectedFolders.contains(folder),
+                          contentPadding: EdgeInsets.zero,
+                          title: Text(folder),
+                          onChanged: (_) {
+                            _toggleFolder(folder);
+                            setSheetState(() {});
+                          },
+                        ),
+                    ],
+                  ],
+                ),
+              ),
             ),
           ),
         ),
