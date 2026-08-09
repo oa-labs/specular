@@ -222,8 +222,8 @@ fun NoteListScreen(navController: NavController, vm: NoteListViewModel = hiltVie
             } else {
                 LazyColumn(
                     modifier = Modifier.fillMaxSize().weight(1f),
-                    // Keep text and metadata out of the floating create button's hit area.
-                    contentPadding = PaddingValues(end = 72.dp, bottom = 88.dp)
+                    // The bottom inset keeps the final row above the floating create button.
+                    contentPadding = PaddingValues(bottom = 88.dp)
                 ) {
                     items(notes, key = { it.id }) { item ->
                         ListItem(

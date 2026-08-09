@@ -130,7 +130,7 @@ private fun TodoFilterControl(filter: TodoFilter, onSelect: (TodoFilter) -> Unit
                 selected = option == filter,
                 onClick = { onSelect(option) },
                 shape = SegmentedButtonDefaults.itemShape(index = index, count = filters.size),
-                label = { Text(option.name.lowercase().replaceFirstChar { it.uppercase() }) }
+                label = { Text(if (option == TodoFilter.COMPLETED) "Done" else option.name.lowercase().replaceFirstChar { it.uppercase() }) }
             )
         }
     }
