@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:dio/dio.dart';
@@ -65,6 +66,18 @@ class GitHubRepositoryException implements Exception {
   String toString() => message;
 }
 
+class _RemoteSnapshot {
+  const _RemoteSnapshot({
+    required this.branch,
+    required this.commitSha,
+    required this.treeSha,
+  });
+
+  final String branch;
+  final String commitSha;
+  final String treeSha;
+}
+
 class GitHubSyncEngine {
   GitHubSyncEngine(this._repository, this._storage, {Dio? dio})
     : _dio =
@@ -87,14 +100,26 @@ class GitHubSyncEngine {
   Future<SyncResult> sync() => _serialized(() async {
     final settings = await GitHubSettings.load(_storage);
     if (settings == null) return const SyncResult.notConfigured();
+    final lease = await _repository.acquireSyncLease(
+      owner: 'github-${DateTime.now().microsecondsSinceEpoch}-$hashCode',
+    );
+    if (lease == null) {
+      return const SyncResult.success('Another sync is already running.');
+    }
+    final renewal = Timer.periodic(const Duration(minutes: 1), (_) {
+      unawaited(_repository.renewSyncLease(lease));
+    });
     try {
-      final branch = await _pull(settings);
-      await _push(settings, branch);
+      final snapshot = await _pull(settings);
+      await _push(settings, snapshot);
       return const SyncResult.success('Synced with GitHub');
     } on DioException catch (error) {
       return SyncResult.failure(_friendlyError(error), error);
     } catch (error) {
       return SyncResult.failure('Sync failed: $error', error);
+    } finally {
+      renewal.cancel();
+      await _repository.releaseSyncLease(lease);
     }
   });
 
@@ -194,7 +219,7 @@ class GitHubSyncEngine {
     }
   }
 
-  Future<String> _pull(GitHubSettings settings) async {
+  Future<_RemoteSnapshot> _pull(GitHubSettings settings) async {
     final repository = await _dio.get<Map<String, dynamic>>(
       '/repos/${settings.owner}/${settings.repo}',
       options: _options(settings),
@@ -204,9 +229,16 @@ class GitHubSyncEngine {
       '/repos/${settings.owner}/${settings.repo}/git/ref/heads/$branch',
       options: _options(settings),
     );
-    final sha = (ref.data!['object'] as Map<String, dynamic>)['sha'] as String;
+    final commitSha =
+        (ref.data!['object'] as Map<String, dynamic>)['sha'] as String;
+    final commit = await _dio.get<Map<String, dynamic>>(
+      '/repos/${settings.owner}/${settings.repo}/git/commits/$commitSha',
+      options: _options(settings),
+    );
+    final treeSha =
+        (commit.data!['tree'] as Map<String, dynamic>)['sha'] as String;
     final treeResponse = await _dio.get<Map<String, dynamic>>(
-      '/repos/${settings.owner}/${settings.repo}/git/trees/$sha',
+      '/repos/${settings.owner}/${settings.repo}/git/trees/$treeSha',
       queryParameters: const {'recursive': 1},
       options: _options(settings),
     );
@@ -222,14 +254,18 @@ class GitHubSyncEngine {
       final path = entry['path'] as String;
       final remoteSha = entry['sha'] as String;
       final local = await _repository.findByPath(path);
-      if (local?.isPendingDeletion == true || local?.lastRemoteSha == remoteSha)
+      if (local?.isPendingDeletion == true &&
+          local?.lastRemoteSha == remoteSha) {
         continue;
-      final content = await _content(settings, path, branch);
+      }
+      final content = await _blobContent(settings, remoteSha);
       final parsed = MarkdownContract.parse(content);
       final sameId = await _repository.get(
         MarkdownContract.identityFor(path, parsed.id),
       );
-      if (local?.isDirty == true) await _repository.preserveConflict(local!);
+      if (local?.isDirty == true && local?.isPendingDeletion != true) {
+        await _repository.preserveConflict(local!);
+      }
       if (sameId != null && sameId.path != path && sameId.isDirty)
         await _repository.preserveConflict(sameId);
       await _repository.applyRemote(path: path, sha: remoteSha, raw: content);
@@ -245,93 +281,108 @@ class GitHubSyncEngine {
       await _repository.applyRemoteAttachment(
         path: path,
         sha: remoteSha,
-        bytes: await _bytes(settings, path, branch),
+        bytes: await _blobBytes(settings, remoteSha),
         mimeType: _mimeFor(path),
       );
     }
-    return branch;
+    return _RemoteSnapshot(
+      branch: branch,
+      commitSha: commitSha,
+      treeSha: treeSha,
+    );
   }
 
-  Future<void> _push(GitHubSettings settings, String branch) async {
-    // Markdown never references a binary that has not been uploaded yet.
+  Future<void> _push(GitHubSettings settings, _RemoteSnapshot snapshot) async {
+    final entries = <String, Map<String, dynamic>>{};
+    final acknowledgements = <String, ({int revision, String? sha})>{};
+    final attachmentAcks = <String, String>{};
+
+    // All blobs are assembled against the exact tree pulled above and exposed
+    // in one commit. A failed ref update changes no remote files.
     for (final attachment in await _repository.dirtyAttachments()) {
       final bytes = await _repository.attachmentBytes(attachment.path);
       if (bytes == null) continue;
-      final response = await _dio.put<Map<String, dynamic>>(
-        '/repos/${settings.owner}/${settings.repo}/contents/${attachment.path}',
-        data: {
-          'message': 'Update attachment ${attachment.path.split('/').last}',
-          'content': base64Encode(bytes),
-          if (attachment.lastRemoteSha != null) 'sha': attachment.lastRemoteSha,
-          'branch': branch,
-        },
-        options: _options(settings),
-      );
-      final content = response.data?['content'] as Map<String, dynamic>?;
-      await _repository.markAttachmentSynced(
-        attachment.path,
-        content?['sha'] as String? ?? attachment.lastRemoteSha ?? '',
-      );
+      final sha = await _createBlob(settings, bytes);
+      entries[attachment.path] = _treeBlob(attachment.path, sha);
+      attachmentAcks[attachment.path] = sha;
     }
     for (final note in await _repository.dirtyNotes()) {
       if (note.isPendingDeletion) {
-        if (note.lastRemoteSha != null) {
-          try {
-            await _dio.delete<void>(
-              '/repos/${settings.owner}/${settings.repo}/contents/${note.path}',
-              data: {
-                'message': 'Delete ${note.title}',
-                'sha': note.lastRemoteSha,
-                'branch': branch,
-              },
-              options: _options(settings),
-            );
-          } on DioException catch (error) {
-            // Another client may have completed the deletion already.
-            if (error.response?.statusCode != 404) rethrow;
-          }
-        }
-        await _repository.completeDeletion(note);
+        final path = note.pendingRenameFromPath ?? note.path;
+        entries[path] = _treeDeletion(path);
+        acknowledgements[note.id] = (
+          revision: note.localRevision,
+          sha: null,
+        );
         continue;
       }
-      final response = await _dio.put<Map<String, dynamic>>(
-        '/repos/${settings.owner}/${settings.repo}/contents/${note.path}',
-        data: {
-          'message': 'Update ${note.title}',
-          'content': base64Encode(utf8.encode(note.rawMarkdown)),
-          if (note.lastRemoteSha != null) 'sha': note.lastRemoteSha,
-          'branch': branch,
-        },
-        options: _options(settings),
-      );
-      final content = response.data?['content'] as Map<String, dynamic>?;
-      if (note.pendingRenameFromPath != null &&
-          note.pendingRenameFromSha != null) {
-        await _dio.delete<void>(
-          '/repos/${settings.owner}/${settings.repo}/contents/${note.pendingRenameFromPath}',
-          data: {
-            'message': 'Rename ${note.title}',
-            'sha': note.pendingRenameFromSha,
-            'branch': branch,
-          },
-          options: _options(settings),
-        );
+      final sha = await _createBlob(settings, utf8.encode(note.rawMarkdown));
+      entries[note.path] = _treeBlob(note.path, sha);
+      if (note.pendingRenameFromPath != null) {
+        entries[note.pendingRenameFromPath!] =
+            _treeDeletion(note.pendingRenameFromPath!);
       }
-      await _repository.markSynced(
-        note,
-        content?['sha'] as String? ?? note.lastRemoteSha ?? '',
-      );
+      acknowledgements[note.id] = (revision: note.localRevision, sha: sha);
+    }
+    if (entries.isEmpty) return;
+
+    final tree = await _dio.post<Map<String, dynamic>>(
+      '/repos/${settings.owner}/${settings.repo}/git/trees',
+      data: {'base_tree': snapshot.treeSha, 'tree': entries.values.toList()},
+      options: _options(settings),
+    );
+    final newTreeSha = tree.data?['sha'] as String?;
+    if (newTreeSha == null) throw StateError('GitHub returned no tree SHA');
+    final commit = await _dio.post<Map<String, dynamic>>(
+      '/repos/${settings.owner}/${settings.repo}/git/commits',
+      data: {
+        'message': 'Sync Specular notes',
+        'tree': newTreeSha,
+        'parents': [snapshot.commitSha],
+      },
+      options: _options(settings),
+    );
+    final commitSha = commit.data?['sha'] as String?;
+    if (commitSha == null) throw StateError('GitHub returned no commit SHA');
+    await _dio.patch<void>(
+      '/repos/${settings.owner}/${settings.repo}/git/refs/heads/${Uri.encodeComponent(snapshot.branch)}',
+      data: {'sha': commitSha, 'force': false},
+      options: _options(settings),
+    );
+    await _repository.acknowledgeNotesSynced(acknowledgements);
+    for (final entry in attachmentAcks.entries) {
+      await _repository.markAttachmentSynced(entry.key, entry.value);
     }
   }
 
-  Future<String> _content(
-    GitHubSettings settings,
-    String path,
-    String branch,
-  ) async {
+  Map<String, dynamic> _treeBlob(String path, String sha) => {
+    'path': path,
+    'mode': '100644',
+    'type': 'blob',
+    'sha': sha,
+  };
+
+  Map<String, dynamic> _treeDeletion(String path) => {
+    'path': path,
+    'mode': '100644',
+    'type': 'blob',
+    'sha': null,
+  };
+
+  Future<String> _createBlob(GitHubSettings settings, List<int> bytes) async {
+    final response = await _dio.post<Map<String, dynamic>>(
+      '/repos/${settings.owner}/${settings.repo}/git/blobs',
+      data: {'content': base64Encode(bytes), 'encoding': 'base64'},
+      options: _options(settings),
+    );
+    final sha = response.data?['sha'] as String?;
+    if (sha == null) throw StateError('GitHub returned no blob SHA');
+    return sha;
+  }
+
+  Future<String> _blobContent(GitHubSettings settings, String sha) async {
     final response = await _dio.get<Map<String, dynamic>>(
-      '/repos/${settings.owner}/${settings.repo}/contents/$path',
-      queryParameters: {'ref': branch},
+      '/repos/${settings.owner}/${settings.repo}/git/blobs/$sha',
       options: _options(settings),
     );
     final content = response.data?['content'] as String?;
@@ -340,14 +391,9 @@ class GitHubSyncEngine {
     return utf8.decode(base64Decode(content.replaceAll('\n', '')));
   }
 
-  Future<List<int>> _bytes(
-    GitHubSettings settings,
-    String path,
-    String branch,
-  ) async {
+  Future<List<int>> _blobBytes(GitHubSettings settings, String sha) async {
     final response = await _dio.get<Map<String, dynamic>>(
-      '/repos/${settings.owner}/${settings.repo}/contents/$path',
-      queryParameters: {'ref': branch},
+      '/repos/${settings.owner}/${settings.repo}/git/blobs/$sha',
       options: _options(settings),
     );
     final content = response.data?['content'] as String?;

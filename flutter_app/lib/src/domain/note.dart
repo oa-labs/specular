@@ -15,6 +15,7 @@ class Note {
     required this.pendingRenameFromPath,
     required this.pendingRenameFromSha,
     required this.isConflict,
+    this.localRevision = 0,
     required this.updatedAt,
   });
 
@@ -33,6 +34,7 @@ class Note {
   final String? pendingRenameFromPath;
   final String? pendingRenameFromSha;
   final bool isConflict;
+  final int localRevision;
   final DateTime updatedAt;
 }
 

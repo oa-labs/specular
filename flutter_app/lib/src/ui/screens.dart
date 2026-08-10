@@ -1254,25 +1254,62 @@ class TodoScreen extends ConsumerWidget {
   );
 }
 
-class _TodoList extends ConsumerWidget {
+class _TodoList extends ConsumerStatefulWidget {
   const _TodoList({required this.filter});
 
   final TodoFilter filter;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) => ref
-      .watch(todosProvider(filter))
+  ConsumerState<_TodoList> createState() => _TodoListState();
+}
+
+/// Keeps a visible to-do list from jumping when a note update changes the
+/// repository's default ordering. Items that arrive after the first result are
+/// added in repository order, while existing items keep their place.
+List<TodoItem> preserveTodoOrder(
+  List<TodoItem> todos,
+  List<TodoItem> previousOrder,
+) {
+  final todosById = {
+    for (final todo in todos) (todo.noteId, todo.taskIndex): todo,
+  };
+  final previousIds = {
+    for (final todo in previousOrder) (todo.noteId, todo.taskIndex),
+  };
+  return [
+    for (final todo in previousOrder) ?todosById[(todo.noteId, todo.taskIndex)],
+    for (final todo in todos)
+      if (!previousIds.contains((todo.noteId, todo.taskIndex))) todo,
+  ];
+}
+
+class _TodoListState extends ConsumerState<_TodoList> {
+  var _previousOrder = <TodoItem>[];
+
+  @override
+  Widget build(BuildContext context) => ref
+      .watch(todosProvider(widget.filter))
       .when(
         loading: () => const Center(child: CircularProgressIndicator()),
         error: (error, _) => Center(child: Text('$error')),
-        data: (todos) => ListView(
-          children: [for (final todo in todos) _TodoRow(todo: todo)],
-        ),
+        data: (todos) {
+          final orderedTodos = preserveTodoOrder(todos, _previousOrder);
+          _previousOrder = orderedTodos;
+          return ListView(
+            children: [
+              for (final todo in orderedTodos)
+                _TodoRow(
+                  key: ValueKey((todo.noteId, todo.taskIndex)),
+                  todo: todo,
+                ),
+            ],
+          );
+        },
       );
 }
 
 class _TodoRow extends ConsumerWidget {
-  const _TodoRow({required this.todo});
+  const _TodoRow({super.key, required this.todo});
   final TodoItem todo;
 
   @override

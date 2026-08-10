@@ -39,6 +39,15 @@ class TodoWidgetStore(private val context: Context) {
                 put("isDirty", 1)
                 put("updatedAt", System.currentTimeMillis())
             }, "id = ?", arrayOf(noteId))
+            // Flutter's schema migration normally adds this column before the
+            // widget runs. The fallback keeps an upgraded-but-not-yet-opened
+            // install safe as well.
+            try {
+                db.execSQL("UPDATE notes SET localRevision = localRevision + 1 WHERE id = ?", arrayOf(noteId))
+            } catch (_: Exception) {
+                db.execSQL("ALTER TABLE notes ADD COLUMN localRevision INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("UPDATE notes SET localRevision = localRevision + 1 WHERE id = ?", arrayOf(noteId))
+            }
             db.delete("todo_index", "noteId = ?", arrayOf(noteId))
             taskRegex.findAll(body).forEachIndexed { index, task ->
                 db.insert("todo_index", null, ContentValues().apply {
@@ -70,6 +79,7 @@ class TodoWidgetStore(private val context: Context) {
     }
 
     private companion object {
-        val taskRegex = Regex("(?m)^\\s*[-*+]\\s+\\[([ xX])\\]\\s*(.*)$")
+        // Only Reflect global `+` tasks appear in the widget's source index.
+        val taskRegex = Regex("(?m)^\\s*\\+\\s+\\[([ xX])\\]\\s*(.*)$")
     }
 }

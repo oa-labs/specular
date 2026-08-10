@@ -90,7 +90,13 @@ class NoteRepository {
 
   Future<List<Note>> dirtyNotes() async => (await (_db.select(
     _db.noteRows,
-  )..where((note) => note.isDirty.equals(true))).get()).map(_toNote).toList();
+  )
+        ..where((note) => note.isDirty.equals(true))
+        ..orderBy([(note) => OrderingTerm.asc(note.updatedAt)])
+      )
+      .get())
+      .map(_toNote)
+      .toList();
 
   Future<void> applyRemote({
     required String path,
@@ -128,20 +134,119 @@ class NoteRepository {
         updatedAt: Value(DateTime.now().millisecondsSinceEpoch),
       ),
       writeFile: true,
+      localMutation: false,
     );
   }
 
-  Future<void> markSynced(Note note, String sha) async {
-    await (_db.update(
-      _db.noteRows,
-    )..where((row) => row.id.equals(note.id))).write(
-      NoteRowsCompanion(
-        lastRemoteSha: Value(sha),
-        isDirty: const Value(false),
-        pendingRenameFromPath: const Value(null),
-        pendingRenameFromSha: const Value(null),
-      ),
+  Future<SyncLease?> acquireSyncLease({
+    required String owner,
+    Duration duration = const Duration(minutes: 2),
+  }) async {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final expiresAt = now + duration.inMilliseconds;
+    final acquired = await _db.transaction(() async {
+      await _db.customStatement(
+        'INSERT OR IGNORE INTO sync_leases (scope, owner, expiresAt) VALUES (?, ?, ?)',
+        ['github', owner, 0],
+      );
+      return _db.customUpdate(
+        '''
+          UPDATE sync_leases SET owner = ?, expiresAt = ?
+          WHERE scope = 'github' AND (expiresAt <= ? OR owner = ?)
+        ''',
+        variables: [
+          Variable.withString(owner),
+          Variable.withInt(expiresAt),
+          Variable.withInt(now),
+          Variable.withString(owner),
+        ],
+      );
+    });
+    return acquired == 1 ? SyncLease(owner: owner, expiresAt: expiresAt) : null;
+  }
+
+  Future<bool> renewSyncLease(
+    SyncLease lease, {
+    Duration duration = const Duration(minutes: 2),
+  }) async {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final expiresAt = now + duration.inMilliseconds;
+    final updated = await _db.customUpdate(
+      '''
+        UPDATE sync_leases SET expiresAt = ?
+        WHERE scope = 'github' AND owner = ? AND expiresAt > ?
+      ''',
+      variables: [
+        Variable.withInt(expiresAt),
+        Variable.withString(lease.owner),
+        Variable.withInt(now),
+      ],
     );
+    lease.expiresAt = expiresAt;
+    return updated == 1;
+  }
+
+  Future<void> releaseSyncLease(SyncLease lease) => _db.customUpdate(
+    "UPDATE sync_leases SET expiresAt = 0 WHERE scope = 'github' AND owner = ?",
+    variables: [Variable.withString(lease.owner)],
+  );
+
+  Future<void> markSynced(Note note, String sha) async {
+    await acknowledgeNotesSynced({note.id: (revision: note.localRevision, sha: sha)});
+  }
+
+  /// Records a remote acknowledgement without losing an edit that was made
+  /// while the HTTP request was in flight.  In that case the new remote SHA is
+  /// still installed as the baseline, but the newer local revision remains
+  /// dirty for the next commit.
+  Future<void> acknowledgeNotesSynced(
+    Map<String, ({int revision, String? sha})> acknowledgements,
+  ) async {
+    await _db.transaction(() async {
+      for (final entry in acknowledgements.entries) {
+        final current = await get(entry.key);
+        if (current == null) continue;
+        final acknowledgement = entry.value;
+        if (current.localRevision == acknowledgement.revision &&
+            current.isPendingDeletion) {
+          await completeDeletion(current);
+          continue;
+        }
+        final acknowledgedCurrentRevision =
+            current.localRevision == acknowledgement.revision;
+        await (_db.update(_db.noteRows)
+              ..where((row) => row.id.equals(current.id)))
+            .write(
+              NoteRowsCompanion(
+                lastRemoteSha: Value(acknowledgement.sha),
+                isDirty: Value(
+                  acknowledgedCurrentRevision ? false : current.isDirty,
+                ),
+                pendingRenameFromPath: Value(
+                  acknowledgedCurrentRevision
+                      ? null
+                      : current.pendingRenameFromPath,
+                ),
+                pendingRenameFromSha: Value(
+                  acknowledgedCurrentRevision
+                      ? null
+                      : current.pendingRenameFromSha,
+                ),
+              ),
+            );
+        if (acknowledgedCurrentRevision) {
+          await (_db.delete(_db.syncOperations)
+                ..where(
+                  (operation) =>
+                      operation.noteId.equals(current.id) &
+                      operation.localRevision.isSmallerOrEqualValue(
+                        acknowledgement.revision,
+                      ),
+                ))
+              .go();
+        }
+      }
+    });
   }
 
   Future<void> completeDeletion(Note note) async {
@@ -152,6 +257,9 @@ class NoteRepository {
       await (_db.delete(
         _db.noteRows,
       )..where((row) => row.id.equals(note.id))).go();
+      await (_db.delete(
+        _db.syncOperations,
+      )..where((row) => row.noteId.equals(note.id))).go();
     });
   }
 
@@ -192,8 +300,9 @@ class NoteRepository {
     final directory = p.dirname(note.path);
     final extension = p.extension(note.path);
     final base = p.basenameWithoutExtension(note.path);
-    final conflictPath =
-        '${directory == '.' ? '' : '$directory/'}$base (conflict $suffix)$extension';
+    final conflictPath = await _availablePath(
+      '${directory == '.' ? '' : '$directory/'}$base (conflict $suffix)$extension',
+    );
     final conflictId = '01${_uuid.v4().replaceAll('-', '').substring(0, 24)}';
     final raw = '${MarkdownContract.frontmatter(conflictId)}${note.body}';
     await _put(
@@ -249,6 +358,7 @@ class NoteRepository {
         updatedAt: DateTime.now().millisecondsSinceEpoch,
       ),
       writeFile: true,
+      localMutation: false,
     );
     _scheduleSync();
     return note;
@@ -377,6 +487,8 @@ class NoteRepository {
         updatedAt: Value(DateTime.now().millisecondsSinceEpoch),
       ),
       writeFile: false,
+      operationKind: 'rename',
+      operationFromPath: note.pendingRenameFromPath ?? note.path,
     );
     _scheduleSync();
     return updated;
@@ -390,27 +502,28 @@ class NoteRepository {
       rename(note, p.join('archive', p.basename(note.path)));
 
   Future<void> delete(Note note) async {
-    await _db
-        .into(_db.noteRows)
-        .insertOnConflictUpdate(
-          NoteRowsCompanion(
-            id: Value(note.id),
-            title: Value(note.title),
-            path: Value(note.path),
-            rawMarkdown: Value(note.rawMarkdown),
-            body: Value(note.body),
-            aliases: Value(_encodeAliases(note.aliases)),
-            isDaily: Value(note.isDaily),
-            isPinned: Value(note.isPinned),
-            lastRemoteSha: Value(note.lastRemoteSha),
-            isDirty: const Value(true),
-            isPendingDeletion: const Value(true),
-            pendingRenameFromPath: Value(note.pendingRenameFromPath),
-            pendingRenameFromSha: Value(note.pendingRenameFromSha),
-            isConflict: Value(note.isConflict),
-            updatedAt: Value(DateTime.now().millisecondsSinceEpoch),
-          ),
-        );
+    await _put(
+      NoteRowsCompanion(
+        id: Value(note.id),
+        title: Value(note.title),
+        path: Value(note.path),
+        rawMarkdown: Value(note.rawMarkdown),
+        body: Value(note.body),
+        aliases: Value(_encodeAliases(note.aliases)),
+        isDaily: Value(note.isDaily),
+        isPinned: Value(note.isPinned),
+        lastRemoteSha: Value(note.lastRemoteSha),
+        isDirty: const Value(true),
+        isPendingDeletion: const Value(true),
+        pendingRenameFromPath: Value(note.pendingRenameFromPath),
+        pendingRenameFromSha: Value(note.pendingRenameFromSha),
+        isConflict: Value(note.isConflict),
+        updatedAt: Value(DateTime.now().millisecondsSinceEpoch),
+      ),
+      writeFile: false,
+      operationKind: 'delete',
+      operationFromPath: note.pendingRenameFromPath ?? note.path,
+    );
     final file = _file(note.path);
     if (await file.exists()) await file.delete();
     _scheduleSync();
@@ -679,17 +792,55 @@ class NoteRepository {
           ),
         ),
         writeFile: false,
+        localMutation: false,
       );
     }
   }
 
-  Future<Note> _put(NoteRowsCompanion note, {required bool writeFile}) async {
+  Future<Note> _put(
+    NoteRowsCompanion note, {
+    required bool writeFile,
+    bool localMutation = true,
+    String operationKind = 'upsert',
+    String? operationFromPath,
+  }) async {
     if (writeFile) await _write(note.path.value, note.rawMarkdown.value);
     await _db.transaction(() async {
-      await _db.into(_db.noteRows).insertOnConflictUpdate(note);
-      await _indexGlobalTasks(note.id.value, note.body.value);
+      final previous = await (_db.select(
+        _db.noteRows,
+      )..where((row) => row.id.equals(note.id.value))).getSingleOrNull();
+      final revision = localMutation
+          ? (previous?.localRevision ?? 0) + 1
+          : (previous?.localRevision ?? 0);
+      final persisted = note.copyWith(localRevision: Value(revision));
+      await _db.into(_db.noteRows).insertOnConflictUpdate(persisted);
+      await _indexGlobalTasks(persisted.id.value, persisted.body.value);
+      if (localMutation) {
+        await _db.into(_db.syncOperations).insert(
+          SyncOperationsCompanion.insert(
+            noteId: Value(persisted.id.value),
+            kind: operationKind,
+            path: persisted.path.value,
+            fromPath: Value(operationFromPath),
+            localRevision: revision,
+            createdAt: DateTime.now().millisecondsSinceEpoch,
+          ),
+        );
+      }
     });
     return (await get(note.id.value))!;
+  }
+
+  Future<String> _availablePath(String desiredPath) async {
+    if (await findByPath(desiredPath) == null) return desiredPath;
+    final directory = p.dirname(desiredPath);
+    final extension = p.extension(desiredPath);
+    final base = p.basenameWithoutExtension(desiredPath);
+    for (var index = 2; ; index++) {
+      final candidate =
+          '${directory == '.' ? '' : '$directory/'}$base $index$extension';
+      if (await findByPath(candidate) == null) return candidate;
+    }
   }
 
   Future<void> _indexGlobalTasks(String noteId, String body) async {
@@ -802,8 +953,16 @@ class NoteRepository {
     pendingRenameFromPath: row.pendingRenameFromPath,
     pendingRenameFromSha: row.pendingRenameFromSha,
     isConflict: row.isConflict,
+    localRevision: row.localRevision,
     updatedAt: DateTime.fromMillisecondsSinceEpoch(row.updatedAt),
   );
+}
+
+class SyncLease {
+  SyncLease({required this.owner, required this.expiresAt});
+
+  final String owner;
+  int expiresAt;
 }
 
 class StagedImage {

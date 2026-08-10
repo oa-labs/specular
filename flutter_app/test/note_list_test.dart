@@ -69,4 +69,35 @@ void main() {
       ['Inbox', 'Plan'],
     );
   });
+
+  test('keeps existing to-dos in place when their note is updated', () {
+    TodoItem todo(String noteId, int taskIndex, String text, bool completed) =>
+        TodoItem(
+          noteId: noteId,
+          taskIndex: taskIndex,
+          text: text,
+          isCompleted: completed,
+          noteTitle: noteId,
+        );
+
+    final beforeUpdate = [
+      todo('newer-note', 0, 'Third task', false),
+      todo('older-note', 0, 'First task', false),
+      todo('older-note', 1, 'Second task', false),
+    ];
+    final afterUpdate = [
+      todo('older-note', 0, 'First task', true),
+      todo('older-note', 1, 'Second task', false),
+      todo('newer-note', 0, 'Third task', false),
+    ];
+
+    final stableOrder = preserveTodoOrder(afterUpdate, beforeUpdate);
+
+    expect(stableOrder.map((todo) => todo.text), [
+      'Third task',
+      'First task',
+      'Second task',
+    ]);
+    expect(stableOrder[1].isCompleted, isTrue);
+  });
 }

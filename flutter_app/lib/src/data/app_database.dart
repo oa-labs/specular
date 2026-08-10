@@ -30,6 +30,10 @@ class NoteRows extends Table {
       text().named('pendingRenameFromSha').nullable()();
   BoolColumn get isConflict =>
       boolean().named('isConflict').withDefault(const Constant(false))();
+  /// Incremented for every local mutation.  Remote acknowledgements must only
+  /// clear dirty state when they acknowledge this exact revision.
+  IntColumn get localRevision =>
+      integer().named('localRevision').withDefault(const Constant(0))();
   IntColumn get updatedAt => integer().named('updatedAt')();
   @override
   Set<Column<Object>> get primaryKey => {id};
@@ -71,7 +75,39 @@ class Attachments extends Table {
   Set<Column<Object>> get primaryKey => {path};
 }
 
-@DriftDatabase(tables: [NoteRows, TodoEntries, TodoIndexStates, Attachments])
+/// A durable audit of local mutations.  The current note row is the compact
+/// materialized state, while this journal lets a crash between local work and
+/// a remote commit be recovered without guessing intent.
+class SyncOperations extends Table {
+  IntColumn get id => integer().autoIncrement()();
+  TextColumn get noteId => text().nullable()();
+  TextColumn get kind => text()();
+  TextColumn get path => text()();
+  TextColumn get fromPath => text().nullable()();
+  IntColumn get localRevision => integer()();
+  IntColumn get createdAt => integer()();
+}
+
+/// A database-backed lease shared by the UI isolate and WorkManager isolates.
+/// It intentionally has an expiry so a killed worker cannot wedge sync.
+class SyncLeases extends Table {
+  TextColumn get scope => text()();
+  TextColumn get owner => text()();
+  IntColumn get expiresAt => integer()();
+  @override
+  Set<Column<Object>> get primaryKey => {scope};
+}
+
+@DriftDatabase(
+  tables: [
+    NoteRows,
+    TodoEntries,
+    TodoIndexStates,
+    Attachments,
+    SyncOperations,
+    SyncLeases,
+  ],
+)
 class AppDatabase extends _$AppDatabase {
   AppDatabase._(super.executor);
 
@@ -90,12 +126,13 @@ class AppDatabase extends _$AppDatabase {
   );
 
   @override
-  int get schemaVersion => 8;
+  int get schemaVersion => 10;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
     onCreate: (m) async {
       await m.createAll();
+      await ensureUniqueNotePaths();
       // Search uses LIKE. The Android migration rebuilds old Room FTS4 indexes
       // because Flutter's bundled SQLite intentionally does not include FTS4.
     },
@@ -103,6 +140,74 @@ class AppDatabase extends _$AppDatabase {
       if (from < 8) {
         await m.renameColumn(noteRows, 'snippet', noteRows.summary);
       }
+      if (from < 9) await ensureUniqueNotePaths();
+      if (from < 10) {
+        await m.addColumn(noteRows, noteRows.localRevision);
+        await m.createTable(syncOperations);
+        await m.createTable(syncLeases);
+      }
     },
   );
+
+  /// Repairs duplicate paths left by older conflict handling, preserving every
+  /// note as a separately syncable recovered conflict before enforcing the
+  /// path uniqueness that sync depends on.
+  Future<void> ensureUniqueNotePaths() async {
+    await transaction(() async {
+      final duplicatePaths = await customSelect(
+        'SELECT path FROM notes GROUP BY path HAVING COUNT(*) > 1',
+      ).get();
+      final occupiedPaths = (await customSelect(
+        'SELECT path FROM notes',
+      ).get()).map((row) => row.read<String>('path')).toSet();
+
+      for (final row in duplicatePaths) {
+        final path = row.read<String>('path');
+        final notesAtPath = await customSelect(
+          '''
+            SELECT id FROM notes
+            WHERE path = ?
+            ORDER BY isConflict ASC, updatedAt DESC, id ASC
+          ''',
+          variables: [Variable.withString(path)],
+        ).get();
+        for (final duplicate in notesAtPath.skip(1)) {
+          final recoveredPath = _recoveredPath(path, occupiedPaths);
+          occupiedPaths.add(recoveredPath);
+          await customStatement(
+            '''
+              UPDATE notes
+              SET path = ?,
+                  title = title || ' (recovered)',
+                  lastRemoteSha = NULL,
+                  isDirty = 1,
+                  isPendingDeletion = 0,
+                  pendingRenameFromPath = NULL,
+                  pendingRenameFromSha = NULL,
+                  isConflict = 1
+              WHERE id = ?
+            ''',
+            [recoveredPath, duplicate.read<String>('id')],
+          );
+        }
+      }
+      await customStatement(
+        'CREATE UNIQUE INDEX IF NOT EXISTS notes_path_unique ON notes(path)',
+      );
+    });
+  }
+
+  String _recoveredPath(String path, Set<String> occupiedPaths) {
+    final extensionStart = path.lastIndexOf('.');
+    final base = extensionStart == -1
+        ? path
+        : path.substring(0, extensionStart);
+    final extension = extensionStart == -1
+        ? ''
+        : path.substring(extensionStart);
+    for (var index = 2; ; index++) {
+      final candidate = '$base (recovered $index)$extension';
+      if (!occupiedPaths.contains(candidate)) return candidate;
+    }
+  }
 }
