@@ -88,15 +88,13 @@ class NoteRepository {
     return row == null ? null : _toNote(row);
   }
 
-  Future<List<Note>> dirtyNotes() async => (await (_db.select(
-    _db.noteRows,
-  )
-        ..where((note) => note.isDirty.equals(true))
-        ..orderBy([(note) => OrderingTerm.asc(note.updatedAt)])
-      )
-      .get())
-      .map(_toNote)
-      .toList();
+  Future<List<Note>> dirtyNotes() async =>
+      (await (_db.select(_db.noteRows)
+                ..where((note) => note.isDirty.equals(true))
+                ..orderBy([(note) => OrderingTerm.asc(note.updatedAt)]))
+              .get())
+          .map(_toNote)
+          .toList();
 
   Future<void> applyRemote({
     required String path,
@@ -192,7 +190,9 @@ class NoteRepository {
   );
 
   Future<void> markSynced(Note note, String sha) async {
-    await acknowledgeNotesSynced({note.id: (revision: note.localRevision, sha: sha)});
+    await acknowledgeNotesSynced({
+      note.id: (revision: note.localRevision, sha: sha),
+    });
   }
 
   /// Records a remote acknowledgement without losing an edit that was made
@@ -214,35 +214,32 @@ class NoteRepository {
         }
         final acknowledgedCurrentRevision =
             current.localRevision == acknowledgement.revision;
-        await (_db.update(_db.noteRows)
-              ..where((row) => row.id.equals(current.id)))
-            .write(
-              NoteRowsCompanion(
-                lastRemoteSha: Value(acknowledgement.sha),
-                isDirty: Value(
-                  acknowledgedCurrentRevision ? false : current.isDirty,
-                ),
-                pendingRenameFromPath: Value(
-                  acknowledgedCurrentRevision
-                      ? null
-                      : current.pendingRenameFromPath,
-                ),
-                pendingRenameFromSha: Value(
-                  acknowledgedCurrentRevision
-                      ? null
-                      : current.pendingRenameFromSha,
-                ),
-              ),
-            );
+        await (_db.update(
+          _db.noteRows,
+        )..where((row) => row.id.equals(current.id))).write(
+          NoteRowsCompanion(
+            lastRemoteSha: Value(acknowledgement.sha),
+            isDirty: Value(
+              acknowledgedCurrentRevision ? false : current.isDirty,
+            ),
+            pendingRenameFromPath: Value(
+              acknowledgedCurrentRevision
+                  ? null
+                  : current.pendingRenameFromPath,
+            ),
+            pendingRenameFromSha: Value(
+              acknowledgedCurrentRevision ? null : current.pendingRenameFromSha,
+            ),
+          ),
+        );
         if (acknowledgedCurrentRevision) {
-          await (_db.delete(_db.syncOperations)
-                ..where(
-                  (operation) =>
-                      operation.noteId.equals(current.id) &
-                      operation.localRevision.isSmallerOrEqualValue(
-                        acknowledgement.revision,
-                      ),
-                ))
+          await (_db.delete(_db.syncOperations)..where(
+                (operation) =>
+                    operation.noteId.equals(current.id) &
+                    operation.localRevision.isSmallerOrEqualValue(
+                      acknowledgement.revision,
+                    ),
+              ))
               .go();
         }
       }
@@ -816,16 +813,18 @@ class NoteRepository {
       await _db.into(_db.noteRows).insertOnConflictUpdate(persisted);
       await _indexGlobalTasks(persisted.id.value, persisted.body.value);
       if (localMutation) {
-        await _db.into(_db.syncOperations).insert(
-          SyncOperationsCompanion.insert(
-            noteId: Value(persisted.id.value),
-            kind: operationKind,
-            path: persisted.path.value,
-            fromPath: Value(operationFromPath),
-            localRevision: revision,
-            createdAt: DateTime.now().millisecondsSinceEpoch,
-          ),
-        );
+        await _db
+            .into(_db.syncOperations)
+            .insert(
+              SyncOperationsCompanion.insert(
+                noteId: Value(persisted.id.value),
+                kind: operationKind,
+                path: persisted.path.value,
+                fromPath: Value(operationFromPath),
+                localRevision: revision,
+                createdAt: DateTime.now().millisecondsSinceEpoch,
+              ),
+            );
       }
     });
     return (await get(note.id.value))!;

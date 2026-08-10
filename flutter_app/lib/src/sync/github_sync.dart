@@ -79,26 +79,31 @@ class _RemoteSnapshot {
 }
 
 class GitHubSyncEngine {
-  GitHubSyncEngine(this._repository, this._storage, {Dio? dio})
-    : _dio =
-          dio ??
-          Dio(
-            BaseOptions(
-              baseUrl: 'https://api.github.com',
-              headers: const {
-                'Accept': 'application/vnd.github+json',
-                'X-GitHub-Api-Version': '2022-11-28',
-              },
-            ),
-          );
+  GitHubSyncEngine(
+    this._repository,
+    FlutterSecureStorage storage, {
+    Dio? dio,
+    Future<GitHubSettings?> Function()? settingsLoader,
+  }) : _settingsLoader = settingsLoader ?? (() => GitHubSettings.load(storage)),
+       _dio =
+           dio ??
+           Dio(
+             BaseOptions(
+               baseUrl: 'https://api.github.com',
+               headers: const {
+                 'Accept': 'application/vnd.github+json',
+                 'X-GitHub-Api-Version': '2022-11-28',
+               },
+             ),
+           );
 
   final NoteRepository _repository;
-  final FlutterSecureStorage _storage;
+  final Future<GitHubSettings?> Function() _settingsLoader;
   final Dio _dio;
   Future<void> _tail = Future.value();
 
   Future<SyncResult> sync() => _serialized(() async {
-    final settings = await GitHubSettings.load(_storage);
+    final settings = await _settingsLoader();
     if (settings == null) return const SyncResult.notConfigured();
     final lease = await _repository.acquireSyncLease(
       owner: 'github-${DateTime.now().microsecondsSinceEpoch}-$hashCode',
@@ -201,14 +206,13 @@ class GitHubSyncEngine {
       );
       final sha =
           (ref.data!['object'] as Map<String, dynamic>)['sha'] as String;
-      final tree = await _dio.get<Map<String, dynamic>>(
-        '/repos/${repository.owner}/${repository.name}/git/trees/$sha',
-        queryParameters: const {'recursive': 1},
+      final commit = await _dio.get<Map<String, dynamic>>(
+        '/repos/${repository.owner}/${repository.name}/git/commits/$sha',
         options: _options(settings),
       );
-      final entries = List<Map<String, dynamic>>.from(
-        tree.data!['tree'] as List,
-      );
+      final treeSha =
+          (commit.data!['tree'] as Map<String, dynamic>)['sha'] as String;
+      final entries = await _allTreeEntries(settings, treeSha);
       if (!entries.any(_isMarkdownNote)) {
         throw GitHubRepositoryException(
           '${repository.fullName} has no Markdown notes on ${repository.defaultBranch}.',
@@ -237,18 +241,7 @@ class GitHubSyncEngine {
     );
     final treeSha =
         (commit.data!['tree'] as Map<String, dynamic>)['sha'] as String;
-    final treeResponse = await _dio.get<Map<String, dynamic>>(
-      '/repos/${settings.owner}/${settings.repo}/git/trees/$treeSha',
-      queryParameters: const {'recursive': 1},
-      options: _options(settings),
-    );
-    if (treeResponse.data!['truncated'] == true)
-      throw StateError(
-        'Repository tree is too large for GitHub recursive sync.',
-      );
-    final entries = List<Map<String, dynamic>>.from(
-      treeResponse.data!['tree'] as List,
-    );
+    final entries = await _allTreeEntries(settings, treeSha);
     final markdownEntries = entries.where(_isMarkdownNote).toList();
     for (final entry in markdownEntries) {
       final path = entry['path'] as String;
@@ -310,17 +303,15 @@ class GitHubSyncEngine {
       if (note.isPendingDeletion) {
         final path = note.pendingRenameFromPath ?? note.path;
         entries[path] = _treeDeletion(path);
-        acknowledgements[note.id] = (
-          revision: note.localRevision,
-          sha: null,
-        );
+        acknowledgements[note.id] = (revision: note.localRevision, sha: null);
         continue;
       }
       final sha = await _createBlob(settings, utf8.encode(note.rawMarkdown));
       entries[note.path] = _treeBlob(note.path, sha);
       if (note.pendingRenameFromPath != null) {
-        entries[note.pendingRenameFromPath!] =
-            _treeDeletion(note.pendingRenameFromPath!);
+        entries[note.pendingRenameFromPath!] = _treeDeletion(
+          note.pendingRenameFromPath!,
+        );
       }
       acknowledgements[note.id] = (revision: note.localRevision, sha: sha);
     }
@@ -387,7 +378,7 @@ class GitHubSyncEngine {
     );
     final content = response.data?['content'] as String?;
     if (content == null)
-      throw StateError('GitHub returned no content for $path');
+      throw StateError('GitHub returned no content for blob $sha');
     return utf8.decode(base64Decode(content.replaceAll('\n', '')));
   }
 
@@ -398,8 +389,45 @@ class GitHubSyncEngine {
     );
     final content = response.data?['content'] as String?;
     if (content == null)
-      throw StateError('GitHub returned no content for $path');
+      throw StateError('GitHub returned no content for blob $sha');
     return base64Decode(content.replaceAll('\n', ''));
+  }
+
+  /// GitHub truncates recursive tree responses for large repositories. Walking
+  /// each directory tree avoids that global cap while retaining the exact blob
+  /// SHAs needed for a snapshot-consistent pull.
+  Future<List<Map<String, dynamic>>> _allTreeEntries(
+    GitHubSettings settings,
+    String rootTreeSha,
+  ) async {
+    final files = <Map<String, dynamic>>[];
+    final pending = <({String prefix, String sha})>[
+      (prefix: '', sha: rootTreeSha),
+    ];
+    while (pending.isNotEmpty) {
+      final current = pending.removeLast();
+      final response = await _dio.get<Map<String, dynamic>>(
+        '/repos/${settings.owner}/${settings.repo}/git/trees/${current.sha}',
+        options: _options(settings),
+      );
+      if (response.data?['truncated'] == true) {
+        throw StateError(
+          'A repository directory is too large for GitHub tree sync. Split it into subfolders.',
+        );
+      }
+      for (final entry in List<Map<String, dynamic>>.from(
+        response.data?['tree'] as List? ?? const <dynamic>[],
+      )) {
+        final name = entry['path'] as String;
+        final path = '${current.prefix}$name';
+        if (entry['type'] == 'tree') {
+          pending.add((prefix: '$path/', sha: entry['sha'] as String));
+        } else {
+          files.add({...entry, 'path': path});
+        }
+      }
+    }
+    return files;
   }
 
   bool _isMarkdownNote(Map<String, dynamic> entry) {

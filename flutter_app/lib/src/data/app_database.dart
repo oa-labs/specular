@@ -30,6 +30,7 @@ class NoteRows extends Table {
       text().named('pendingRenameFromSha').nullable()();
   BoolColumn get isConflict =>
       boolean().named('isConflict').withDefault(const Constant(false))();
+
   /// Incremented for every local mutation.  Remote acknowledgements must only
   /// clear dirty state when they acknowledge this exact revision.
   IntColumn get localRevision =>
@@ -93,7 +94,7 @@ class SyncOperations extends Table {
 class SyncLeases extends Table {
   TextColumn get scope => text()();
   TextColumn get owner => text()();
-  IntColumn get expiresAt => integer()();
+  IntColumn get expiresAt => integer().named('expiresAt')();
   @override
   Set<Column<Object>> get primaryKey => {scope};
 }

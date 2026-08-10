@@ -172,7 +172,6 @@ void main() {
         pendingRenameFromPath TEXT,
         pendingRenameFromSha TEXT,
         isConflict INTEGER NOT NULL,
-        localRevision INTEGER NOT NULL DEFAULT 0,
         updatedAt INTEGER NOT NULL
       )
     ''');
@@ -258,6 +257,101 @@ void main() {
 
     await repository.setPinned(pinned, false);
     expect((await repository.get(note.id))!.isPinned, isFalse);
+  });
+
+  test(
+    'keeps an edit made during an in-flight acknowledgement dirty',
+    () async {
+      final root = await Directory.systemTemp.createTemp(
+        'specular-notes-test-',
+      );
+      final database = AppDatabase.forTesting(NativeDatabase.memory());
+      addTearDown(() async {
+        await database.close();
+        await root.delete(recursive: true);
+      });
+      final repository = NoteRepository(
+        database,
+        Directory('${root.path}/notes'),
+      );
+      final created = await repository.create(title: 'Race safe');
+      await repository.markSynced(created, 'sha-1');
+      final saved = await repository.save(
+        (await repository.get(created.id))!,
+        title: 'Race safe',
+        body: '# Race safe\n\nNew local content',
+      );
+
+      // This is the acknowledgement for the earlier revision, received after
+      // the new save. It must establish a new base SHA but never clear dirty.
+      await repository.acknowledgeNotesSynced({
+        saved.id: (revision: created.localRevision, sha: 'sha-2'),
+      });
+
+      final current = (await repository.get(saved.id))!;
+      expect(current.localRevision, greaterThan(created.localRevision));
+      expect(current.isDirty, isTrue);
+      expect(current.lastRemoteSha, 'sha-2');
+      final operations = await database.select(database.syncOperations).get();
+      expect(
+        operations.any(
+          (operation) => operation.localRevision == current.localRevision,
+        ),
+        isTrue,
+      );
+    },
+  );
+
+  test('uses a database lease across repository instances', () async {
+    final root = await Directory.systemTemp.createTemp('specular-notes-test-');
+    final database = AppDatabase.forTesting(NativeDatabase.memory());
+    addTearDown(() async {
+      await database.close();
+      await root.delete(recursive: true);
+    });
+    final repository = NoteRepository(
+      database,
+      Directory('${root.path}/notes'),
+    );
+    final first = await repository.acquireSyncLease(owner: 'worker-a');
+    expect(first, isNotNull);
+    expect(await repository.acquireSyncLease(owner: 'worker-b'), isNull);
+
+    await repository.releaseSyncLease(first!);
+    expect(await repository.acquireSyncLease(owner: 'worker-b'), isNotNull);
+  });
+
+  test('rename and delete intent survives a process restart', () async {
+    final root = await Directory.systemTemp.createTemp('specular-notes-test-');
+    final databaseFile = File('${root.path}/reflect.db');
+    addTearDown(() => root.delete(recursive: true));
+    final firstDatabase = AppDatabase.forTesting(NativeDatabase(databaseFile));
+    final firstRepository = NoteRepository(
+      firstDatabase,
+      Directory('${root.path}/notes'),
+    );
+    final created = await firstRepository.create(title: 'Restart me');
+    await firstRepository.markSynced(created, 'remote-sha');
+    final renamed = await firstRepository.rename(
+      (await firstRepository.get(created.id))!,
+      'archive/restart-me.md',
+    );
+    await firstRepository.delete(renamed);
+    await firstDatabase.close();
+
+    final restarted = AppDatabase.forTesting(NativeDatabase(databaseFile));
+    addTearDown(restarted.close);
+    final recovered = await (restarted.select(
+      restarted.noteRows,
+    )..where((row) => row.id.equals(created.id))).getSingle();
+    final operations = await restarted.select(restarted.syncOperations).get();
+
+    expect(recovered.isPendingDeletion, isTrue);
+    expect(recovered.pendingRenameFromPath, created.path);
+    expect(
+      operations.map((operation) => operation.kind),
+      containsAll(['rename', 'delete']),
+    );
   });
 
   test(

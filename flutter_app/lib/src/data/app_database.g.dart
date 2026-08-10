@@ -2377,7 +2377,7 @@ class $SyncLeasesTable extends SyncLeases
   );
   @override
   late final GeneratedColumn<int> expiresAt = GeneratedColumn<int>(
-    'expires_at',
+    'expiresAt',
     aliasedName,
     false,
     type: DriftSqlType.int,
@@ -2413,10 +2413,10 @@ class $SyncLeasesTable extends SyncLeases
     } else if (isInserting) {
       context.missing(_ownerMeta);
     }
-    if (data.containsKey('expires_at')) {
+    if (data.containsKey('expiresAt')) {
       context.handle(
         _expiresAtMeta,
-        expiresAt.isAcceptableOrUnknown(data['expires_at']!, _expiresAtMeta),
+        expiresAt.isAcceptableOrUnknown(data['expiresAt']!, _expiresAtMeta),
       );
     } else if (isInserting) {
       context.missing(_expiresAtMeta);
@@ -2440,7 +2440,7 @@ class $SyncLeasesTable extends SyncLeases
       )!,
       expiresAt: attachedDatabase.typeMapping.read(
         DriftSqlType.int,
-        data['${effectivePrefix}expires_at'],
+        data['${effectivePrefix}expiresAt'],
       )!,
     );
   }
@@ -2465,7 +2465,7 @@ class SyncLease extends DataClass implements Insertable<SyncLease> {
     final map = <String, Expression>{};
     map['scope'] = Variable<String>(scope);
     map['owner'] = Variable<String>(owner);
-    map['expires_at'] = Variable<int>(expiresAt);
+    map['expiresAt'] = Variable<int>(expiresAt);
     return map;
   }
 
@@ -2561,7 +2561,7 @@ class SyncLeasesCompanion extends UpdateCompanion<SyncLease> {
     return RawValuesInsertable({
       if (scope != null) 'scope': scope,
       if (owner != null) 'owner': owner,
-      if (expiresAt != null) 'expires_at': expiresAt,
+      if (expiresAt != null) 'expiresAt': expiresAt,
       if (rowid != null) 'rowid': rowid,
     });
   }
@@ -2590,7 +2590,7 @@ class SyncLeasesCompanion extends UpdateCompanion<SyncLease> {
       map['owner'] = Variable<String>(owner.value);
     }
     if (expiresAt.present) {
-      map['expires_at'] = Variable<int>(expiresAt.value);
+      map['expiresAt'] = Variable<int>(expiresAt.value);
     }
     if (rowid.present) {
       map['rowid'] = Variable<int>(rowid.value);
