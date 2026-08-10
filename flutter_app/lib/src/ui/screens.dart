@@ -1065,7 +1065,15 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
                       ],
                       child: AppFlowyEditor(
                         editorState: _editorState!,
-                        autoFocus: true,
+                        // Do not create an initial selection in block zero:
+                        // AppFlowy's mobile auto-scroll listener would then
+                        // pull a manually scrolled long note back to the top.
+                        autoFocus: false,
+                        // Keep the scroll service because it maps touch
+                        // coordinates to virtualized blocks for selection. A
+                        // zero edge stops its buggy automatic edge-scrolling
+                        // loop; regular finger scrolling remains unchanged.
+                        autoScrollEdgeOffset: 0,
                         editorStyle: EditorStyle.mobile(
                           padding: const EdgeInsets.symmetric(horizontal: 4),
                           cursorColor: Theme.of(context).colorScheme.primary,
