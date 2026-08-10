@@ -1,3 +1,5 @@
+import 'package:path/path.dart' as p;
+
 class ParsedMarkdown {
   const ParsedMarkdown({
     required this.id,
@@ -19,6 +21,34 @@ class ParsedMarkdown {
 /// Small, deliberately conservative parser matching the established Reflect
 /// contract. Unknown frontmatter is preserved verbatim on note updates.
 class MarkdownContract {
+  /// Resolves a Markdown note link against the note containing it.
+  ///
+  /// Returns null for external links, non-Markdown files, and paths that would
+  /// escape the repository. Fragments are intentionally ignored here: the
+  /// preview opens the destination note but does not yet support heading-level
+  /// navigation.
+  static String? resolveNoteLink(String sourceNotePath, String href) {
+    final uri = Uri.tryParse(href.trim());
+    if (uri == null || uri.hasScheme || uri.hasAuthority || uri.path.isEmpty) {
+      return null;
+    }
+
+    final target = uri.path.replaceAll('\\', '/');
+    if (!target.toLowerCase().endsWith('.md')) return null;
+
+    final source = sourceNotePath.replaceAll('\\', '/');
+    final parent = p.posix.dirname(p.posix.normalize(source));
+    final resolved = p.posix.normalize(
+      p.posix.join(parent == '.' ? '' : parent, target),
+    );
+    if (p.posix.isAbsolute(resolved) ||
+        resolved == '..' ||
+        resolved.startsWith('../')) {
+      return null;
+    }
+    return resolved;
+  }
+
   static ParsedMarkdown parse(String raw) {
     String? frontmatter;
     var body = raw;

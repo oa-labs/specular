@@ -68,6 +68,44 @@ summary: "**Project** [plan](https://example.com)"
         'daily/2026-08-08.md',
       );
     });
+
+    test('resolves Markdown links relative to their source note', () {
+      expect(
+        MarkdownContract.resolveNoteLink(
+          'daily/2026-08-09.md',
+          '../notes/AngelInvesting.md',
+        ),
+        'notes/AngelInvesting.md',
+      );
+      expect(
+        MarkdownContract.resolveNoteLink(
+          'projects/portfolio/overview.md',
+          '../../notes/InvestmentStrategy.md#allocation',
+        ),
+        'notes/InvestmentStrategy.md',
+      );
+      expect(
+        MarkdownContract.resolveNoteLink(
+          'daily/2026-08-09.md',
+          '../notes/AiAgentsDeepDiveApril7,2026.md',
+        ),
+        'notes/AiAgentsDeepDiveApril7,2026.md',
+      );
+    });
+
+    test('does not resolve external or repository-escaping links as notes', () {
+      expect(
+        MarkdownContract.resolveNoteLink(
+          'daily/2026-08-09.md',
+          'https://example.com/note.md',
+        ),
+        isNull,
+      );
+      expect(
+        MarkdownContract.resolveNoteLink('note.md', '../outside.md'),
+        isNull,
+      );
+    });
   });
 
   group('TodoMarkdown', () {

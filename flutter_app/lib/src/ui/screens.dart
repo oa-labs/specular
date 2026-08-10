@@ -783,7 +783,7 @@ class _NotePreviewBody extends ConsumerWidget {
             // including when the task spans multiple lines.
             listItemCrossAxisAlignment:
                 MarkdownListItemCrossAxisAlignment.start,
-            onTapLink: (_, href, _) => _openLink(context, href),
+            onTapLink: (_, href, _) => _openLink(context, ref, href),
             imageBuilder: (uri, title, alt) =>
                 _AttachmentImage(notePath: note.path, uri: uri),
             checkboxBuilder: (checked) {
@@ -813,7 +813,22 @@ class _NotePreviewBody extends ConsumerWidget {
     ref.invalidate(notesProvider);
   }
 
-  Future<void> _openLink(BuildContext context, String? href) async {
+  Future<void> _openLink(
+    BuildContext context,
+    WidgetRef ref,
+    String? href,
+  ) async {
+    final targetPath = MarkdownContract.resolveNoteLink(note.path, href ?? '');
+    if (targetPath != null) {
+      final target = await ref
+          .read(noteRepositoryProvider)
+          .findByPath(targetPath);
+      if (target != null && context.mounted) {
+        context.push('/note/${Uri.encodeComponent(target.id)}');
+      }
+      return;
+    }
+
     final uri = Uri.tryParse(href ?? '');
     if (uri == null || !uri.hasScheme) return;
     if (await launchUrl(uri, mode: LaunchMode.externalApplication)) return;

@@ -14,6 +14,43 @@ import 'package:specular/src/sync/github_sync.dart';
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
+  test('skips unchanged Markdown note blobs during pull', () async {
+    final root = await Directory.systemTemp.createTemp('specular-github-test-');
+    final database = AppDatabase.forTesting(NativeDatabase.memory());
+    final repository = NoteRepository(
+      database,
+      Directory('${root.path}/notes'),
+    );
+    final note = await repository.create(
+      title: 'Checklist',
+      body: '+ [ ] Ship',
+    );
+    await repository.markSynced(note, 'base-blob');
+    final before = await repository.get(note.id);
+    final github = _FakeGitHub(path: note.path, content: note.rawMarkdown);
+    addTearDown(() async {
+      await database.close();
+      await root.delete(recursive: true);
+    });
+
+    final result = await GitHubSyncEngine(
+      repository,
+      const FlutterSecureStorage(),
+      dio: Dio()..httpClientAdapter = github.adapter,
+      settingsLoader: () async => const GitHubSettings(
+        token: 'test-token',
+        owner: 'owner',
+        repo: 'notes',
+      ),
+    ).sync();
+
+    expect(result.isSuccess, isTrue);
+    expect(github.blobRequests, isEmpty);
+    expect(github.commitCreates, 0);
+    expect(github.refUpdates, 0);
+    expect((await repository.get(note.id))!.updatedAt, before!.updatedAt);
+  });
+
   test(
     'overlapping syncs share a lease and publish one atomic commit',
     () async {
@@ -31,7 +68,11 @@ void main() {
       );
       await repository.markSynced(note, 'base-blob');
       await repository.toggleTodo((await repository.watchTodos().first).single);
-      final github = _FakeGitHub(path: note.path, content: note.rawMarkdown);
+      final github = _FakeGitHub(
+        path: note.path,
+        content: note.rawMarkdown,
+        pauseFirstRepositoryRead: true,
+      );
       addTearDown(() async {
         await database.close();
         await root.delete(recursive: true);
@@ -64,16 +105,22 @@ void main() {
 }
 
 class _FakeGitHub {
-  _FakeGitHub({required this.path, required this.content});
+  _FakeGitHub({
+    required this.path,
+    required this.content,
+    this.pauseFirstRepositoryRead = false,
+  });
 
   final String path;
   final String content;
+  final bool pauseFirstRepositoryRead;
   final _firstRead = Completer<void>();
   final _resume = Completer<void>();
   var _paused = false;
   var refUpdates = 0;
   var commitCreates = 0;
   final contentsApiRequests = <String>[];
+  final blobRequests = <String>[];
 
   Future<void> get firstRepositoryRead => _firstRead.future;
   late final HttpClientAdapter adapter = _FakeAdapter(this);
@@ -81,7 +128,9 @@ class _FakeGitHub {
   void resumeFirstRepositoryRead() => _resume.complete();
 
   Future<ResponseBody> handle(RequestOptions request) async {
-    if (!_paused && request.path == '/repos/owner/notes') {
+    if (pauseFirstRepositoryRead &&
+        !_paused &&
+        request.path == '/repos/owner/notes') {
       _paused = true;
       _firstRead.complete();
       await _resume.future;
@@ -89,6 +138,7 @@ class _FakeGitHub {
     final requestPath = request.path;
     if (requestPath.contains('/contents/'))
       contentsApiRequests.add(requestPath);
+    if (requestPath.contains('/git/blobs/')) blobRequests.add(requestPath);
     final response = switch ((request.method, requestPath)) {
       ('GET', '/repos/owner/notes') => {'default_branch': 'main'},
       ('GET', '/repos/owner/notes/git/ref/heads/main') => {

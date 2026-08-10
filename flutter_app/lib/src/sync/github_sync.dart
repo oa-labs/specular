@@ -247,10 +247,11 @@ class GitHubSyncEngine {
       final path = entry['path'] as String;
       final remoteSha = entry['sha'] as String;
       final local = await _repository.findByPath(path);
-      if (local?.isPendingDeletion == true &&
-          local?.lastRemoteSha == remoteSha) {
-        continue;
-      }
+      // The blob SHA is the exact contents identity. A matching baseline means
+      // this note has neither changed remotely nor needs to be re-indexed.
+      // This also deliberately leaves unsynced local edits alone: their
+      // lastRemoteSha still identifies the remote version they were based on.
+      if (local?.lastRemoteSha == remoteSha) continue;
       final content = await _blobContent(settings, remoteSha);
       final parsed = MarkdownContract.parse(content);
       final sameId = await _repository.get(
