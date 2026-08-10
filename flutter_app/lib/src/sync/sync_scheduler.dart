@@ -7,6 +7,7 @@ import 'package:workmanager/workmanager.dart';
 import '../data/app_database.dart';
 import '../data/note_repository.dart';
 import '../platform/legacy_bridge.dart';
+import '../voice/voice_service.dart';
 import 'github_sync.dart';
 
 const _periodicName = 'github_periodic_sync';
@@ -18,6 +19,9 @@ void specularBackgroundDispatcher() {
   Workmanager().executeTask((task, inputData) async {
     WidgetsFlutterBinding.ensureInitialized();
     const storage = FlutterSecureStorage();
+    if (task == VoiceService.retryTask) {
+      return VoiceService.processBackgroundRetry(storage, inputData);
+    }
     final state = await LegacyBridge.readBackgroundState(storage);
     if (state == null) return true;
     final database = AppDatabase.openLegacy(state);

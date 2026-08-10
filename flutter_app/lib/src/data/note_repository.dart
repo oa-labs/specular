@@ -104,6 +104,8 @@ class NoteRepository {
     final parsed = MarkdownContract.parse(raw);
     final id = MarkdownContract.identityFor(path, parsed.id);
     final previous = await get(id);
+    final movedFromPath = previous?.path;
+    final rebaseMovedNote = previous?.rawMarkdown == raw;
     if (previous != null && previous.path != path) {
       final oldFile = _file(previous.path);
       if (await oldFile.exists()) await oldFile.delete();
@@ -134,6 +136,14 @@ class NoteRepository {
       writeFile: true,
       localMutation: false,
     );
+    if (movedFromPath != null && movedFromPath != path) {
+      await _rebaseLinksForMove(
+        movedFromPath: movedFromPath,
+        movedToPath: path,
+        movedNoteId: id,
+        rebaseMovedNote: rebaseMovedNote,
+      );
+    }
   }
 
   Future<SyncLease?> acquireSyncLease({
@@ -371,16 +381,24 @@ class NoteRepository {
     return createDaily(path, date);
   }
 
-  Future<Note> createDaily(String path, String title) async {
+  Future<Note> createDaily(
+    String path,
+    String title, {
+    String body = '',
+  }) async {
     final id = '01${_uuid.v4().replaceAll('-', '').substring(0, 24)}';
-    final raw = '${MarkdownContract.frontmatter(id)}# $title\n\n';
+    final normalizedTitle = title.trim().isEmpty ? 'Untitled' : title.trim();
+    final normalizedBody = body.trim().isEmpty
+        ? '# $normalizedTitle\n\n'
+        : '# $normalizedTitle\n\n${body.trim()}\n';
+    final raw = '${MarkdownContract.frontmatter(id)}$normalizedBody';
     final note = await _put(
       NoteRowsCompanion.insert(
         id: id,
-        title: title,
+        title: normalizedTitle,
         path: path,
         rawMarkdown: raw,
-        body: '# $title\n\n',
+        body: normalizedBody,
         aliases: '[]',
         isDaily: true,
         isPinned: const Value(false),
@@ -487,8 +505,14 @@ class NoteRepository {
       operationKind: 'rename',
       operationFromPath: note.pendingRenameFromPath ?? note.path,
     );
+    await _rebaseLinksForMove(
+      movedFromPath: note.path,
+      movedToPath: target,
+      movedNoteId: note.id,
+      rebaseMovedNote: true,
+    );
     _scheduleSync();
-    return updated;
+    return (await get(updated.id))!;
   }
 
   /// Moves a note into the repository-root archive folder.
@@ -497,6 +521,64 @@ class NoteRepository {
   /// rather than mirroring each note's original directory structure.
   Future<Note> archive(Note note) =>
       rename(note, p.join('archive', p.basename(note.path)));
+
+  /// Preserves relative Markdown links when a note changes path. The moved
+  /// note's outbound links are rebased, while every other note updates only
+  /// links that previously resolved to the moved note.
+  Future<void> _rebaseLinksForMove({
+    required String movedFromPath,
+    required String movedToPath,
+    required String movedNoteId,
+    required bool rebaseMovedNote,
+  }) async {
+    final notes = (await _db.select(_db.noteRows).get()).map(_toNote);
+    for (final note in notes) {
+      if (note.isPendingDeletion ||
+          (note.id == movedNoteId && !rebaseMovedNote)) {
+        continue;
+      }
+      final isMovedNote = note.id == movedNoteId;
+      final oldSourcePath = isMovedNote ? movedFromPath : note.path;
+      final newSourcePath = note.path;
+      final raw = MarkdownContract.rebaseNoteLinks(
+        note.rawMarkdown,
+        oldSourcePath: oldSourcePath,
+        newSourcePath: newSourcePath,
+        movedFromPath: movedFromPath,
+        movedToPath: movedToPath,
+      );
+      final body = MarkdownContract.rebaseNoteLinks(
+        note.body,
+        oldSourcePath: oldSourcePath,
+        newSourcePath: newSourcePath,
+        movedFromPath: movedFromPath,
+        movedToPath: movedToPath,
+      );
+      if (raw == note.rawMarkdown && body == note.body) continue;
+
+      await _put(
+        NoteRowsCompanion(
+          id: Value(note.id),
+          title: Value(note.title),
+          path: Value(note.path),
+          rawMarkdown: Value(raw),
+          body: Value(body),
+          aliases: Value(_encodeAliases(note.aliases)),
+          summary: Value(note.summary),
+          isDaily: Value(note.isDaily),
+          isPinned: Value(note.isPinned),
+          lastRemoteSha: Value(note.lastRemoteSha),
+          isDirty: const Value(true),
+          isPendingDeletion: Value(note.isPendingDeletion),
+          pendingRenameFromPath: Value(note.pendingRenameFromPath),
+          pendingRenameFromSha: Value(note.pendingRenameFromSha),
+          isConflict: Value(note.isConflict),
+          updatedAt: Value(DateTime.now().millisecondsSinceEpoch),
+        ),
+        writeFile: true,
+      );
+    }
+  }
 
   Future<void> delete(Note note) async {
     await _put(

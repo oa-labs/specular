@@ -91,6 +91,27 @@ summary: "**Project** [plan](https://example.com)"
         ),
         'notes/AiAgentsDeepDiveApril7,2026.md',
       );
+      expect(
+        MarkdownContract.resolveNoteLink(
+          'daily/2026-08-09.md',
+          '../meetings/ExecutiveAssistantGuidelines.md',
+        ),
+        'meetings/ExecutiveAssistantGuidelines.md',
+      );
+      expect(
+        MarkdownContract.resolveNoteLink(
+          'daily/2026-08-09.md',
+          '../meetings/NewWebsiteDesignReviewJuly15,2026.md',
+        ),
+        'meetings/NewWebsiteDesignReviewJuly15,2026.md',
+      );
+      expect(
+        MarkdownContract.resolveNoteLink(
+          'daily/2026-08-09.md',
+          '../meetings/JoelTaylorJune4-2026.md',
+        ),
+        'meetings/JoelTaylorJune4-2026.md',
+      );
     });
 
     test('does not resolve external or repository-escaping links as notes', () {
@@ -104,6 +125,33 @@ summary: "**Project** [plan](https://example.com)"
       expect(
         MarkdownContract.resolveNoteLink('note.md', '../outside.md'),
         isNull,
+      );
+    });
+
+    test('rebases inbound and outbound links when a note moves', () {
+      expect(
+        MarkdownContract.rebaseNoteLinks(
+          '[Plan](../projects/alpha/project-plan.md#next)',
+          oldSourcePath: 'daily/2026-08-09.md',
+          newSourcePath: 'daily/2026-08-09.md',
+          movedFromPath: 'projects/alpha/project-plan.md',
+          movedToPath: 'archive/project-plan.md',
+        ),
+        '[Plan](../archive/project-plan.md#next)',
+      );
+      expect(
+        MarkdownContract.rebaseNoteLinks(
+          '''[Research](../../notes/research.md)
+[Self](project-plan.md)
+[External](https://example.com/project-plan.md)''',
+          oldSourcePath: 'projects/alpha/project-plan.md',
+          newSourcePath: 'archive/project-plan.md',
+          movedFromPath: 'projects/alpha/project-plan.md',
+          movedToPath: 'archive/project-plan.md',
+        ),
+        '''[Research](../notes/research.md)
+[Self](project-plan.md)
+[External](https://example.com/project-plan.md)''',
       );
     });
   });

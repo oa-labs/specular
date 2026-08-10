@@ -13,6 +13,7 @@ import '../data/note_repository.dart';
 import '../domain/markdown.dart';
 import '../domain/note.dart';
 import '../sync/github_sync.dart';
+import '../voice/voice_service.dart';
 import 'note_body_editor.dart';
 import 'specular_app.dart';
 
@@ -134,8 +135,17 @@ class _NoteListScreenState extends ConsumerState<NoteListScreen> {
     if (_openingToday) return;
     setState(() => _openingToday = true);
     try {
-      final note = await ref.read(noteRepositoryProvider).getOrCreateToday();
-      if (mounted) context.push('/editor/${Uri.encodeComponent(note.id)}');
+      final date = DateTime.now().toIso8601String().substring(0, 10);
+      final note = await ref
+          .read(noteRepositoryProvider)
+          .findByPath('daily/$date.md');
+      if (!mounted) return;
+      if (note != null) {
+        context.push('/editor/${Uri.encodeComponent(note.id)}');
+      } else {
+        // A missing daily note remains a draft until the editor is saved.
+        context.push('/editor/new?daily=$date');
+      }
     } catch (error) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -559,6 +569,13 @@ class NoteDetailScreen extends ConsumerWidget {
                     context.push('/editor/${Uri.encodeComponent(note.id)}'),
                 icon: const Icon(Icons.edit),
               ),
+              IconButton(
+                tooltip: 'Record into note',
+                onPressed: () => context.push(
+                  '/editor/${Uri.encodeComponent(note.id)}?voice=true',
+                ),
+                icon: const Icon(Icons.mic),
+              ),
               PopupMenuButton<_NoteAction>(
                 onSelected: (action) {
                   switch (action) {
@@ -825,6 +842,12 @@ class _NotePreviewBody extends ConsumerWidget {
           .findByPath(targetPath);
       if (target != null && context.mounted) {
         context.push('/note/${Uri.encodeComponent(target.id)}');
+      } else if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Linked note is not available locally: $targetPath'),
+          ),
+        );
       }
       return;
     }
@@ -871,9 +894,17 @@ class _AttachmentImage extends ConsumerWidget {
 }
 
 class EditorScreen extends ConsumerStatefulWidget {
-  const EditorScreen({super.key, this.id, this.newTodo = false});
+  const EditorScreen({
+    super.key,
+    this.id,
+    this.newTodo = false,
+    this.dailyDate,
+    this.startVoice = false,
+  });
   final String? id;
   final bool newTodo;
+  final String? dailyDate;
+  final bool startVoice;
 
   @override
   ConsumerState<EditorScreen> createState() => _EditorScreenState();
@@ -939,6 +970,7 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
   final _stagedImages = <StagedImage>[];
   var _loading = true;
   var _saving = false;
+  var _voiceRecording = false;
   var _willRewriteUnsupportedMarkdown = false;
   String? _selectedFolder;
   final _images = ImagePicker();
@@ -959,6 +991,8 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
       }
     } else if (widget.newTodo) {
       _title.text = 'New to-do';
+    } else if (widget.dailyDate != null) {
+      _title.text = widget.dailyDate!;
     }
     _editorState = await NoteBodyEditorCodec.load(
       _note,
@@ -969,7 +1003,56 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
         document: NoteBodyEditorCodec.documentFromMarkdown('+ [ ] '),
       );
     }
-    if (mounted) setState(() => _loading = false);
+    if (mounted) {
+      setState(() => _loading = false);
+      if (widget.startVoice) unawaited(_recordVoice());
+    }
+  }
+
+  Future<void> _recordVoice() async {
+    if (_voiceRecording || _loading) return;
+    if (_note == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Save this note before recording into it.'),
+        ),
+      );
+      return;
+    }
+    setState(() => _voiceRecording = true);
+    try {
+      final repo = ref.read(noteRepositoryProvider);
+      await repo.commitStagedImages(_stagedImages);
+      _stagedImages.clear();
+      _note = await repo.save(
+        _note!,
+        title: _title.text,
+        body: NoteBodyEditorCodec.export(_editorState!),
+      );
+      if (!mounted) return;
+      final transcript = await context.push<String>(
+        '/voice?note=${Uri.encodeQueryComponent(_note!.id)}',
+      );
+      if (transcript == null || transcript.trim().isEmpty || !mounted) return;
+      await _editorState!.insertTextAtCurrentSelection(
+        '\n\n${transcript.trim()}',
+      );
+      _note = await repo.save(
+        _note!,
+        title: _title.text,
+        body: NoteBodyEditorCodec.export(_editorState!),
+      );
+      await ref.read(voiceServiceProvider).acknowledgeSaved();
+      ref.invalidate(notesProvider);
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Unable to record voice note: $error')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _voiceRecording = false);
+    }
   }
 
   Future<void> _save() async {
@@ -989,6 +1072,12 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
       _stagedImages.clear();
       final saved = widget.newTodo
           ? await repo.appendToToday(body)
+          : widget.dailyDate != null
+          ? await repo.createDaily(
+              'daily/${widget.dailyDate}.md',
+              _title.text,
+              body: body,
+            )
           : _note == null
           ? await repo.create(
               title: _title.text,
@@ -1089,6 +1178,16 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
           IconButton(
             onPressed: _saving ? null : () => _addImage(ImageSource.gallery),
             icon: const Icon(Icons.photo_library),
+          ),
+          IconButton(
+            tooltip: 'Record into note',
+            onPressed: _saving || _voiceRecording ? null : _recordVoice,
+            icon: _voiceRecording
+                ? const SizedBox.square(
+                    dimension: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.mic),
           ),
           IconButton(
             onPressed: _saving ? null : _save,
@@ -1376,7 +1475,8 @@ class _TodoRow extends ConsumerWidget {
 }
 
 class VoiceCaptureScreen extends ConsumerStatefulWidget {
-  const VoiceCaptureScreen({super.key});
+  const VoiceCaptureScreen({super.key, this.noteId});
+  final String? noteId;
   @override
   ConsumerState<VoiceCaptureScreen> createState() => _VoiceCaptureScreenState();
 }
@@ -1387,10 +1487,54 @@ class _VoiceCaptureScreenState extends ConsumerState<VoiceCaptureScreen> {
   var _busy = false;
   var _asTodo = false;
   String? _error;
+  String _liveTranscript = '';
+  String _status = '';
+  StreamSubscription? _updates;
+  VoiceSession? _recoverableSession;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_findRecovery());
+  }
+
+  Future<void> _findRecovery() async {
+    final sessions = await ref.read(voiceServiceProvider).recoverableSessions();
+    if (mounted && sessions.isNotEmpty) {
+      setState(() => _recoverableSession = sessions.first);
+    }
+  }
+
+  Future<void> _retryRecovery() async {
+    final session = _recoverableSession;
+    if (session == null) return;
+    setState(() => _busy = true);
+    try {
+      final transcript = await ref.read(voiceServiceProvider).retry(session);
+      if (mounted) {
+        setState(() {
+          _transcript.text = transcript;
+          _recoverableSession = null;
+        });
+      }
+    } catch (error) {
+      if (mounted) setState(() => _error = '$error');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
 
   Future<void> _start() async {
     try {
-      await ref.read(voiceServiceProvider).start();
+      final service = ref.read(voiceServiceProvider);
+      _updates ??= service.updates.listen((update) {
+        if (!mounted) return;
+        setState(() {
+          if (update.text.isNotEmpty) _liveTranscript += update.text;
+          if (update.status != null) _status = update.status!;
+        });
+      });
+      await service.start(noteId: widget.noteId);
       if (mounted) setState(() => _recording = true);
     } catch (error) {
       if (mounted) setState(() => _error = '$error');
@@ -1421,6 +1565,10 @@ class _VoiceCaptureScreenState extends ConsumerState<VoiceCaptureScreen> {
 
   Future<void> _save() async {
     if (_transcript.text.trim().isEmpty) return;
+    if (widget.noteId != null) {
+      context.pop(_transcript.text.trim());
+      return;
+    }
     setState(() => _busy = true);
     try {
       final note = await ref
@@ -1428,6 +1576,7 @@ class _VoiceCaptureScreenState extends ConsumerState<VoiceCaptureScreen> {
           .appendToToday(
             _asTodo ? '- [ ] ${_transcript.text.trim()}' : _transcript.text,
           );
+      await ref.read(voiceServiceProvider).acknowledgeSaved();
       if (mounted) context.go('/note/${Uri.encodeComponent(note.id)}');
     } catch (error) {
       if (mounted) setState(() => _error = '$error');
@@ -1439,7 +1588,7 @@ class _VoiceCaptureScreenState extends ConsumerState<VoiceCaptureScreen> {
   @override
   void dispose() {
     _transcript.dispose();
-    ref.read(voiceServiceProvider).cancel();
+    unawaited(_updates?.cancel());
     super.dispose();
   }
 
@@ -1452,8 +1601,22 @@ class _VoiceCaptureScreenState extends ConsumerState<VoiceCaptureScreen> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           const Text(
-            'Record a thought or to-do, then review its transcript before adding it to today.',
+            'Audio is saved locally first. Live text may pause when offline and will recover from the saved recording.',
           ),
+          if (_status.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Text(_status),
+            ),
+          if (_recoverableSession != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: OutlinedButton.icon(
+                onPressed: _busy ? null : _retryRecovery,
+                icon: const Icon(Icons.restore),
+                label: const Text('Recover saved voice recording'),
+              ),
+            ),
           if (_error != null)
             Padding(
               padding: const EdgeInsets.only(top: 12),
@@ -1475,7 +1638,19 @@ class _VoiceCaptureScreenState extends ConsumerState<VoiceCaptureScreen> {
                 ),
               ),
             ),
-          if (_transcript.text.isEmpty) const Spacer(),
+          if (_transcript.text.isEmpty)
+            Expanded(
+              child: Padding(
+                padding: const EdgeInsets.only(top: 12),
+                child: SingleChildScrollView(
+                  child: Text(
+                    _liveTranscript.isEmpty
+                        ? (_recording ? 'Listening…' : '')
+                        : _liveTranscript,
+                  ),
+                ),
+              ),
+            ),
           SwitchListTile(
             value: _asTodo,
             onChanged: _busy
@@ -1514,7 +1689,9 @@ class SettingsScreen extends ConsumerStatefulWidget {
 
 class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   static const _defaultSummaryModel = 'deepseek/deepseek-v4-flash-0731';
-  static const _defaultVoiceModel = 'openai/gpt-4o-mini-transcribe';
+  static const _defaultVoiceModel = 'gpt-live-transcribe';
+  static const _defaultVoiceFileModel = 'gpt-transcribe';
+  static const _defaultVoiceCleanupModel = 'gpt-5-mini';
 
   final _token = TextEditingController();
   final _owner = TextEditingController();
@@ -1525,6 +1702,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   final _voiceModel = TextEditingController();
   final _voiceEndpoint = TextEditingController();
   final _voiceKey = TextEditingController();
+  final _voiceOpenAiKey = TextEditingController();
+  final _voiceFileModel = TextEditingController();
+  final _voiceCleanupModel = TextEditingController();
   var _voiceProvider = 'OPENROUTER';
   var _usePreviewKey = true;
   var _loaded = false;
@@ -1549,6 +1729,14 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         await storage.read(key: 'voice_model_id') ?? _defaultVoiceModel;
     _voiceEndpoint.text = await storage.read(key: 'voice_endpoint') ?? '';
     _voiceKey.text = await storage.read(key: 'voice_api_key') ?? '';
+    _voiceOpenAiKey.text =
+        await storage.read(key: 'voice_openai_api_key') ??
+        (_voiceProvider == 'OPENAI' ? _voiceKey.text : '');
+    _voiceFileModel.text =
+        await storage.read(key: 'voice_file_model') ?? _defaultVoiceFileModel;
+    _voiceCleanupModel.text =
+        await storage.read(key: 'voice_cleanup_model') ??
+        _defaultVoiceCleanupModel;
     _usePreviewKey =
         await storage.read(key: 'voice_use_preview_key') != 'false';
     if (mounted) setState(() {});
@@ -1581,6 +1769,18 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         value: _voiceEndpoint.text.trim(),
       );
       await storage.write(key: 'voice_api_key', value: _voiceKey.text.trim());
+      await storage.write(
+        key: 'voice_openai_api_key',
+        value: _voiceOpenAiKey.text.trim(),
+      );
+      await storage.write(
+        key: 'voice_file_model',
+        value: _voiceFileModel.text.trim(),
+      );
+      await storage.write(
+        key: 'voice_cleanup_model',
+        value: _voiceCleanupModel.text.trim(),
+      );
       await storage.write(
         key: 'voice_use_preview_key',
         value: _usePreviewKey.toString(),
@@ -1713,6 +1913,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     _voiceModel.dispose();
     _voiceEndpoint.dispose();
     _voiceKey.dispose();
+    _voiceOpenAiKey.dispose();
+    _voiceFileModel.dispose();
+    _voiceCleanupModel.dispose();
     super.dispose();
   }
 
@@ -1798,46 +2001,37 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               ],
             ),
             ExpansionTile(
-              title: const Text('Voice transcription'),
+              title: const Text('Voice transcription and cleanup'),
               children: [
-                DropdownButtonFormField<String>(
-                  initialValue: _voiceProvider,
-                  items: const [
-                    DropdownMenuItem(value: 'OPENAI', child: Text('OpenAI')),
-                    DropdownMenuItem(
-                      value: 'OPENROUTER',
-                      child: Text('OpenRouter'),
-                    ),
-                    DropdownMenuItem(
-                      value: 'CUSTOM_OPENAI_COMPATIBLE',
-                      child: Text('Custom OpenAI-compatible'),
-                    ),
-                  ],
-                  onChanged: (value) => setState(() => _voiceProvider = value!),
+                const Padding(
+                  padding: EdgeInsets.fromLTRB(12, 0, 12, 8),
+                  child: Text(
+                    'Live transcription, recovery uploads, and light cleanup use your OpenAI API key directly.',
+                  ),
+                ),
+                TextField(
+                  controller: _voiceOpenAiKey,
+                  obscureText: true,
+                  decoration: const InputDecoration(
+                    labelText: 'OpenAI voice API key',
+                  ),
                 ),
                 TextField(
                   controller: _voiceModel,
-                  decoration: const InputDecoration(labelText: 'Voice model'),
+                  decoration: const InputDecoration(
+                    labelText: 'Live transcription model',
+                  ),
                 ),
                 TextField(
-                  controller: _voiceEndpoint,
+                  controller: _voiceFileModel,
                   decoration: const InputDecoration(
-                    labelText: 'Custom endpoint (only for custom)',
+                    labelText: 'Recovery transcription model',
                   ),
                 ),
-                SwitchListTile(
-                  value: _usePreviewKey,
-                  onChanged: (value) => setState(() => _usePreviewKey = value),
-                  title: const Text('Use AI summary API key'),
+                TextField(
+                  controller: _voiceCleanupModel,
+                  decoration: const InputDecoration(labelText: 'Cleanup model'),
                 ),
-                if (!_usePreviewKey)
-                  TextField(
-                    controller: _voiceKey,
-                    obscureText: true,
-                    decoration: const InputDecoration(
-                      labelText: 'Voice API key',
-                    ),
-                  ),
               ],
             ),
             const SizedBox(height: 16),

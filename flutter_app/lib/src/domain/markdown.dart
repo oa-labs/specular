@@ -21,6 +21,10 @@ class ParsedMarkdown {
 /// Small, deliberately conservative parser matching the established Reflect
 /// contract. Unknown frontmatter is preserved verbatim on note updates.
 class MarkdownContract {
+  static final _inlineLinkDestination = RegExp(
+    r'(!?\[[^\]\n]*\]\()(<[^>\n]*>|[^\s)\n]+)',
+  );
+
   /// Resolves a Markdown note link against the note containing it.
   ///
   /// Returns null for external links, non-Markdown files, and paths that would
@@ -48,6 +52,50 @@ class MarkdownContract {
     }
     return resolved;
   }
+
+  /// Rewrites relative Markdown links after a note has moved.
+  ///
+  /// [oldSourcePath] and [newSourcePath] differ when rewriting links inside
+  /// the moved note itself. For every other note they are the same, so only
+  /// links targeting [movedFromPath] change. External and non-Markdown links
+  /// are preserved verbatim.
+  static String rebaseNoteLinks(
+    String markdown, {
+    required String oldSourcePath,
+    required String newSourcePath,
+    required String movedFromPath,
+    required String movedToPath,
+  }) => markdown.replaceAllMapped(_inlineLinkDestination, (match) {
+    final originalDestination = match.group(2)!;
+    final isAngleWrapped =
+        originalDestination.startsWith('<') &&
+        originalDestination.endsWith('>');
+    final href = isAngleWrapped
+        ? originalDestination.substring(1, originalDestination.length - 1)
+        : originalDestination;
+    final target = resolveNoteLink(oldSourcePath, href);
+    if (target == null) return match.group(0)!;
+
+    final desiredTarget = target == movedFromPath ? movedToPath : target;
+    if (oldSourcePath == newSourcePath && desiredTarget == target) {
+      return match.group(0)!;
+    }
+
+    final originalUri = Uri.tryParse(href);
+    if (originalUri == null) return match.group(0)!;
+    final newParent = p.posix.dirname(p.posix.normalize(newSourcePath));
+    final relativePath = p.posix.relative(
+      desiredTarget,
+      from: newParent == '.' ? '' : newParent,
+    );
+    final rewrittenUri = Uri(
+      path: relativePath,
+      query: originalUri.hasQuery ? originalUri.query : null,
+      fragment: originalUri.hasFragment ? originalUri.fragment : null,
+    ).toString();
+    final destination = isAngleWrapped ? '<$rewrittenUri>' : rewrittenUri;
+    return '${match.group(1)}$destination';
+  });
 
   static ParsedMarkdown parse(String raw) {
     String? frontmatter;

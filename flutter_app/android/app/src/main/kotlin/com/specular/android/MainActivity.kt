@@ -7,6 +7,8 @@ import androidx.security.crypto.MasterKey
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
+import android.os.StatFs
+import com.specular.android.voice.VoiceRecordingService
 import com.specular.android.widget.TodoWidgetRenderer
 import com.specular.android.widget.TodoWidgetProvider
 
@@ -31,6 +33,16 @@ class MainActivity : FlutterActivity() {
                             .edit().putBoolean(MIGRATION_COMPLETE, true).apply()
                         result.success(null)
                     }
+                    "availableBytes" -> result.success(StatFs(filesDir.absolutePath).availableBytes)
+                    "startForegroundRecording" -> {
+                        VoiceRecordingService.start(this)
+                        result.success(null)
+                    }
+                    "stopForegroundRecording" -> {
+                        VoiceRecordingService.stop(this)
+                        result.success(null)
+                    }
+                    "foregroundStopRequested" -> result.success(VoiceRecordingService.stopRequested(this))
                     else -> result.notImplemented()
                 }
             }

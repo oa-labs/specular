@@ -371,7 +371,19 @@ void main() {
       );
       final created = await repository.create(
         title: 'Project plan',
+        body: '[Research](../../notes/research.md)',
         folder: 'projects/alpha',
+      );
+      await repository.create(title: 'Research', folder: 'notes');
+      final daily = await repository.createDaily(
+        'daily/2026-08-09.md',
+        'Daily',
+      );
+      await repository.save(
+        daily,
+        title: daily.title,
+        body:
+            '${daily.body.trimRight()}\n\n[Plan](../projects/alpha/project-plan.md)\n',
       );
       await repository.markSynced(created, 'remote-sha');
 
@@ -380,6 +392,7 @@ void main() {
       );
 
       expect(archived.path, 'archive/project-plan.md');
+      expect(archived.body, contains('[Research](../notes/research.md)'));
       expect(archived.pendingRenameFromPath, 'projects/alpha/project-plan.md');
       expect(archived.pendingRenameFromSha, 'remote-sha');
       expect(
@@ -392,8 +405,53 @@ void main() {
         await File('${root.path}/notes/archive/project-plan.md').exists(),
         isTrue,
       );
+      expect(
+        (await repository.findByPath('daily/2026-08-09.md'))!.body,
+        contains('[Plan](../archive/project-plan.md)'),
+      );
     },
   );
+
+  test('preserves links when sync detects a manually moved note', () async {
+    final root = await Directory.systemTemp.createTemp('specular-notes-test-');
+    final database = AppDatabase.forTesting(NativeDatabase.memory());
+    addTearDown(() async {
+      await database.close();
+      await root.delete(recursive: true);
+    });
+    final repository = NoteRepository(
+      database,
+      Directory('${root.path}/notes'),
+    );
+    final project = await repository.create(
+      title: 'Project plan',
+      body: '[Research](../../notes/research.md)',
+      folder: 'projects/alpha',
+    );
+    await repository.create(title: 'Research', folder: 'notes');
+    final daily = await repository.createDaily('daily/2026-08-09.md', 'Daily');
+    await repository.save(
+      daily,
+      title: daily.title,
+      body:
+          '${daily.body.trimRight()}\n\n[Plan](../projects/alpha/project-plan.md)\n',
+    );
+
+    await repository.applyRemote(
+      path: 'archive/project-plan.md',
+      sha: 'remote-sha',
+      raw: project.rawMarkdown,
+    );
+
+    expect(
+      (await repository.findByPath('archive/project-plan.md'))!.body,
+      contains('[Research](../notes/research.md)'),
+    );
+    expect(
+      (await repository.findByPath('daily/2026-08-09.md'))!.body,
+      contains('[Plan](../archive/project-plan.md)'),
+    );
+  });
 
   test('indexes and toggles only Reflect global plus tasks', () async {
     final root = await Directory.systemTemp.createTemp('specular-notes-test-');

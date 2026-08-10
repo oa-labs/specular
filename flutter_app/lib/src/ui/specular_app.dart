@@ -126,11 +126,23 @@ class _SpecularAppState extends ConsumerState<SpecularApp> {
         ),
         GoRoute(
           path: '/voice',
-          builder: (_, _) => const _BackToHome(child: VoiceCaptureScreen()),
+          builder: (_, state) => _BackToHome(
+            child: VoiceCaptureScreen(
+              noteId: state.uri.queryParameters['note'],
+            ),
+          ),
         ),
         GoRoute(
           path: '/editor/new',
-          builder: (_, _) => const _BackToHome(child: EditorScreen()),
+          builder: (_, state) {
+            final dailyDate = state.uri.queryParameters['daily'];
+            final isDailyDate =
+                dailyDate != null &&
+                RegExp(r'^\d{4}-\d{2}-\d{2}$').hasMatch(dailyDate);
+            return _BackToHome(
+              child: EditorScreen(dailyDate: isDailyDate ? dailyDate : null),
+            );
+          },
         ),
         GoRoute(
           path: '/editor/todo',
@@ -145,8 +157,12 @@ class _SpecularAppState extends ConsumerState<SpecularApp> {
         ),
         GoRoute(
           path: '/editor/:id',
-          builder: (_, state) =>
-              _BackToHome(child: EditorScreen(id: state.pathParameters['id'])),
+          builder: (_, state) => _BackToHome(
+            child: EditorScreen(
+              id: state.pathParameters['id'],
+              startVoice: state.uri.queryParameters['voice'] == 'true',
+            ),
+          ),
         ),
       ],
     );
