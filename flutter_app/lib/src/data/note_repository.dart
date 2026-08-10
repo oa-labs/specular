@@ -382,6 +382,13 @@ class NoteRepository {
     return updated;
   }
 
+  /// Moves a note into the repository-root archive folder.
+  ///
+  /// Keeping only the filename makes the archive a single, predictable folder
+  /// rather than mirroring each note's original directory structure.
+  Future<Note> archive(Note note) =>
+      rename(note, p.join('archive', p.basename(note.path)));
+
   Future<void> delete(Note note) async {
     await _db
         .into(_db.noteRows)

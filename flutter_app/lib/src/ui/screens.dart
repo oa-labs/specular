@@ -4,6 +4,7 @@ import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'dart:io';
 import 'package:appflowy_editor/appflowy_editor.dart';
 
@@ -567,6 +568,9 @@ class NoteDetailScreen extends ConsumerWidget {
                     case _NoteAction.rename:
                       _rename(context, ref, note);
                       break;
+                    case _NoteAction.archive:
+                      _archive(context, ref, note);
+                      break;
                     case _NoteAction.delete:
                       _delete(context, ref, note);
                       break;
@@ -581,6 +585,11 @@ class NoteDetailScreen extends ConsumerWidget {
                     value: _NoteAction.rename,
                     child: Text('Rename'),
                   ),
+                  if (!note.path.startsWith('archive/'))
+                    const PopupMenuItem(
+                      value: _NoteAction.archive,
+                      child: Text('Archive'),
+                    ),
                   const PopupMenuItem(
                     value: _NoteAction.delete,
                     child: Text('Delete'),
@@ -708,6 +717,25 @@ class NoteDetailScreen extends ConsumerWidget {
       context.go('/');
     }
   }
+
+  static Future<void> _archive(
+    BuildContext context,
+    WidgetRef ref,
+    Note note,
+  ) async {
+    try {
+      final archived = await ref.read(noteRepositoryProvider).archive(note);
+      if (context.mounted) {
+        context.go('/note/${Uri.encodeComponent(archived.id)}');
+      }
+    } catch (error) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('$error')));
+      }
+    }
+  }
 }
 
 class _NotePreviewBody extends ConsumerWidget {
@@ -755,6 +783,7 @@ class _NotePreviewBody extends ConsumerWidget {
             // including when the task spans multiple lines.
             listItemCrossAxisAlignment:
                 MarkdownListItemCrossAxisAlignment.start,
+            onTapLink: (_, href, _) => _openLink(context, href),
             imageBuilder: (uri, title, alt) =>
                 _AttachmentImage(notePath: note.path, uri: uri),
             checkboxBuilder: (checked) {
@@ -783,9 +812,20 @@ class _NotePreviewBody extends ConsumerWidget {
     );
     ref.invalidate(notesProvider);
   }
+
+  Future<void> _openLink(BuildContext context, String? href) async {
+    final uri = Uri.tryParse(href ?? '');
+    if (uri == null || !uri.hasScheme) return;
+    if (await launchUrl(uri, mode: LaunchMode.externalApplication)) return;
+    if (context.mounted) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Unable to open link.')));
+    }
+  }
 }
 
-enum _NoteAction { pin, rename, delete }
+enum _NoteAction { pin, rename, archive, delete }
 
 class _AttachmentImage extends ConsumerWidget {
   const _AttachmentImage({required this.notePath, required this.uri});

@@ -164,6 +164,47 @@ void main() {
     expect((await repository.get(note.id))!.isPinned, isFalse);
   });
 
+  test(
+    'archives a note directly in the repository-root archive folder',
+    () async {
+      final root = await Directory.systemTemp.createTemp(
+        'specular-notes-test-',
+      );
+      final database = AppDatabase.forTesting(NativeDatabase.memory());
+      addTearDown(() async {
+        await database.close();
+        await root.delete(recursive: true);
+      });
+      final repository = NoteRepository(
+        database,
+        Directory('${root.path}/notes'),
+      );
+      final created = await repository.create(
+        title: 'Project plan',
+        folder: 'projects/alpha',
+      );
+      await repository.markSynced(created, 'remote-sha');
+
+      final archived = await repository.archive(
+        (await repository.get(created.id))!,
+      );
+
+      expect(archived.path, 'archive/project-plan.md');
+      expect(archived.pendingRenameFromPath, 'projects/alpha/project-plan.md');
+      expect(archived.pendingRenameFromSha, 'remote-sha');
+      expect(
+        await File(
+          '${root.path}/notes/projects/alpha/project-plan.md',
+        ).exists(),
+        isFalse,
+      );
+      expect(
+        await File('${root.path}/notes/archive/project-plan.md').exists(),
+        isTrue,
+      );
+    },
+  );
+
   test('indexes and toggles only Reflect global plus tasks', () async {
     final root = await Directory.systemTemp.createTemp('specular-notes-test-');
     final database = AppDatabase.forTesting(NativeDatabase.memory());
