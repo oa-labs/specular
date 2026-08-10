@@ -11,7 +11,7 @@ This is the source of truth for the Android ↔ Reflect sync. Derived from a liv
 | `notes/how-to-use-reflect.md` | Pinned help doc, also the wikilink syntax spec | — |
 | `attachments/**` | Established image attachment store | `![](../attachments/image_1.png)` from `notes/...` |
 | `assets/pasted-*` | Newer image attachment store | `![](assets/pasted-1785183966286.png)` |
-| `assets/*.reflect.md` | Generated metadata sidecar for an asset — **not a note** | Image description/snippet metadata |
+| `assets/*.reflect.md` | Generated metadata sidecar for an asset — **not a note** | Image description/summary metadata |
 | `/.reflect/` | Local rebuildable index/cache — **never committed** (`.gitignore`) | — |
 | `.gitignore` | Also ignores `.DS_Store`, `*.swp`, `Thumbs.db` | — |
 

@@ -27,7 +27,7 @@ void main() {
         rawMarkdown TEXT NOT NULL,
         body TEXT NOT NULL,
         aliases TEXT NOT NULL,
-        snippet TEXT,
+        summary TEXT,
         isDaily INTEGER NOT NULL,
         isPinned INTEGER NOT NULL,
         lastRemoteSha TEXT,
@@ -70,6 +70,28 @@ void main() {
 
     expect(await repository.get(note.id), isNull);
     expect(await File('${root.path}/notes/${note.path}').exists(), isFalse);
+  });
+
+  test('does not use a note body as a missing metadata summary', () async {
+    final root = await Directory.systemTemp.createTemp('specular-notes-test-');
+    final database = AppDatabase.forTesting(NativeDatabase.memory());
+    addTearDown(() async {
+      await database.close();
+      await root.delete(recursive: true);
+    });
+    final repository = NoteRepository(
+      database,
+      Directory('${root.path}/notes'),
+    );
+
+    await repository.applyRemote(
+      path: 'notes/no-summary.md',
+      sha: 'remote-sha',
+      raw: '# No summary\n\nThis note has no frontmatter summary.\n',
+    );
+
+    final note = await repository.findByPath('notes/no-summary.md');
+    expect(note?.summary, isNull);
   });
 
   test('preserves a locally edited remote deletion as a conflict', () async {

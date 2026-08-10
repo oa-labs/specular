@@ -2,7 +2,7 @@ class ParsedMarkdown {
   const ParsedMarkdown({
     required this.id,
     required this.aliases,
-    required this.snippet,
+    required this.summary,
     required this.title,
     required this.body,
     required this.frontmatter,
@@ -10,7 +10,7 @@ class ParsedMarkdown {
 
   final String? id;
   final List<String> aliases;
-  final String? snippet;
+  final String? summary;
   final String title;
   final String body;
   final String? frontmatter;
@@ -23,7 +23,7 @@ class MarkdownContract {
     String? frontmatter;
     var body = raw;
     String? id;
-    String? snippet;
+    String? summary;
     final aliases = <String>[];
     if (raw.startsWith('---\n')) {
       final end = raw.indexOf('\n---', 4);
@@ -34,10 +34,10 @@ class MarkdownContract {
         for (var index = 0; index < lines.length; index++) {
           final line = lines[index];
           if (line.startsWith('id:')) id = line.substring(3).trim();
-          if (line.startsWith('snippet:')) {
-            final value = _decodeScalar(line.substring('snippet:'.length));
-            final plainSnippet = plainText(value);
-            snippet = plainSnippet.isEmpty ? null : plainSnippet;
+          if (line.startsWith('summary:')) {
+            final value = _decodeScalar(line.substring('summary:'.length));
+            final plainSummary = plainText(value);
+            summary = plainSummary.isEmpty ? null : plainSummary;
           }
           if (line.startsWith('aliases:')) {
             for (
@@ -56,7 +56,7 @@ class MarkdownContract {
     return ParsedMarkdown(
       id: id,
       aliases: aliases,
-      snippet: snippet,
+      summary: summary,
       title: titleMatch?.group(1)?.trim() ?? '',
       body: body,
       frontmatter: frontmatter,
@@ -69,40 +69,40 @@ class MarkdownContract {
   static String frontmatter(
     String id, [
     List<String> aliases = const [],
-    String? snippet,
+    String? summary,
   ]) {
-    final plainSnippet = snippet == null ? null : plainText(snippet);
+    final plainSummary = summary == null ? null : plainText(summary);
     final aliasLines = aliases.isEmpty
         ? ''
         : 'aliases:\n${aliases.map((value) => '  - $value').join('\n')}\n';
-    final snippetLine = plainSnippet?.isNotEmpty == true
-        ? 'snippet: ${_encodeScalar(plainSnippet!)}\n'
+    final summaryLine = plainSummary?.isNotEmpty == true
+        ? 'summary: ${_encodeScalar(plainSummary!)}\n'
         : '';
-    return '---\nid: $id\n$aliasLines$snippetLine---\n';
+    return '---\nid: $id\n$aliasLines$summaryLine---\n';
   }
 
   /// Persists a generated summary in the portable note metadata.
-  static String upsertSnippet(String raw, String id, String snippet) {
+  static String upsertSummary(String raw, String id, String summary) {
     final parsed = parse(raw);
-    final plainSnippet = plainText(snippet);
+    final plainSummary = plainText(summary);
     if (parsed.frontmatter == null) {
-      return '${frontmatter(id, parsed.aliases, plainSnippet)}${parsed.body}';
+      return '${frontmatter(id, parsed.aliases, plainSummary)}${parsed.body}';
     }
     final lines = parsed.frontmatter!.split('\n');
-    final encoded = 'snippet: ${_encodeScalar(plainSnippet)}';
+    final encoded = 'summary: ${_encodeScalar(plainSummary)}';
     var foundId = false;
-    var foundSnippet = false;
+    var foundSummary = false;
     for (var index = 0; index < lines.length; index++) {
       if (lines[index].startsWith('id:')) {
         lines[index] = 'id: $id';
         foundId = true;
-      } else if (lines[index].startsWith('snippet:')) {
+      } else if (lines[index].startsWith('summary:')) {
         lines[index] = encoded;
-        foundSnippet = true;
+        foundSummary = true;
       }
     }
     if (!foundId) lines.insert(0, 'id: $id');
-    if (!foundSnippet) lines.add(encoded);
+    if (!foundSummary) lines.add(encoded);
     return '---\n${lines.join('\n')}\n---\n${parsed.body}';
   }
 
@@ -122,7 +122,7 @@ class MarkdownContract {
 
   /// Converts Markdown into a concise, one-line plain-text summary.
   ///
-  /// Snippets are displayed as UI metadata rather than rendered Markdown, so
+  /// Summaries are displayed as UI metadata rather than rendered Markdown, so
   /// this strips presentation syntax from both generated and imported values.
   static String plainText(String markdown) {
     var text = markdown
@@ -158,8 +158,6 @@ class MarkdownContract {
         .replaceAll(RegExp(r'\s+'), ' ')
         .trim();
   }
-
-  static String snippet(String body) => plainText(body);
 }
 
 class TodoMarkdown {

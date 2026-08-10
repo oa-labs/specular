@@ -3,8 +3,8 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 import '../domain/markdown.dart';
 
-class AiSnippetService {
-  AiSnippetService(this._storage, {Dio? dio}) : _dio = dio ?? Dio();
+class AiSummaryService {
+  AiSummaryService(this._storage, {Dio? dio}) : _dio = dio ?? Dio();
 
   final FlutterSecureStorage _storage;
   final Dio _dio;
@@ -26,7 +26,7 @@ class AiSnippetService {
     final model =
         (await _storage.read(key: 'ai_provider_model_id'))?.trim() ?? '';
     if (endpoint.isEmpty || apiKey.isEmpty || model.isEmpty) {
-      throw StateError('Configure an AI snippet provider in Settings first.');
+      throw StateError('Configure an AI summary provider in Settings first.');
     }
     final response = await _dio.post<Map<String, dynamic>>(
       endpoint,
@@ -59,7 +59,7 @@ class AiSnippetService {
         : '';
     final plainText = MarkdownContract.plainText(normalized);
     if (plainText.isEmpty)
-      throw StateError('The AI provider returned no snippet.');
+      throw StateError('The AI provider returned no summary.');
     return plainText.split(' ').take(6).join(' ');
   }
 }

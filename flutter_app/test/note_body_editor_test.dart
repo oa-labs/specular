@@ -9,7 +9,7 @@ Note _note({required String title, required String body}) => Note(
   path: 'notes/example.md',
   rawMarkdown: body,
   body: body,
-  snippet: null,
+  summary: null,
   aliases: const [],
   isDaily: false,
   isPinned: false,

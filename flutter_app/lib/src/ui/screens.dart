@@ -7,7 +7,7 @@ import 'package:image_picker/image_picker.dart';
 import 'dart:io';
 import 'package:appflowy_editor/appflowy_editor.dart';
 
-import '../ai/ai_snippet_service.dart';
+import '../ai/ai_summary_service.dart';
 import '../data/note_repository.dart';
 import '../domain/markdown.dart';
 import '../domain/note.dart';
@@ -45,6 +45,15 @@ List<String> creationFolders(Iterable<Note> notes) => noteFolders(
   notes,
 ).where((folder) => folder.toLowerCase() != 'daily').toList();
 
+/// A previous release stored the normalized note body as a fallback summary.
+/// Treat those values as missing so they are not shown and the AI can replace
+/// them with an actual generated summary.
+bool hasUsableSummary(Note note) {
+  final summary = note.summary?.trim();
+  return summary?.isNotEmpty == true &&
+      summary != MarkdownContract.plainText(note.body);
+}
+
 List<Note> sortAndFilterNotes(
   Iterable<Note> notes, {
   required NoteListSort sort,
@@ -81,7 +90,7 @@ class _NoteListScreenState extends ConsumerState<NoteListScreen> {
   var _loadedPreferences = false;
   var _createExpanded = false;
   var _openingToday = false;
-  final _snippetJobs = <String>{};
+  final _summaryJobs = <String>{};
 
   @override
   void initState() {
@@ -150,43 +159,43 @@ class _NoteListScreenState extends ConsumerState<NoteListScreen> {
       ..showSnackBar(SnackBar(content: Text(result.message)));
   }
 
-  Future<void> _generateMissingSnippets(List<Note> notes) async {
-    final generator = ref.read(aiSnippetServiceProvider);
+  Future<void> _generateMissingSummaries(List<Note> notes) async {
+    final generator = ref.read(aiSummaryServiceProvider);
     if (!await generator.isConfigured()) return;
     for (final note in notes) {
       if (note.isPendingDeletion ||
-          note.snippet?.trim().isNotEmpty == true ||
-          !_snippetJobs.add(note.id)) {
+          hasUsableSummary(note) ||
+          !_summaryJobs.add(note.id)) {
         continue;
       }
-      unawaited(_generateSnippet(note, generator));
+      unawaited(_generateSummary(note, generator));
     }
   }
 
-  Future<void> _generateSnippet(Note note, AiSnippetService generator) async {
+  Future<void> _generateSummary(Note note, AiSummaryService generator) async {
     try {
       // Always use the current version so an edit or pull that happened after
-      // this job was queued cannot have its snippet written to stale content.
+      // this job was queued cannot have its summary written to stale content.
       final current = await ref.read(noteRepositoryProvider).get(note.id);
       if (current == null ||
           current.isPendingDeletion ||
-          current.snippet?.trim().isNotEmpty == true) {
+          hasUsableSummary(current)) {
         return;
       }
-      final snippet = await generator.generate(current.body);
+      final summary = await generator.generate(current.body);
       final latest = await ref.read(noteRepositoryProvider).get(note.id);
       if (latest == null ||
           latest.isPendingDeletion ||
-          latest.snippet?.trim().isNotEmpty == true) {
+          hasUsableSummary(latest)) {
         return;
       }
-      await ref.read(noteRepositoryProvider).updateSnippet(latest, snippet);
+      await ref.read(noteRepositoryProvider).updateSummary(latest, summary);
       ref.invalidate(notesProvider);
     } catch (_) {
       // A missing provider configuration or a transient API error should not
       // interrupt the note list. The note remains eligible for a later retry.
     } finally {
-      _snippetJobs.remove(note.id);
+      _summaryJobs.remove(note.id);
     }
   }
 
@@ -286,7 +295,7 @@ class _NoteListScreenState extends ConsumerState<NoteListScreen> {
   Widget build(BuildContext context) {
     final notesState = ref.watch(notesProvider);
     final allNotes = notesState.asData?.value ?? const <Note>[];
-    if (notesState.hasValue) unawaited(_generateMissingSnippets(allNotes));
+    if (notesState.hasValue) unawaited(_generateMissingSummaries(allNotes));
     final notes = sortAndFilterNotes(
       allNotes,
       sort: _sort,
@@ -466,9 +475,7 @@ class _NoteTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final folder = noteFolderLabel(note);
-    final snippet = note.snippet?.trim().isNotEmpty == true
-        ? note.snippet!
-        : MarkdownContract.snippet(note.body);
+    final summary = hasUsableSummary(note) ? note.summary! : '';
     return ListTile(
       title: Row(
         children: [
@@ -480,9 +487,9 @@ class _NoteTile extends StatelessWidget {
           Expanded(child: Text(note.title.isEmpty ? 'Untitled' : note.title)),
         ],
       ),
-      subtitle: snippet.isEmpty
+      subtitle: summary.isEmpty
           ? null
-          : Text(snippet, maxLines: 2, overflow: TextOverflow.ellipsis),
+          : Text(summary, maxLines: 2, overflow: TextOverflow.ellipsis),
       trailing: folder == null && !note.isConflict
           ? null
           : Row(
@@ -542,8 +549,8 @@ class NoteDetailScreen extends ConsumerWidget {
           appBar: AppBar(
             actions: [
               IconButton(
-                tooltip: 'Generate AI snippet',
-                onPressed: () => _generateSnippet(context, ref, note),
+                tooltip: 'Generate AI summary',
+                onPressed: () => _generateSummary(context, ref, note),
                 icon: const Icon(Icons.auto_awesome),
               ),
               IconButton(
@@ -588,24 +595,24 @@ class NoteDetailScreen extends ConsumerWidget {
     );
   }
 
-  static Future<void> _generateSnippet(
+  static Future<void> _generateSummary(
     BuildContext context,
     WidgetRef ref,
     Note note,
   ) async {
     ScaffoldMessenger.of(
       context,
-    ).showSnackBar(const SnackBar(content: Text('Generating snippet…')));
+    ).showSnackBar(const SnackBar(content: Text('Generating summary…')));
     try {
-      final snippet = await ref
-          .read(aiSnippetServiceProvider)
+      final summary = await ref
+          .read(aiSummaryServiceProvider)
           .generate(note.body);
-      await ref.read(noteRepositoryProvider).updateSnippet(note, snippet);
+      await ref.read(noteRepositoryProvider).updateSummary(note, summary);
       ref.invalidate(notesProvider);
       if (context.mounted)
         ScaffoldMessenger.of(
           context,
-        ).showSnackBar(SnackBar(content: Text('Snippet: $snippet')));
+        ).showSnackBar(SnackBar(content: Text('Summary: $summary')));
     } catch (error) {
       if (context.mounted)
         ScaffoldMessenger.of(
@@ -694,7 +701,12 @@ class NoteDetailScreen extends ConsumerWidget {
     );
     if (confirmed != true) return;
     await ref.read(noteRepositoryProvider).delete(note);
-    if (context.mounted) context.go('/');
+    if (!context.mounted) return;
+    if (GoRouter.of(context).canPop()) {
+      context.pop();
+    } else {
+      context.go('/');
+    }
   }
 }
 
@@ -726,9 +738,7 @@ class _NotePreviewBody extends ConsumerWidget {
               ),
               const SizedBox(height: 4),
               Text(
-                note.snippet?.trim().isNotEmpty == true
-                    ? note.snippet!
-                    : 'No summary available',
+                hasUsableSummary(note) ? note.summary! : 'No summary available',
                 style: Theme.of(context).textTheme.bodyLarge?.copyWith(
                   fontStyle: FontStyle.italic,
                   color: Theme.of(context).colorScheme.onSurfaceVariant,
@@ -1411,7 +1421,7 @@ class SettingsScreen extends ConsumerStatefulWidget {
 }
 
 class _SettingsScreenState extends ConsumerState<SettingsScreen> {
-  static const _defaultSnippetModel = 'deepseek/deepseek-v4-flash-0731';
+  static const _defaultSummaryModel = 'deepseek/deepseek-v4-flash-0731';
   static const _defaultVoiceModel = 'openai/gpt-4o-mini-transcribe';
 
   final _token = TextEditingController();
@@ -1441,7 +1451,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     _aiUrl.text = await storage.read(key: 'ai_provider_url') ?? '';
     _aiKey.text = await storage.read(key: 'ai_provider_api_key') ?? '';
     _aiModel.text =
-        await storage.read(key: 'ai_provider_model_id') ?? _defaultSnippetModel;
+        await storage.read(key: 'ai_provider_model_id') ?? _defaultSummaryModel;
     _voiceProvider = await storage.read(key: 'voice_provider') ?? 'OPENROUTER';
     _voiceModel.text =
         await storage.read(key: 'voice_model_id') ?? _defaultVoiceModel;
@@ -1676,7 +1686,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               decoration: const InputDecoration(labelText: 'Repository name'),
             ),
             ExpansionTile(
-              title: const Text('AI snippet provider'),
+              title: const Text('AI summary provider'),
               children: [
                 TextField(
                   controller: _aiUrl,
@@ -1726,7 +1736,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 SwitchListTile(
                   value: _usePreviewKey,
                   onChanged: (value) => setState(() => _usePreviewKey = value),
-                  title: const Text('Use AI snippet API key'),
+                  title: const Text('Use AI summary API key'),
                 ),
                 if (!_usePreviewKey)
                   TextField(

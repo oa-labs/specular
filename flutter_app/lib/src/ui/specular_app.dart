@@ -10,7 +10,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 import '../data/app_database.dart';
 import '../data/note_repository.dart';
-import '../ai/ai_snippet_service.dart';
+import '../ai/ai_summary_service.dart';
 import '../domain/note.dart';
 import '../sync/github_sync.dart';
 import '../voice/voice_service.dart';
@@ -35,8 +35,8 @@ final syncEngineProvider = Provider<GitHubSyncEngine>(
 final voiceServiceProvider = Provider<VoiceService>(
   (ref) => VoiceService(ref.watch(secureStorageProvider)),
 );
-final aiSnippetServiceProvider = Provider<AiSnippetService>(
-  (ref) => AiSnippetService(ref.watch(secureStorageProvider)),
+final aiSummaryServiceProvider = Provider<AiSummaryService>(
+  (ref) => AiSummaryService(ref.watch(secureStorageProvider)),
 );
 final themeModeControllerProvider = ChangeNotifierProvider<ThemeModeController>(
   (_) => ThemeModeController(ThemeMode.light),

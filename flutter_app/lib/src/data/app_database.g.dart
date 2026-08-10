@@ -66,12 +66,12 @@ class $NoteRowsTable extends NoteRows with TableInfo<$NoteRowsTable, NoteRow> {
     type: DriftSqlType.string,
     requiredDuringInsert: true,
   );
-  static const VerificationMeta _snippetMeta = const VerificationMeta(
-    'snippet',
+  static const VerificationMeta _summaryMeta = const VerificationMeta(
+    'summary',
   );
   @override
-  late final GeneratedColumn<String> snippet = GeneratedColumn<String>(
-    'snippet',
+  late final GeneratedColumn<String> summary = GeneratedColumn<String>(
+    'summary',
     aliasedName,
     true,
     type: DriftSqlType.string,
@@ -203,7 +203,7 @@ class $NoteRowsTable extends NoteRows with TableInfo<$NoteRowsTable, NoteRow> {
     rawMarkdown,
     body,
     aliases,
-    snippet,
+    summary,
     isDaily,
     isPinned,
     lastRemoteSha,
@@ -274,10 +274,10 @@ class $NoteRowsTable extends NoteRows with TableInfo<$NoteRowsTable, NoteRow> {
     } else if (isInserting) {
       context.missing(_aliasesMeta);
     }
-    if (data.containsKey('snippet')) {
+    if (data.containsKey('summary')) {
       context.handle(
-        _snippetMeta,
-        snippet.isAcceptableOrUnknown(data['snippet']!, _snippetMeta),
+        _summaryMeta,
+        summary.isAcceptableOrUnknown(data['summary']!, _summaryMeta),
       );
     }
     if (data.containsKey('isDaily')) {
@@ -383,9 +383,9 @@ class $NoteRowsTable extends NoteRows with TableInfo<$NoteRowsTable, NoteRow> {
         DriftSqlType.string,
         data['${effectivePrefix}aliases'],
       )!,
-      snippet: attachedDatabase.typeMapping.read(
+      summary: attachedDatabase.typeMapping.read(
         DriftSqlType.string,
-        data['${effectivePrefix}snippet'],
+        data['${effectivePrefix}summary'],
       ),
       isDaily: attachedDatabase.typeMapping.read(
         DriftSqlType.bool,
@@ -439,7 +439,7 @@ class NoteRow extends DataClass implements Insertable<NoteRow> {
   final String rawMarkdown;
   final String body;
   final String aliases;
-  final String? snippet;
+  final String? summary;
   final bool isDaily;
   final bool isPinned;
   final String? lastRemoteSha;
@@ -456,7 +456,7 @@ class NoteRow extends DataClass implements Insertable<NoteRow> {
     required this.rawMarkdown,
     required this.body,
     required this.aliases,
-    this.snippet,
+    this.summary,
     required this.isDaily,
     required this.isPinned,
     this.lastRemoteSha,
@@ -476,8 +476,8 @@ class NoteRow extends DataClass implements Insertable<NoteRow> {
     map['rawMarkdown'] = Variable<String>(rawMarkdown);
     map['body'] = Variable<String>(body);
     map['aliases'] = Variable<String>(aliases);
-    if (!nullToAbsent || snippet != null) {
-      map['snippet'] = Variable<String>(snippet);
+    if (!nullToAbsent || summary != null) {
+      map['summary'] = Variable<String>(summary);
     }
     map['isDaily'] = Variable<bool>(isDaily);
     map['isPinned'] = Variable<bool>(isPinned);
@@ -505,9 +505,9 @@ class NoteRow extends DataClass implements Insertable<NoteRow> {
       rawMarkdown: Value(rawMarkdown),
       body: Value(body),
       aliases: Value(aliases),
-      snippet: snippet == null && nullToAbsent
+      summary: summary == null && nullToAbsent
           ? const Value.absent()
-          : Value(snippet),
+          : Value(summary),
       isDaily: Value(isDaily),
       isPinned: Value(isPinned),
       lastRemoteSha: lastRemoteSha == null && nullToAbsent
@@ -538,7 +538,7 @@ class NoteRow extends DataClass implements Insertable<NoteRow> {
       rawMarkdown: serializer.fromJson<String>(json['rawMarkdown']),
       body: serializer.fromJson<String>(json['body']),
       aliases: serializer.fromJson<String>(json['aliases']),
-      snippet: serializer.fromJson<String?>(json['snippet']),
+      summary: serializer.fromJson<String?>(json['summary']),
       isDaily: serializer.fromJson<bool>(json['isDaily']),
       isPinned: serializer.fromJson<bool>(json['isPinned']),
       lastRemoteSha: serializer.fromJson<String?>(json['lastRemoteSha']),
@@ -564,7 +564,7 @@ class NoteRow extends DataClass implements Insertable<NoteRow> {
       'rawMarkdown': serializer.toJson<String>(rawMarkdown),
       'body': serializer.toJson<String>(body),
       'aliases': serializer.toJson<String>(aliases),
-      'snippet': serializer.toJson<String?>(snippet),
+      'summary': serializer.toJson<String?>(summary),
       'isDaily': serializer.toJson<bool>(isDaily),
       'isPinned': serializer.toJson<bool>(isPinned),
       'lastRemoteSha': serializer.toJson<String?>(lastRemoteSha),
@@ -586,7 +586,7 @@ class NoteRow extends DataClass implements Insertable<NoteRow> {
     String? rawMarkdown,
     String? body,
     String? aliases,
-    Value<String?> snippet = const Value.absent(),
+    Value<String?> summary = const Value.absent(),
     bool? isDaily,
     bool? isPinned,
     Value<String?> lastRemoteSha = const Value.absent(),
@@ -603,7 +603,7 @@ class NoteRow extends DataClass implements Insertable<NoteRow> {
     rawMarkdown: rawMarkdown ?? this.rawMarkdown,
     body: body ?? this.body,
     aliases: aliases ?? this.aliases,
-    snippet: snippet.present ? snippet.value : this.snippet,
+    summary: summary.present ? summary.value : this.summary,
     isDaily: isDaily ?? this.isDaily,
     isPinned: isPinned ?? this.isPinned,
     lastRemoteSha: lastRemoteSha.present
@@ -630,7 +630,7 @@ class NoteRow extends DataClass implements Insertable<NoteRow> {
           : this.rawMarkdown,
       body: data.body.present ? data.body.value : this.body,
       aliases: data.aliases.present ? data.aliases.value : this.aliases,
-      snippet: data.snippet.present ? data.snippet.value : this.snippet,
+      summary: data.summary.present ? data.summary.value : this.summary,
       isDaily: data.isDaily.present ? data.isDaily.value : this.isDaily,
       isPinned: data.isPinned.present ? data.isPinned.value : this.isPinned,
       lastRemoteSha: data.lastRemoteSha.present
@@ -662,7 +662,7 @@ class NoteRow extends DataClass implements Insertable<NoteRow> {
           ..write('rawMarkdown: $rawMarkdown, ')
           ..write('body: $body, ')
           ..write('aliases: $aliases, ')
-          ..write('snippet: $snippet, ')
+          ..write('summary: $summary, ')
           ..write('isDaily: $isDaily, ')
           ..write('isPinned: $isPinned, ')
           ..write('lastRemoteSha: $lastRemoteSha, ')
@@ -684,7 +684,7 @@ class NoteRow extends DataClass implements Insertable<NoteRow> {
     rawMarkdown,
     body,
     aliases,
-    snippet,
+    summary,
     isDaily,
     isPinned,
     lastRemoteSha,
@@ -705,7 +705,7 @@ class NoteRow extends DataClass implements Insertable<NoteRow> {
           other.rawMarkdown == this.rawMarkdown &&
           other.body == this.body &&
           other.aliases == this.aliases &&
-          other.snippet == this.snippet &&
+          other.summary == this.summary &&
           other.isDaily == this.isDaily &&
           other.isPinned == this.isPinned &&
           other.lastRemoteSha == this.lastRemoteSha &&
@@ -724,7 +724,7 @@ class NoteRowsCompanion extends UpdateCompanion<NoteRow> {
   final Value<String> rawMarkdown;
   final Value<String> body;
   final Value<String> aliases;
-  final Value<String?> snippet;
+  final Value<String?> summary;
   final Value<bool> isDaily;
   final Value<bool> isPinned;
   final Value<String?> lastRemoteSha;
@@ -742,7 +742,7 @@ class NoteRowsCompanion extends UpdateCompanion<NoteRow> {
     this.rawMarkdown = const Value.absent(),
     this.body = const Value.absent(),
     this.aliases = const Value.absent(),
-    this.snippet = const Value.absent(),
+    this.summary = const Value.absent(),
     this.isDaily = const Value.absent(),
     this.isPinned = const Value.absent(),
     this.lastRemoteSha = const Value.absent(),
@@ -761,7 +761,7 @@ class NoteRowsCompanion extends UpdateCompanion<NoteRow> {
     required String rawMarkdown,
     required String body,
     required String aliases,
-    this.snippet = const Value.absent(),
+    this.summary = const Value.absent(),
     required bool isDaily,
     this.isPinned = const Value.absent(),
     this.lastRemoteSha = const Value.absent(),
@@ -787,7 +787,7 @@ class NoteRowsCompanion extends UpdateCompanion<NoteRow> {
     Expression<String>? rawMarkdown,
     Expression<String>? body,
     Expression<String>? aliases,
-    Expression<String>? snippet,
+    Expression<String>? summary,
     Expression<bool>? isDaily,
     Expression<bool>? isPinned,
     Expression<String>? lastRemoteSha,
@@ -806,7 +806,7 @@ class NoteRowsCompanion extends UpdateCompanion<NoteRow> {
       if (rawMarkdown != null) 'rawMarkdown': rawMarkdown,
       if (body != null) 'body': body,
       if (aliases != null) 'aliases': aliases,
-      if (snippet != null) 'snippet': snippet,
+      if (summary != null) 'summary': summary,
       if (isDaily != null) 'isDaily': isDaily,
       if (isPinned != null) 'isPinned': isPinned,
       if (lastRemoteSha != null) 'lastRemoteSha': lastRemoteSha,
@@ -829,7 +829,7 @@ class NoteRowsCompanion extends UpdateCompanion<NoteRow> {
     Value<String>? rawMarkdown,
     Value<String>? body,
     Value<String>? aliases,
-    Value<String?>? snippet,
+    Value<String?>? summary,
     Value<bool>? isDaily,
     Value<bool>? isPinned,
     Value<String?>? lastRemoteSha,
@@ -848,7 +848,7 @@ class NoteRowsCompanion extends UpdateCompanion<NoteRow> {
       rawMarkdown: rawMarkdown ?? this.rawMarkdown,
       body: body ?? this.body,
       aliases: aliases ?? this.aliases,
-      snippet: snippet ?? this.snippet,
+      summary: summary ?? this.summary,
       isDaily: isDaily ?? this.isDaily,
       isPinned: isPinned ?? this.isPinned,
       lastRemoteSha: lastRemoteSha ?? this.lastRemoteSha,
@@ -884,8 +884,8 @@ class NoteRowsCompanion extends UpdateCompanion<NoteRow> {
     if (aliases.present) {
       map['aliases'] = Variable<String>(aliases.value);
     }
-    if (snippet.present) {
-      map['snippet'] = Variable<String>(snippet.value);
+    if (summary.present) {
+      map['summary'] = Variable<String>(summary.value);
     }
     if (isDaily.present) {
       map['isDaily'] = Variable<bool>(isDaily.value);
@@ -933,7 +933,7 @@ class NoteRowsCompanion extends UpdateCompanion<NoteRow> {
           ..write('rawMarkdown: $rawMarkdown, ')
           ..write('body: $body, ')
           ..write('aliases: $aliases, ')
-          ..write('snippet: $snippet, ')
+          ..write('summary: $summary, ')
           ..write('isDaily: $isDaily, ')
           ..write('isPinned: $isPinned, ')
           ..write('lastRemoteSha: $lastRemoteSha, ')
@@ -1875,7 +1875,7 @@ typedef $$NoteRowsTableCreateCompanionBuilder =
       required String rawMarkdown,
       required String body,
       required String aliases,
-      Value<String?> snippet,
+      Value<String?> summary,
       required bool isDaily,
       Value<bool> isPinned,
       Value<String?> lastRemoteSha,
@@ -1895,7 +1895,7 @@ typedef $$NoteRowsTableUpdateCompanionBuilder =
       Value<String> rawMarkdown,
       Value<String> body,
       Value<String> aliases,
-      Value<String?> snippet,
+      Value<String?> summary,
       Value<bool> isDaily,
       Value<bool> isPinned,
       Value<String?> lastRemoteSha,
@@ -1947,8 +1947,8 @@ class $$NoteRowsTableFilterComposer
     builder: (column) => ColumnFilters(column),
   );
 
-  ColumnFilters<String> get snippet => $composableBuilder(
-    column: $table.snippet,
+  ColumnFilters<String> get summary => $composableBuilder(
+    column: $table.summary,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -2037,8 +2037,8 @@ class $$NoteRowsTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
-  ColumnOrderings<String> get snippet => $composableBuilder(
-    column: $table.snippet,
+  ColumnOrderings<String> get summary => $composableBuilder(
+    column: $table.summary,
     builder: (column) => ColumnOrderings(column),
   );
 
@@ -2117,8 +2117,8 @@ class $$NoteRowsTableAnnotationComposer
   GeneratedColumn<String> get aliases =>
       $composableBuilder(column: $table.aliases, builder: (column) => column);
 
-  GeneratedColumn<String> get snippet =>
-      $composableBuilder(column: $table.snippet, builder: (column) => column);
+  GeneratedColumn<String> get summary =>
+      $composableBuilder(column: $table.summary, builder: (column) => column);
 
   GeneratedColumn<bool> get isDaily =>
       $composableBuilder(column: $table.isDaily, builder: (column) => column);
@@ -2192,7 +2192,7 @@ class $$NoteRowsTableTableManager
                 Value<String> rawMarkdown = const Value.absent(),
                 Value<String> body = const Value.absent(),
                 Value<String> aliases = const Value.absent(),
-                Value<String?> snippet = const Value.absent(),
+                Value<String?> summary = const Value.absent(),
                 Value<bool> isDaily = const Value.absent(),
                 Value<bool> isPinned = const Value.absent(),
                 Value<String?> lastRemoteSha = const Value.absent(),
@@ -2210,7 +2210,7 @@ class $$NoteRowsTableTableManager
                 rawMarkdown: rawMarkdown,
                 body: body,
                 aliases: aliases,
-                snippet: snippet,
+                summary: summary,
                 isDaily: isDaily,
                 isPinned: isPinned,
                 lastRemoteSha: lastRemoteSha,
@@ -2230,7 +2230,7 @@ class $$NoteRowsTableTableManager
                 required String rawMarkdown,
                 required String body,
                 required String aliases,
-                Value<String?> snippet = const Value.absent(),
+                Value<String?> summary = const Value.absent(),
                 required bool isDaily,
                 Value<bool> isPinned = const Value.absent(),
                 Value<String?> lastRemoteSha = const Value.absent(),
@@ -2248,7 +2248,7 @@ class $$NoteRowsTableTableManager
                 rawMarkdown: rawMarkdown,
                 body: body,
                 aliases: aliases,
-                snippet: snippet,
+                summary: summary,
                 isDaily: isDaily,
                 isPinned: isPinned,
                 lastRemoteSha: lastRemoteSha,

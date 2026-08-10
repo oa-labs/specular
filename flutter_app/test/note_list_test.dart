@@ -10,7 +10,7 @@ void main() {
         path: path ?? '$title.md',
         rawMarkdown: '',
         body: '',
-        snippet: null,
+        summary: null,
         aliases: const [],
         isDaily: false,
         isPinned: pinned,

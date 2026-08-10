@@ -8,7 +8,7 @@ void main() {
 id: 01kxp66n18p7vt6b5rsmd1taqy
 aliases:
   - OLLI - University of Pitt
-snippet: "An existing portable summary"
+summary: "An existing portable summary"
 ---
 # A note
 
@@ -19,15 +19,15 @@ Body text
 
       expect(note.id, '01kxp66n18p7vt6b5rsmd1taqy');
       expect(note.aliases, ['OLLI - University of Pitt']);
-      expect(note.snippet, 'An existing portable summary');
+      expect(note.summary, 'An existing portable summary');
       expect(note.title, 'A note');
       expect(note.body, contains('Body text'));
     });
 
-    test('writes generated snippets back into frontmatter', () {
+    test('writes generated summaries back into frontmatter', () {
       const raw = '# A note\n\nBody text\n';
 
-      final updated = MarkdownContract.upsertSnippet(
+      final updated = MarkdownContract.upsertSummary(
         raw,
         '01kxp66n18p7vt6b5rsmd1taqy',
         'A "quoted" summary',
@@ -35,11 +35,12 @@ Body text
       final parsed = MarkdownContract.parse(updated);
 
       expect(parsed.id, '01kxp66n18p7vt6b5rsmd1taqy');
-      expect(parsed.snippet, 'A "quoted" summary');
+      expect(parsed.summary, 'A "quoted" summary');
       expect(parsed.body, raw);
+      expect(updated, contains('summary:'));
     });
 
-    test('normalizes snippets to plain text', () {
+    test('normalizes summaries to plain text', () {
       const markdown = '''## **Project** update
 
 - [ ] Review [the plan](https://example.com/plan)
@@ -52,12 +53,12 @@ Body text
       );
 
       final parsed = MarkdownContract.parse('''---
-id: 01snippet
-snippet: "**Project** [plan](https://example.com)"
+id: 01summary
+summary: "**Project** [plan](https://example.com)"
 ---
 # A note
 ''');
-      expect(parsed.snippet, 'Project plan');
+      expect(parsed.summary, 'Project plan');
     });
 
     test('daily paths remain stable identities without frontmatter', () {

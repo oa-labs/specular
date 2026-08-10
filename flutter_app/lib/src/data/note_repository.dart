@@ -116,7 +116,7 @@ class NoteRepository {
         rawMarkdown: Value(raw),
         body: Value(parsed.body),
         aliases: Value(_encodeAliases(parsed.aliases)),
-        snippet: Value(parsed.snippet ?? MarkdownContract.snippet(parsed.body)),
+        summary: Value(parsed.summary),
         isDaily: Value(path.startsWith('daily/')),
         isPinned: Value(previous?.isPinned ?? false),
         lastRemoteSha: Value(sha),
@@ -328,9 +328,7 @@ class NoteRepository {
         rawMarkdown: Value(raw),
         body: Value(normalizedBody),
         aliases: Value(_encodeAliases(parsed.aliases)),
-        snippet: Value(
-          parsed.snippet ?? MarkdownContract.snippet(normalizedBody),
-        ),
+        summary: Value(parsed.summary),
         isDaily: Value(original.isDaily),
         isPinned: Value(original.isPinned),
         lastRemoteSha: Value(original.lastRemoteSha),
@@ -365,7 +363,7 @@ class NoteRepository {
         rawMarkdown: Value(note.rawMarkdown),
         body: Value(note.body),
         aliases: Value(_encodeAliases(note.aliases)),
-        snippet: Value(note.snippet),
+        summary: Value(note.summary),
         isDaily: Value(note.isDaily),
         isPinned: Value(note.isPinned),
         lastRemoteSha: const Value(null),
@@ -436,12 +434,14 @@ class NoteRepository {
       for (final note in notes) {
         await _indexGlobalTasks(note.id, note.body);
       }
-      await _db.into(_db.todoIndexStates).insertOnConflictUpdate(
-        TodoIndexStatesCompanion.insert(
-          id: Value(migrationId),
-          isReady: const Value(true),
-        ),
-      );
+      await _db
+          .into(_db.todoIndexStates)
+          .insertOnConflictUpdate(
+            TodoIndexStatesCompanion.insert(
+              id: Value(migrationId),
+              isReady: const Value(true),
+            ),
+          );
     });
   }
 
@@ -597,12 +597,12 @@ class NoteRepository {
         .replaceAll('\\', '/');
   }
 
-  Future<void> updateSnippet(Note note, String snippet) async {
-    final plainSnippet = MarkdownContract.plainText(snippet);
-    final raw = MarkdownContract.upsertSnippet(
+  Future<void> updateSummary(Note note, String summary) async {
+    final plainSummary = MarkdownContract.plainText(summary);
+    final raw = MarkdownContract.upsertSummary(
       note.rawMarkdown,
       note.id,
-      plainSnippet,
+      plainSummary,
     );
     await _put(
       NoteRowsCompanion(
@@ -612,7 +612,7 @@ class NoteRepository {
         rawMarkdown: Value(raw),
         body: Value(note.body),
         aliases: Value(_encodeAliases(note.aliases)),
-        snippet: Value(plainSnippet),
+        summary: Value(plainSummary),
         isDaily: Value(note.isDaily),
         isPinned: Value(note.isPinned),
         lastRemoteSha: Value(note.lastRemoteSha),
@@ -658,9 +658,7 @@ class NoteRepository {
           rawMarkdown: Value(raw),
           body: Value(parsed.body),
           aliases: Value(_encodeAliases(parsed.aliases)),
-          snippet: Value(
-            parsed.snippet ?? MarkdownContract.snippet(parsed.body),
-          ),
+          summary: Value(parsed.summary),
           isDaily: Value(relative.startsWith('daily/')),
           isPinned: Value(previous?.isPinned ?? false),
           lastRemoteSha: Value(previous?.lastRemoteSha),
@@ -783,9 +781,9 @@ class NoteRepository {
     path: row.path,
     rawMarkdown: row.rawMarkdown,
     body: row.body,
-    snippet: row.snippet == null
+    summary: row.summary == null
         ? null
-        : MarkdownContract.plainText(row.snippet!),
+        : MarkdownContract.plainText(row.summary!),
     aliases: RegExp(
       r'"([^"]+)"',
     ).allMatches(row.aliases).map((match) => match.group(1)!).toList(),

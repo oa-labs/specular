@@ -15,7 +15,7 @@ class NoteRows extends Table {
   TextColumn get rawMarkdown => text().named('rawMarkdown')();
   TextColumn get body => text()();
   TextColumn get aliases => text()();
-  TextColumn get snippet => text().nullable()();
+  TextColumn get summary => text().nullable()();
   BoolColumn get isDaily => boolean().named('isDaily')();
   BoolColumn get isPinned =>
       boolean().named('isPinned').withDefault(const Constant(false))();
@@ -90,7 +90,7 @@ class AppDatabase extends _$AppDatabase {
   );
 
   @override
-  int get schemaVersion => 7;
+  int get schemaVersion => 8;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -98,6 +98,11 @@ class AppDatabase extends _$AppDatabase {
       await m.createAll();
       // Search uses LIKE. The Android migration rebuilds old Room FTS4 indexes
       // because Flutter's bundled SQLite intentionally does not include FTS4.
+    },
+    onUpgrade: (m, from, to) async {
+      if (from < 8) {
+        await m.renameColumn(noteRows, 'snippet', noteRows.summary);
+      }
     },
   );
 }

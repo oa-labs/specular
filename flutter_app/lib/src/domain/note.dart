@@ -5,7 +5,7 @@ class Note {
     required this.path,
     required this.rawMarkdown,
     required this.body,
-    required this.snippet,
+    required this.summary,
     required this.aliases,
     required this.isDaily,
     required this.isPinned,
@@ -23,7 +23,7 @@ class Note {
   final String path;
   final String rawMarkdown;
   final String body;
-  final String? snippet;
+  final String? summary;
   final List<String> aliases;
   final bool isDaily;
   final bool isPinned;
