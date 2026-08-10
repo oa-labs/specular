@@ -70,14 +70,19 @@ snippet: "**Project** [plan](https://example.com)"
   });
 
   group('TodoMarkdown', () {
-    test('extracts and toggles task index without touching other markdown', () {
-      const source = '- [ ] First\n- [x] Second\nParagraph';
+    test('indexes only global plus tasks and toggles each scope independently', () {
+      const source =
+          '+ [ ] First global\n- [ ] Local checkbox\n+ [x] Done global\nParagraph';
       final tasks = TodoMarkdown.extract(source);
 
       expect(tasks.map((task) => task.completed), [false, true]);
       expect(
-        TodoMarkdown.toggleAt(source, 0),
-        '- [x] First\n- [x] Second\nParagraph',
+        TodoMarkdown.toggleGlobalAt(source, 0),
+        '+ [x] First global\n- [ ] Local checkbox\n+ [x] Done global\nParagraph',
+      );
+      expect(
+        TodoMarkdown.toggleCheckboxAt(source, 1),
+        '+ [ ] First global\n- [x] Local checkbox\n+ [x] Done global\nParagraph',
       );
     });
   });

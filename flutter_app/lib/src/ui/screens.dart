@@ -739,7 +739,7 @@ class _NotePreviewBody extends ConsumerWidget {
         ),
         Expanded(
           child: Markdown(
-            data: note.body,
+            data: NoteBodyEditorCodec.normalizeTaskListSpacing(note.body),
             padding: const EdgeInsets.all(16),
             // Task text and its interactive checkbox must share the same top edge,
             // including when the task spans multiple lines.
@@ -769,7 +769,7 @@ class _NotePreviewBody extends ConsumerWidget {
     await repository.save(
       current,
       title: current.title,
-      body: TodoMarkdown.toggleAt(current.body, taskIndex),
+      body: TodoMarkdown.toggleCheckboxAt(current.body, taskIndex),
     );
     ref.invalidate(notesProvider);
   }
@@ -816,6 +816,58 @@ class EditorScreen extends ConsumerStatefulWidget {
 
 class _EditorScreenState extends ConsumerState<EditorScreen> {
   static const _inboxFolderOption = '__specular_inbox__';
+  static final _globalTaskMobileToolbarItem = MobileToolbarItem.action(
+    itemIconBuilder: (context, _, _) =>
+        Icon(Icons.task_alt, color: MobileToolbarTheme.of(context).iconColor),
+    actionHandler: (_, editorState) async {
+      final selection = editorState.selection;
+      if (selection == null) return;
+      final node = editorState.getNodeAtPath(selection.start.path);
+      if (node == null) return;
+      final isGlobalTask =
+          node.type == TodoListBlockKeys.type &&
+          node.attributes[NoteBodyEditorCodec.globalTaskAttribute] == true;
+      await editorState.formatNode(
+        selection,
+        (node) => node.copyWith(
+          type: isGlobalTask ? ParagraphBlockKeys.type : TodoListBlockKeys.type,
+          attributes: {
+            TodoListBlockKeys.checked: false,
+            ParagraphBlockKeys.delta: (node.delta ?? Delta()).toJson(),
+            if (!isGlobalTask) NoteBodyEditorCodec.globalTaskAttribute: true,
+          },
+        ),
+      );
+    },
+  );
+  static final _localCheckboxMobileToolbarItem = MobileToolbarItem.action(
+    itemIconBuilder: (context, _, _) => Icon(
+      Icons.check_box_outline_blank,
+      color: MobileToolbarTheme.of(context).iconColor,
+    ),
+    actionHandler: (_, editorState) async {
+      final selection = editorState.selection;
+      if (selection == null) return;
+      final node = editorState.getNodeAtPath(selection.start.path);
+      if (node == null) return;
+      final isLocalCheckbox =
+          node.type == TodoListBlockKeys.type &&
+          node.attributes[NoteBodyEditorCodec.globalTaskAttribute] != true;
+      await editorState.formatNode(
+        selection,
+        (node) => node.copyWith(
+          type: isLocalCheckbox
+              ? ParagraphBlockKeys.type
+              : TodoListBlockKeys.type,
+          attributes: {
+            TodoListBlockKeys.checked: false,
+            ParagraphBlockKeys.delta: (node.delta ?? Delta()).toJson(),
+          },
+        ),
+      );
+    },
+  );
+
   final _title = TextEditingController();
   Note? _note;
   EditorState? _editorState;
@@ -848,7 +900,9 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
       ref.read(noteRepositoryProvider),
     );
     if (widget.newTodo) {
-      _editorState = EditorState(document: markdownToDocument('- [ ] '));
+      _editorState = EditorState(
+        document: NoteBodyEditorCodec.documentFromMarkdown('+ [ ] '),
+      );
     }
     if (mounted) setState(() => _loading = false);
   }
@@ -1059,7 +1113,10 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
                         codeMobileToolbarItem,
                         linkMobileToolbarItem,
                         listMobileToolbarItem,
-                        todoListMobileToolbarItem,
+                        _globalTaskMobileToolbarItem,
+                        // A note-local checkbox is deliberately distinct from
+                        // the global `+ [ ]` task action above.
+                        _localCheckboxMobileToolbarItem,
                         quoteMobileToolbarItem,
                         dividerMobileToolbarItem,
                       ],

@@ -52,6 +52,67 @@ void main() {
     );
   });
 
+  test('preserves formatted to-do text through an editor round trip', () {
+    final editorState = EditorState(
+      document: markdownToDocument(
+        '- [x] **Joel Reed:** Review the email file and confirm the XML.',
+      ),
+    );
+    addTearDown(editorState.dispose);
+
+    expect(
+      NoteBodyEditorCodec.export(editorState),
+      contains('**Joel Reed:** Review the email file and confirm the XML.'),
+    );
+  });
+
+  test('keeps exported task list items contiguous', () {
+    final editorState = EditorState(
+      document: markdownToDocument('- [x] Done\n- [ ] Open'),
+    );
+    addTearDown(editorState.dispose);
+
+    expect(NoteBodyEditorCodec.export(editorState), '- [x] Done\n- [ ] Open');
+  });
+
+  test('exports tagged global tasks with Reflect plus markers', () {
+    final editorState = EditorState(
+      document: Document(
+        root: Node(
+          type: 'page',
+          children: [
+            todoListNode(
+              checked: false,
+              text: 'Global task',
+              attributes: const {NoteBodyEditorCodec.globalTaskAttribute: true},
+            ),
+            todoListNode(checked: false, text: 'Local checkbox'),
+          ],
+        ),
+      ),
+    );
+    addTearDown(editorState.dispose);
+
+    expect(
+      NoteBodyEditorCodec.export(editorState),
+      '+ [ ] Global task\n- [ ] Local checkbox',
+    );
+  });
+
+  test('restores global task markers when loading Markdown', () {
+    final editorState = EditorState(
+      document: NoteBodyEditorCodec.documentFromMarkdown(
+        '+ [x] Global task\n\n- [ ] Local checkbox',
+      ),
+    );
+    addTearDown(editorState.dispose);
+
+    expect(
+      NoteBodyEditorCodec.export(editorState),
+      '+ [x] Global task\n- [ ] Local checkbox',
+    );
+  });
+
   test('warns for Markdown outside the supported rich-text subset', () {
     expect(
       MarkdownCompatibility.requiresRewriteWarning('[[Project plan]]'),

@@ -163,15 +163,21 @@ class MarkdownContract {
 }
 
 class TodoMarkdown {
-  static final _task = RegExp(
+  static final _checkbox = RegExp(
     r'^\s*[-*+]\s+\[([ xX])\]\s*(.*)$',
     multiLine: true,
   );
+  static final _globalTask = RegExp(
+    r'^\s*\+\s+\[([ xX])\]\s*(.*)$',
+    multiLine: true,
+  );
 
+  /// Reflect global tasks use a `+` marker. `-` and `*` checkbox rows remain
+  /// local to their note and deliberately do not enter the task index.
   static List<({int index, String text, bool completed})> extract(
     String markdown,
   ) => [
-    for (final (index, match) in _task.allMatches(markdown).indexed)
+    for (final (index, match) in _globalTask.allMatches(markdown).indexed)
       (
         index: index,
         text: match.group(2)?.trim() ?? '',
@@ -179,9 +185,19 @@ class TodoMarkdown {
       ),
   ];
 
-  static String toggleAt(String markdown, int taskIndex) {
+  /// Toggles a task by its index within the global `+` task list.
+  static String toggleGlobalAt(String markdown, int taskIndex) =>
+      _toggleAt(markdown, taskIndex, _globalTask);
+
+  /// Toggles a checkbox by its index among every checkbox in a note. This is
+  /// used by the note preview, where local and global checkboxes are both
+  /// interactive.
+  static String toggleCheckboxAt(String markdown, int taskIndex) =>
+      _toggleAt(markdown, taskIndex, _checkbox);
+
+  static String _toggleAt(String markdown, int taskIndex, RegExp pattern) {
     var current = 0;
-    return markdown.replaceAllMapped(_task, (match) {
+    return markdown.replaceAllMapped(pattern, (match) {
       if (current++ != taskIndex) return match.group(0)!;
       final marker = match.group(1)?.toLowerCase() == 'x' ? ' ' : 'x';
       return match.group(0)!.replaceFirst(RegExp(r'\[.\]'), '[$marker]');

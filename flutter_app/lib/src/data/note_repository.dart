@@ -417,8 +417,32 @@ class NoteRepository {
     await save(
       note,
       title: note.title,
-      body: TodoMarkdown.toggleAt(note.body, todo.taskIndex),
+      body: TodoMarkdown.toggleGlobalAt(note.body, todo.taskIndex),
     );
+  }
+
+  /// Rebuilds the legacy task index once so existing local `- [ ]` checkboxes
+  /// disappear from the global task list. Subsequent writes index only `+`.
+  Future<void> migrateGlobalTaskIndex() async {
+    const migrationId = 1;
+    final state = await (_db.select(
+      _db.todoIndexStates,
+    )..where((row) => row.id.equals(migrationId))).getSingleOrNull();
+    if (state?.isReady == true) return;
+
+    await _db.transaction(() async {
+      await _db.delete(_db.todoEntries).go();
+      final notes = await _db.select(_db.noteRows).get();
+      for (final note in notes) {
+        await _indexGlobalTasks(note.id, note.body);
+      }
+      await _db.into(_db.todoIndexStates).insertOnConflictUpdate(
+        TodoIndexStatesCompanion.insert(
+          id: Value(migrationId),
+          isReady: const Value(true),
+        ),
+      );
+    });
   }
 
   Future<Note> importImage(Note note, File source) async {
@@ -658,24 +682,27 @@ class NoteRepository {
     if (writeFile) await _write(note.path.value, note.rawMarkdown.value);
     await _db.transaction(() async {
       await _db.into(_db.noteRows).insertOnConflictUpdate(note);
-      await (_db.delete(
-        _db.todoEntries,
-      )..where((row) => row.noteId.equals(note.id.value))).go();
-      final tasks = TodoMarkdown.extract(note.body.value);
-      for (final task in tasks) {
-        await _db
-            .into(_db.todoEntries)
-            .insert(
-              TodoEntriesCompanion.insert(
-                noteId: note.id.value,
-                taskIndex: task.index,
-                taskText: task.text,
-                isCompleted: task.completed,
-              ),
-            );
-      }
+      await _indexGlobalTasks(note.id.value, note.body.value);
     });
     return (await get(note.id.value))!;
+  }
+
+  Future<void> _indexGlobalTasks(String noteId, String body) async {
+    await (_db.delete(
+      _db.todoEntries,
+    )..where((row) => row.noteId.equals(noteId))).go();
+    for (final task in TodoMarkdown.extract(body)) {
+      await _db
+          .into(_db.todoEntries)
+          .insert(
+            TodoEntriesCompanion.insert(
+              noteId: noteId,
+              taskIndex: task.index,
+              taskText: task.text,
+              isCompleted: task.completed,
+            ),
+          );
+    }
   }
 
   Future<void> _write(String relativePath, String contents) async {

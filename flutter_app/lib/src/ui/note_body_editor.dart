@@ -7,6 +7,7 @@ import '../domain/note.dart';
 /// canonical data stored by [NoteRepository].
 class NoteBodyEditorCodec {
   static const _markdownImageUrl = 'specular_markdown_image_url';
+  static const globalTaskAttribute = 'specular_global_task';
 
   static String editableBody(Note note) {
     final match = RegExp(
@@ -20,17 +21,72 @@ class NoteBodyEditorCodec {
 
   static Future<EditorState> load(Note? note, NoteRepository repository) async {
     if (note == null) return EditorState.blank(withInitialText: true);
-    var document = markdownToDocument(editableBody(note));
+    var document = documentFromMarkdown(editableBody(note));
     if (document.isEmpty) document = Document.blank(withInitialText: true);
     document = await _resolveAttachmentPaths(document, note, repository);
     return EditorState(document: document);
   }
 
-  static String export(EditorState editorState) => documentToMarkdown(
-    editorState.document,
-    customParsers: const [_SpecularImageNodeParser()],
-    lineBreak: '\n\n',
+  static String export(EditorState editorState) => normalizeTaskListSpacing(
+    documentToMarkdown(
+      editorState.document,
+      customParsers: const [
+        _SpecularImageNodeParser(),
+        _SpecularTodoNodeParser(),
+      ],
+      lineBreak: '\n\n',
+    ),
   ).trim();
+
+  /// Keeps adjacent GFM task items in a tight list. AppFlowy exports a blank
+  /// line after every block, but its Markdown importer and flutter_markdown
+  /// only recognize task markers when the list items are contiguous.
+  static String normalizeTaskListSpacing(
+    String markdown,
+  ) => markdown.replaceAllMapped(
+    RegExp(
+      r'(^[ \t]*[-*+]\s+\[[ xX]\][^\r\n]*)\r?\n(?:[ \t]*\r?\n)+(?=[ \t]*[-*+]\s+\[[ xX]\])',
+      multiLine: true,
+    ),
+    (match) => '${match.group(1)}\n',
+  );
+
+  static Document documentFromMarkdown(String markdown) {
+    final normalized = normalizeTaskListSpacing(markdown);
+    return _restoreGlobalTaskKinds(markdownToDocument(normalized), normalized);
+  }
+
+  /// AppFlowy's Markdown AST does not retain whether a task used `+` or `-`.
+  /// Pair the parsed task nodes with source-order task markers so a global
+  /// Reflect task can survive a rich-text round trip.
+  static Document _restoreGlobalTaskKinds(Document document, String markdown) {
+    final globalKinds = <bool>[
+      for (final match in RegExp(
+        r'^[ \t]*([-*+])\s+\[[ xX]\]',
+        multiLine: true,
+      ).allMatches(markdown))
+        match.group(1) == '+',
+    ];
+    var taskIndex = 0;
+
+    Node mapNode(Node node) {
+      final children = [for (final child in node.children) mapNode(child)];
+      if (node.type != TodoListBlockKeys.type) {
+        return node.copyWith(children: children);
+      }
+      final isGlobal =
+          taskIndex < globalKinds.length && globalKinds[taskIndex++];
+      return node.copyWith(
+        children: children,
+        attributes: {
+          ...node.attributes,
+          if (isGlobal) globalTaskAttribute: true,
+        },
+      );
+    }
+
+    return Document(root: mapNode(document.root));
+  }
 
   static Future<void> insertStagedImage(
     EditorState editorState,
@@ -104,5 +160,29 @@ class _SpecularImageNodeParser extends NodeParser {
         attributes[NoteBodyEditorCodec._markdownImageUrl] ??
         attributes[ImageBlockKeys.url];
     return '![]($source)';
+  }
+}
+
+class _SpecularTodoNodeParser extends NodeParser {
+  const _SpecularTodoNodeParser();
+
+  @override
+  String get id => TodoListBlockKeys.type;
+
+  @override
+  String transform(Node node, DocumentMarkdownEncoder? encoder) {
+    final delta = node.delta ?? (Delta()..insert(''));
+    final marker =
+        node.attributes[NoteBodyEditorCodec.globalTaskAttribute] == true
+        ? '+'
+        : '-';
+    final checked = node.attributes[TodoListBlockKeys.checked] == true
+        ? '[x]'
+        : '[ ]';
+    final children = encoder?.convertNodes(node.children, withIndent: true);
+    var markdown =
+        '$marker $checked ${DeltaMarkdownEncoder().convert(delta)}\n';
+    if (children != null && children.isNotEmpty) markdown += children;
+    return markdown;
   }
 }

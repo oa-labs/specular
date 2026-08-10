@@ -141,4 +141,30 @@ void main() {
     await repository.setPinned(pinned, false);
     expect((await repository.get(note.id))!.isPinned, isFalse);
   });
+
+  test('indexes and toggles only Reflect global plus tasks', () async {
+    final root = await Directory.systemTemp.createTemp('specular-notes-test-');
+    final database = AppDatabase.forTesting(NativeDatabase.memory());
+    addTearDown(() async {
+      await database.close();
+      await root.delete(recursive: true);
+    });
+    final repository = NoteRepository(
+      database,
+      Directory('${root.path}/notes'),
+    );
+    final note = await repository.create(
+      title: 'Task scopes',
+      body: '+ [ ] Global task\n- [ ] Local checkbox',
+    );
+
+    final todos = await repository.watchTodos().first;
+    expect(todos.map((todo) => todo.text), ['Global task']);
+
+    await repository.toggleTodo(todos.single);
+    expect(
+      (await repository.get(note.id))!.body,
+      contains('+ [x] Global task\n- [ ] Local checkbox'),
+    );
+  });
 }

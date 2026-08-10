@@ -48,4 +48,5 @@ Future<void> main() async {
   // first frame behind a full filesystem re-index; only seed a genuinely empty
   // database, after the list screen has rendered.
   unawaited(repository.importExistingFilesIfNeeded());
+  unawaited(repository.migrateGlobalTaskIndex());
 }
