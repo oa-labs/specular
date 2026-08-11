@@ -87,13 +87,21 @@ class SyncUiState {
 /// Gives foreground syncs one consistent visual state. Background work stays
 /// intentionally quiet: Android may run it while there is no app to present.
 class SyncController extends ChangeNotifier {
-  SyncController(this._engine, this._storage, this._repository);
+  SyncController(this._engine, this._storage, this._repository) {
+    unawaited(_refreshSharedSyncActivity());
+    _activityPoll = Timer.periodic(
+      const Duration(seconds: 1),
+      (_) => unawaited(_refreshSharedSyncActivity()),
+    );
+  }
 
   final GitHubSyncEngine _engine;
   final FlutterSecureStorage _storage;
   final NoteRepository _repository;
   SyncUiState _state = const SyncUiState();
   var _activeSyncs = 0;
+  var _sharedSyncActive = false;
+  late final Timer _activityPoll;
 
   SyncUiState get state => _state;
 
@@ -125,8 +133,14 @@ class SyncController extends ChangeNotifier {
       return result;
     } finally {
       _activeSyncs--;
+      await _refreshSharedSyncActivity(notify: false);
       if (_activeSyncs == 0) {
-        _state = const SyncUiState();
+        _state = _sharedSyncActive
+            ? const SyncUiState(
+                isSyncing: true,
+                message: 'Syncing with GitHub…',
+              )
+            : const SyncUiState();
         notifyListeners();
       }
     }
@@ -142,6 +156,25 @@ class SyncController extends ChangeNotifier {
       total: progress.total,
     );
     notifyListeners();
+  }
+
+  Future<void> _refreshSharedSyncActivity({bool notify = true}) async {
+    final active = await _repository.isGitHubSyncActive();
+    if (_sharedSyncActive == active) return;
+    _sharedSyncActive = active;
+    // A foreground sync supplies detailed progress, so only replace the UI
+    // state when the durable lease belongs to another isolate.
+    if (_activeSyncs != 0) return;
+    _state = active
+        ? const SyncUiState(isSyncing: true, message: 'Syncing with GitHub…')
+        : const SyncUiState();
+    if (notify) notifyListeners();
+  }
+
+  @override
+  void dispose() {
+    _activityPoll.cancel();
+    super.dispose();
   }
 }
 

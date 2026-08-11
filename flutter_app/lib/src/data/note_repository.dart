@@ -47,6 +47,21 @@ class NoteRepository {
         null;
   }
 
+  /// Reads the durable lease rather than in-memory sync state, so a foreground
+  /// Flutter engine can see work that is running in WorkManager's isolate.
+  Future<bool> isGitHubSyncActive() async {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    return await (_db.select(_db.syncLeases)
+              ..where(
+                (lease) =>
+                    lease.scope.equals('github') &
+                    lease.expiresAt.isBiggerThanValue(now),
+              )
+              ..limit(1))
+            .getSingleOrNull() !=
+        null;
+  }
+
   /// Removes only the local mirror and index. The selected GitHub repository
   /// and its contents are never modified. A lease prevents clearing while a
   /// foreground or background sync owns the same database.

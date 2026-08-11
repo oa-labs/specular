@@ -1460,7 +1460,18 @@ class TodoScreen extends ConsumerWidget {
     length: TodoFilter.values.length,
     child: Scaffold(
       appBar: AppBar(
-        title: const Text('To-dos'),
+        title: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            SpecularWordmark(
+              isSyncing: ref.watch(syncControllerProvider).state.isSyncing,
+            ),
+            const Padding(
+              padding: EdgeInsets.only(left: 10),
+              child: Text('To-dos'),
+            ),
+          ],
+        ),
         bottom: const TabBar(
           tabs: [
             Tab(text: 'Open'),

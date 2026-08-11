@@ -337,9 +337,11 @@ void main() {
     );
     final first = await repository.acquireSyncLease(owner: 'worker-a');
     expect(first, isNotNull);
+    expect(await repository.isGitHubSyncActive(), isTrue);
     expect(await repository.acquireSyncLease(owner: 'worker-b'), isNull);
 
     await repository.releaseSyncLease(first!);
+    expect(await repository.isGitHubSyncActive(), isFalse);
     expect(await repository.acquireSyncLease(owner: 'worker-b'), isNotNull);
   });
 
