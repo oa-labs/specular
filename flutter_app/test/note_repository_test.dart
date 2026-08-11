@@ -74,6 +74,28 @@ void main() {
     expect(await File('${root.path}/notes/${note.path}').exists(), isFalse);
   });
 
+  test('clears the local mirror, index, and pending sync state', () async {
+    final root = await Directory.systemTemp.createTemp('specular-notes-test-');
+    final database = AppDatabase.forTesting(NativeDatabase.memory());
+    addTearDown(() async {
+      await database.close();
+      await root.delete(recursive: true);
+    });
+    final notesRoot = Directory('${root.path}/notes');
+    final repository = NoteRepository(database, notesRoot);
+    final note = await repository.create(title: 'Only local');
+
+    expect(await repository.hasPendingSyncChanges(), isTrue);
+    expect(await File('${notesRoot.path}/${note.path}').exists(), isTrue);
+
+    await repository.clearLocalCache();
+
+    expect(await repository.hasLocalNotes(), isFalse);
+    expect(await repository.hasPendingSyncChanges(), isFalse);
+    expect(await notesRoot.list().toList(), isEmpty);
+    expect(await database.select(database.syncOperations).get(), isEmpty);
+  });
+
   test('does not use a note body as a missing metadata summary', () async {
     final root = await Directory.systemTemp.createTemp('specular-notes-test-');
     final database = AppDatabase.forTesting(NativeDatabase.memory());

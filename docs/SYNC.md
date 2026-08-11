@@ -49,7 +49,13 @@ Review the conflict note, merge the desired content manually, and delete the ext
 
 - Pull-to-refresh and the app's sync action run a foreground sync.
 - The app schedules one-off network work after local changes.
-- Android WorkManager also requests a periodic network sync at least every 15 minutes. Android may defer this work for battery, connectivity, or background-execution reasons.
+- Choose a background cadence in **Settings**, from every 15 minutes to daily. Android WorkManager may defer this work for battery, connectivity, or background-execution reasons.
+
+## Change repositories or rebuild the local mirror
+
+Specular never applies a newly selected repository on top of the existing local mirror. In **Settings**, choose the new repository and select **Switch repository**. Specular validates it first, then requires confirmation before it removes the device's local notes, attachments, search index, and pending sync state. The GitHub repositories are never changed by this action.
+
+Use **Clear local sync cache** to discard the current device mirror and import the configured repository again. Both actions warn when there are unsynced local edits; those edits must be synced first or will be lost.
 
 You can always keep editing offline. The dirty state remains until GitHub acknowledges the exact local revision.
 
@@ -67,4 +73,3 @@ You can always keep editing offline. The dirty state remains until GitHub acknow
 ## Privacy and credentials
 
 The GitHub token is stored using Android secure storage. It is sent only to GitHub's API for repository access. Specular includes no telemetry, Firebase, or Play Services dependencies.
-

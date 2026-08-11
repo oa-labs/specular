@@ -95,8 +95,9 @@ configured.
 4. Select **Save and sync**.
 
 The first sync imports the remote notes. Thereafter, changes are pushed during
-sync and background sync is scheduled at least every 15 minutes when Android
-permits network work. You can also pull to refresh from the note list.
+sync and background sync runs at the cadence selected in Settings (15 minutes
+to daily) when Android permits network work. You can also pull to refresh from
+the note list.
 
 For compatible repository layout and synchronization semantics, see the
 [Reflect GitHub sync contract](docs/reflect-contract.md).

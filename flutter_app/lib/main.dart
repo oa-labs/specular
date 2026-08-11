@@ -24,7 +24,7 @@ Future<void> main() async {
   final themeMode = themeModeFromStorage(
     await secureStorage.read(key: themeModeStorageKey),
   );
-  await SyncScheduler.initialize();
+  await SyncScheduler.initialize(secureStorage);
   final database = AppDatabase.openLegacy(state);
   final repository = NoteRepository(
     database,

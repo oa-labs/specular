@@ -261,6 +261,47 @@ class GitHubSyncEngine {
     }
   }
 
+  /// Validates manually entered coordinates before a repository switch clears
+  /// the local mirror. The API supplies the default branch, so this works for
+  /// repositories that do not use `main`.
+  Future<void> validateRepositoryCoordinates(
+    String token, {
+    required String owner,
+    required String repo,
+  }) async {
+    final normalizedToken = token.trim();
+    if (normalizedToken.isEmpty ||
+        owner.trim().isEmpty ||
+        repo.trim().isEmpty) {
+      throw const GitHubRepositoryException(
+        'Enter a GitHub token, repository owner, and repository name first.',
+      );
+    }
+    try {
+      final response = await _dio.get<Map<String, dynamic>>(
+        '/repos/${Uri.encodeComponent(owner.trim())}/${Uri.encodeComponent(repo.trim())}',
+        options: Options(headers: {'Authorization': 'Bearer $normalizedToken'}),
+      );
+      final data = response.data!;
+      final repositoryOwner = Map<String, dynamic>.from(
+        data['owner'] as Map? ?? const <String, dynamic>{},
+      );
+      await validateRepository(
+        normalizedToken,
+        GitHubRepository(
+          id: data['id'] as int,
+          owner: repositoryOwner['login'] as String,
+          name: data['name'] as String,
+          fullName: data['full_name'] as String,
+          defaultBranch: data['default_branch'] as String? ?? 'main',
+          isPrivate: data['private'] as bool? ?? true,
+        ),
+      );
+    } on DioException catch (error) {
+      throw GitHubRepositoryException(_friendlyError(error));
+    }
+  }
+
   Future<_RemoteSnapshot> _pull(
     GitHubSettings settings, {
     SyncProgressCallback? onProgress,
@@ -584,9 +625,32 @@ class GitHubSyncEngine {
 
   String _friendlyError(DioException error) {
     final code = error.response?.statusCode;
+    final responseMessage = error.response?.data is Map
+        ? (error.response?.data as Map)['message']?.toString().toLowerCase()
+        : null;
+    final rateLimitRemaining = error.response?.headers.value(
+      'x-ratelimit-remaining',
+    );
+    final rateLimitReset = error.response?.headers.value('x-ratelimit-reset');
+    final rateLimited =
+        rateLimitRemaining == '0' ||
+        responseMessage?.contains('rate limit') == true;
+    if (code == 403 && rateLimited) {
+      final resetSeconds = int.tryParse(rateLimitReset ?? '');
+      if (resetSeconds != null) {
+        final reset = DateTime.fromMillisecondsSinceEpoch(
+          resetSeconds * 1000,
+        ).toLocal();
+        final hour = reset.hour.toString().padLeft(2, '0');
+        final minute = reset.minute.toString().padLeft(2, '0');
+        return 'GitHub API rate limit reached. Resets at $hour:$minute. '
+            'Your local edits are safe.';
+      }
+      return 'GitHub API rate limit reached. Your local edits are safe.';
+    }
     return switch (code) {
       401 => 'GitHub token is invalid or expired.',
-      403 => 'GitHub denied access or rate-limited this sync.',
+      403 => 'GitHub denied access. Check the token\'s Contents permission.',
       404 => 'GitHub repository or branch was not found.',
       409 || 422 =>
         'GitHub rejected a concurrent change; pull again to preserve both versions.',

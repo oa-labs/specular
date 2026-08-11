@@ -147,6 +147,44 @@ void main() {
       expect((await repository.get(note.id))!.isDirty, isFalse);
     },
   );
+
+  test(
+    'reports GitHub rate-limit reset time without risking local edits',
+    () async {
+      final root = await Directory.systemTemp.createTemp(
+        'specular-github-test-',
+      );
+      final database = AppDatabase.forTesting(NativeDatabase.memory());
+      addTearDown(() async {
+        await database.close();
+        await root.delete(recursive: true);
+      });
+
+      final result = await GitHubSyncEngine(
+        NoteRepository(database, Directory('${root.path}/notes')),
+        const FlutterSecureStorage(),
+        dio: Dio()
+          ..httpClientAdapter = _ErrorAdapter(
+            statusCode: 403,
+            body: {'message': 'API rate limit exceeded'},
+            headers: const {
+              'x-ratelimit-remaining': ['0'],
+              'x-ratelimit-reset': ['1786572000'],
+            },
+          ),
+        settingsLoader: () async => const GitHubSettings(
+          token: 'test-token',
+          owner: 'owner',
+          repo: 'notes',
+        ),
+      ).sync();
+
+      expect(result.isSuccess, isFalse);
+      expect(result.message, contains('GitHub API rate limit reached'));
+      expect(result.message, contains('Resets at'));
+      expect(result.message, contains('local edits are safe'));
+    },
+  );
 }
 
 class _FakeGitHub {
@@ -248,6 +286,35 @@ class _FakeAdapter implements HttpClientAdapter {
     Stream<Uint8List>? requestStream,
     Future<void>? cancelFuture,
   ) => _github.handle(options);
+
+  @override
+  void close({bool force = false}) {}
+}
+
+class _ErrorAdapter implements HttpClientAdapter {
+  const _ErrorAdapter({
+    required this.statusCode,
+    required this.body,
+    required this.headers,
+  });
+
+  final int statusCode;
+  final Map<String, String> body;
+  final Map<String, List<String>> headers;
+
+  @override
+  Future<ResponseBody> fetch(
+    RequestOptions options,
+    Stream<Uint8List>? requestStream,
+    Future<void>? cancelFuture,
+  ) async => ResponseBody.fromString(
+    jsonEncode(body),
+    statusCode,
+    headers: {
+      Headers.contentTypeHeader: [Headers.jsonContentType],
+      ...headers,
+    },
+  );
 
   @override
   void close({bool force = false}) {}

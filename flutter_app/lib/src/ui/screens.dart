@@ -13,6 +13,7 @@ import '../data/note_repository.dart';
 import '../domain/markdown.dart';
 import '../domain/note.dart';
 import '../sync/github_sync.dart';
+import '../sync/sync_scheduler.dart';
 import '../voice/voice_service.dart';
 import 'note_body_editor.dart';
 import 'specular_app.dart';
@@ -1178,6 +1179,16 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
     }
   }
 
+  Future<void> _insertWikiLink() async {
+    final selected = await showModalBottomSheet<Note>(
+      context: context,
+      isScrollControlled: true,
+      builder: (sheetContext) => _WikiLinkPicker(excludingId: _note?.id),
+    );
+    if (selected == null || _editorState == null) return;
+    await _editorState!.insertTextAtCurrentSelection('[[${selected.title}]]');
+  }
+
   @override
   void dispose() {
     unawaited(
@@ -1201,6 +1212,11 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
               : 'Edit note',
         ),
         actions: [
+          IconButton(
+            tooltip: 'Insert wiki link',
+            onPressed: _saving || _loading ? null : _insertWikiLink,
+            icon: const Icon(Icons.link),
+          ),
           IconButton(
             onPressed: _saving ? null : () => _addImage(ImageSource.camera),
             icon: const Icon(Icons.photo_camera),
@@ -1340,6 +1356,72 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
             ),
     );
   }
+}
+
+/// Searches the local note index as the user types, then inserts the selected
+/// title using Reflect's portable `[[wikilink]]` syntax.
+class _WikiLinkPicker extends ConsumerStatefulWidget {
+  const _WikiLinkPicker({this.excludingId});
+
+  final String? excludingId;
+
+  @override
+  ConsumerState<_WikiLinkPicker> createState() => _WikiLinkPickerState();
+}
+
+class _WikiLinkPickerState extends ConsumerState<_WikiLinkPicker> {
+  var _query = '';
+
+  @override
+  Widget build(BuildContext context) => SafeArea(
+    child: Padding(
+      padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
+      child: SizedBox(
+        height: MediaQuery.sizeOf(context).height * .65,
+        child: Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(24, 20, 24, 12),
+              child: TextField(
+                autofocus: true,
+                onChanged: (value) => setState(() => _query = value),
+                decoration: const InputDecoration(
+                  labelText: 'Link to note',
+                  prefixIcon: Icon(Icons.search),
+                ),
+              ),
+            ),
+            Expanded(
+              child: StreamBuilder<List<Note>>(
+                stream: ref.read(noteRepositoryProvider).search(_query),
+                builder: (_, snapshot) {
+                  final notes = (snapshot.data ?? const <Note>[])
+                      .where((note) => note.id != widget.excludingId)
+                      .take(30)
+                      .toList();
+                  if (notes.isEmpty) {
+                    return const Center(child: Text('No matching notes'));
+                  }
+                  return ListView.builder(
+                    itemCount: notes.length,
+                    itemBuilder: (_, index) {
+                      final note = notes[index];
+                      return ListTile(
+                        leading: const Icon(Icons.description_outlined),
+                        title: Text(note.title),
+                        subtitle: Text(note.path),
+                        onTap: () => Navigator.pop(context, note),
+                      );
+                    },
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+    ),
+  );
 }
 
 class SearchScreen extends ConsumerStatefulWidget {
@@ -1800,7 +1882,15 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   var _saving = false;
   var _loadingRepositories = false;
   var _selectingRepository = false;
+  var _syncIntervalMinutes = SyncScheduler.defaultIntervalMinutes;
+  var _configuredOwner = '';
+  var _configuredRepo = '';
   String? _repositoryError;
+
+  bool get _isChangingRepository =>
+      _configuredOwner.isNotEmpty &&
+      (_owner.text.trim() != _configuredOwner ||
+          _repo.text.trim() != _configuredRepo);
 
   Future<void> _load() async {
     if (_loaded) return;
@@ -1809,6 +1899,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     _token.text = await storage.read(key: 'github_token') ?? '';
     _owner.text = await storage.read(key: 'repo_owner') ?? '';
     _repo.text = await storage.read(key: 'repo_name') ?? '';
+    _configuredOwner = _owner.text.trim();
+    _configuredRepo = _repo.text.trim();
+    _syncIntervalMinutes = await SyncScheduler.intervalFromStorage(storage);
     _aiUrl.text = await storage.read(key: 'ai_provider_url') ?? '';
     _aiKey.text = await storage.read(key: 'ai_provider_api_key') ?? '';
     _aiModel.text =
@@ -1835,45 +1928,12 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     if (_saving) return;
     setState(() => _saving = true);
     try {
-      final storage = ref.read(secureStorageProvider);
-      await storage.write(key: 'github_token', value: _token.text.trim());
-      await storage.write(key: 'repo_owner', value: _owner.text.trim());
-      await storage.write(key: 'repo_name', value: _repo.text.trim());
-      await storage.write(key: 'ai_provider_url', value: _aiUrl.text.trim());
-      await storage.write(
-        key: 'ai_provider_api_key',
-        value: _aiKey.text.trim(),
-      );
-      await storage.write(
-        key: 'ai_provider_model_id',
-        value: _aiModel.text.trim(),
-      );
-      await storage.write(key: 'voice_provider', value: _voiceProvider);
-      await storage.write(
-        key: 'voice_model_id',
-        value: _voiceModel.text.trim(),
-      );
-      await storage.write(
-        key: 'voice_endpoint',
-        value: _voiceEndpoint.text.trim(),
-      );
-      await storage.write(key: 'voice_api_key', value: _voiceKey.text.trim());
-      await storage.write(
-        key: 'voice_openai_api_key',
-        value: _voiceOpenAiKey.text.trim(),
-      );
-      await storage.write(
-        key: 'voice_file_model',
-        value: _voiceFileModel.text.trim(),
-      );
-      await storage.write(
-        key: 'voice_cleanup_model',
-        value: _voiceCleanupModel.text.trim(),
-      );
-      await storage.write(
-        key: 'voice_use_preview_key',
-        value: _usePreviewKey.toString(),
-      );
+      if (_isChangingRepository) {
+        throw StateError(
+          'Use “Switch repository” to clear the local mirror before changing remotes.',
+        );
+      }
+      await _persistSettings();
       final sync = await ref.read(syncControllerProvider).sync();
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -1883,6 +1943,133 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     } finally {
       if (mounted) setState(() => _saving = false);
     }
+  }
+
+  Future<void> _persistSettings() async {
+    final storage = ref.read(secureStorageProvider);
+    await storage.write(key: 'github_token', value: _token.text.trim());
+    await storage.write(key: 'repo_owner', value: _owner.text.trim());
+    await storage.write(key: 'repo_name', value: _repo.text.trim());
+    await storage.write(key: 'ai_provider_url', value: _aiUrl.text.trim());
+    await storage.write(key: 'ai_provider_api_key', value: _aiKey.text.trim());
+    await storage.write(
+      key: 'ai_provider_model_id',
+      value: _aiModel.text.trim(),
+    );
+    await storage.write(key: 'voice_provider', value: _voiceProvider);
+    await storage.write(key: 'voice_model_id', value: _voiceModel.text.trim());
+    await storage.write(
+      key: 'voice_endpoint',
+      value: _voiceEndpoint.text.trim(),
+    );
+    await storage.write(key: 'voice_api_key', value: _voiceKey.text.trim());
+    await storage.write(
+      key: 'voice_openai_api_key',
+      value: _voiceOpenAiKey.text.trim(),
+    );
+    await storage.write(
+      key: 'voice_file_model',
+      value: _voiceFileModel.text.trim(),
+    );
+    await storage.write(
+      key: 'voice_cleanup_model',
+      value: _voiceCleanupModel.text.trim(),
+    );
+    await storage.write(
+      key: 'voice_use_preview_key',
+      value: _usePreviewKey.toString(),
+    );
+    await SyncScheduler.setInterval(storage, _syncIntervalMinutes);
+    _configuredOwner = _owner.text.trim();
+    _configuredRepo = _repo.text.trim();
+  }
+
+  Future<bool> _confirmCacheClear({required bool switching}) async {
+    final unsynced = await ref
+        .read(noteRepositoryProvider)
+        .hasPendingSyncChanges();
+    if (!mounted) return false;
+    final action = switching ? 'switch repositories' : 'clear the local cache';
+    return (await showDialog<bool>(
+          context: context,
+          builder: (dialogContext) => AlertDialog(
+            title: Text(
+              switching ? 'Switch repository?' : 'Clear local cache?',
+            ),
+            content: Text(
+              'This will remove all local notes, attachments, and search data. '
+              'Your GitHub repository will not be changed.'
+              '${unsynced ? ' Unsynced local edits will be permanently lost.' : ''}',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext, false),
+                child: const Text('Cancel'),
+              ),
+              FilledButton.tonal(
+                onPressed: () => Navigator.pop(dialogContext, true),
+                child: Text(action),
+              ),
+            ],
+          ),
+        )) ??
+        false;
+  }
+
+  Future<void> _clearLocalCache({required bool switching}) async {
+    if (_saving) return;
+    if (!await _confirmCacheClear(switching: switching)) return;
+    setState(() => _saving = true);
+    try {
+      final storage = ref.read(secureStorageProvider);
+      await ref.read(noteRepositoryProvider).clearLocalCache();
+      await storage.delete(key: initialSyncCompletedStorageKey);
+      if (switching) await _persistSettings();
+      final sync = await ref.read(syncControllerProvider).sync();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              switching
+                  ? 'Repository switched. ${sync.message}'
+                  : 'Local cache cleared. ${sync.message}',
+            ),
+          ),
+        );
+      }
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Unable to update cache: $error')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  Future<void> _switchRepository() async {
+    if (_saving || !_isChangingRepository) return;
+    setState(() => _saving = true);
+    try {
+      await ref
+          .read(syncEngineProvider)
+          .validateRepositoryCoordinates(
+            _token.text,
+            owner: _owner.text,
+            repo: _repo.text,
+          );
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Repository cannot be selected: $error')),
+        );
+      }
+      return;
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+    await _clearLocalCache(switching: true);
   }
 
   Future<void> _setDarkMode(bool value) async {
@@ -2069,6 +2256,48 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               controller: _repo,
               decoration: const InputDecoration(labelText: 'Repository name'),
             ),
+            const SizedBox(height: 8),
+            DropdownButtonFormField<int>(
+              key: ValueKey(_syncIntervalMinutes),
+              initialValue: _syncIntervalMinutes,
+              decoration: const InputDecoration(labelText: 'Background sync'),
+              items: [
+                for (final minutes in SyncScheduler.intervalChoices)
+                  DropdownMenuItem(
+                    value: minutes,
+                    child: Text(_syncIntervalLabel(minutes)),
+                  ),
+              ],
+              onChanged: _saving
+                  ? null
+                  : (minutes) {
+                      if (minutes != null) {
+                        setState(() => _syncIntervalMinutes = minutes);
+                      }
+                    },
+            ),
+            if (_isChangingRepository) ...[
+              const SizedBox(height: 8),
+              OutlinedButton.icon(
+                onPressed: _saving ? null : _switchRepository,
+                icon: const Icon(Icons.swap_horiz),
+                label: const Text('Switch repository'),
+              ),
+              const Text(
+                'Switching clears this device’s local mirror before importing '
+                'the selected repository.',
+              ),
+            ],
+            if (_configuredOwner.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              OutlinedButton.icon(
+                onPressed: _saving || _isChangingRepository
+                    ? null
+                    : () => _clearLocalCache(switching: false),
+                icon: const Icon(Icons.delete_sweep_outlined),
+                label: const Text('Clear local sync cache'),
+              ),
+            ],
             ExpansionTile(
               title: const Text('AI summary provider'),
               children: [
@@ -2140,4 +2369,10 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       ),
     );
   }
+}
+
+String _syncIntervalLabel(int minutes) {
+  if (minutes < 60) return 'Every $minutes minutes';
+  final hours = minutes ~/ 60;
+  return hours == 1 ? 'Every hour' : 'Every $hours hours';
 }

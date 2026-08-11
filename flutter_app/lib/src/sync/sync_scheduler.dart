@@ -13,6 +13,7 @@ import 'github_sync.dart';
 const _periodicName = 'github_periodic_sync';
 const _immediateName = 'github_immediate_sync';
 const _taskName = 'github_sync';
+const syncIntervalStorageKey = 'github_sync_interval_minutes';
 
 @pragma('vm:entry-point')
 void specularBackgroundDispatcher() {
@@ -42,18 +43,49 @@ void specularBackgroundDispatcher() {
 
 class SyncScheduler {
   static var _initialized = false;
+  static const defaultIntervalMinutes = 15;
+  static const intervalChoices = <int>[15, 30, 60, 180, 360, 720, 1440];
 
-  static Future<void> initialize() async {
+  static Future<void> initialize(FlutterSecureStorage storage) async {
     if (_initialized) return;
     await Workmanager().initialize(specularBackgroundDispatcher);
+    _initialized = true;
+    await _schedulePeriodic(await intervalFromStorage(storage));
+  }
+
+  static Future<int> intervalFromStorage(FlutterSecureStorage storage) async {
+    final stored = int.tryParse(
+      await storage.read(key: syncIntervalStorageKey) ?? '',
+    );
+    return intervalChoices.contains(stored) ? stored! : defaultIntervalMinutes;
+  }
+
+  static Future<void> setInterval(
+    FlutterSecureStorage storage,
+    int minutes,
+  ) async {
+    if (!intervalChoices.contains(minutes)) {
+      throw ArgumentError.value(
+        minutes,
+        'minutes',
+        'Unsupported sync interval',
+      );
+    }
+    await storage.write(key: syncIntervalStorageKey, value: '$minutes');
+    if (_initialized) await _schedulePeriodic(minutes);
+  }
+
+  static Future<void> _schedulePeriodic(int minutes) async {
+    // WorkManager keeps periodic work by unique name. Cancel first so a changed
+    // user preference replaces the old cadence instead of being ignored.
+    await Workmanager().cancelByUniqueName(_periodicName);
     await Workmanager().registerPeriodicTask(
       _periodicName,
       _taskName,
-      frequency: const Duration(minutes: 15),
+      frequency: Duration(minutes: minutes),
       constraints: Constraints(networkType: NetworkType.connected),
       existingWorkPolicy: ExistingPeriodicWorkPolicy.keep,
     );
-    _initialized = true;
   }
 
   static Future<void> enqueue() async {
@@ -63,6 +95,8 @@ class SyncScheduler {
       _taskName,
       initialDelay: const Duration(seconds: 5),
       constraints: Constraints(networkType: NetworkType.connected),
+      backoffPolicy: BackoffPolicy.exponential,
+      backoffPolicyDelay: const Duration(minutes: 1),
       existingWorkPolicy: ExistingWorkPolicy.replace,
     );
   }

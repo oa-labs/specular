@@ -27,6 +27,7 @@ The local-first MVP and bidirectional GitHub sync are implemented. The source of
 | Push, rename, deletion, attachments | Complete | Batched Git Data API commit and atomic ref update. |
 | Conflict preservation | Complete | Local content is retained as a dated conflict note. |
 | Background and foreground sync | Complete | Manual/on-resume sync plus Android WorkManager periodic work. |
+| Sync settings and recovery UX | Complete | Configurable 15-minute to daily cadence, explicit cache clear/repository switch, wiki-link picker, and rate-limit reset messages. |
 | GitHub OAuth App with PKCE | Not started | PAT remains the supported authentication method. |
 | Large-repo performance verification | Not started | No measured 2k-note cold-start or sync benchmark yet. |
 | Release automation | Not started | No CI workflow, signed release artifact, or device-test pipeline yet. |
@@ -81,15 +82,12 @@ See [SYNC.md](../SYNC.md) for setup, operational behavior, and recovery guidance
 ### Authentication and synchronization hardening
 
 - Register a GitHub OAuth App and implement authorization-code flow with PKCE; keep PAT entry as a fallback for development and unsupported environments.
-- Add explicit exponential-backoff handling for failed GitHub one-off work and surface retry timing/status in the app. The database already preserves dirty state and sync intent.
-- Show GitHub rate-limit details when available, rather than the current generic 403 message.
-- Add a deliberate repository-switch and clear-local-cache flow that cannot mix data from two remotes.
+- Surface scheduled retry timing/status in the app after WorkManager applies the existing exponential-backoff policy.
 
 ### Performance and product polish
 
 - Benchmark cold start and incremental sync against a representative 2,000-note repository; retain the targets of under 2 seconds to an interactive list and under 5 seconds for Wi-Fi incremental sync.
 - Add large-file guards and evaluate pagination/lazy download if full tree traversal is too slow for large repositories.
-- Add link autocomplete from the local note index and make the sync interval configurable.
 
 ### Verification and release
 

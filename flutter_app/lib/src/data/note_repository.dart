@@ -33,6 +33,49 @@ class NoteRepository {
   Future<bool> hasLocalNotes() async =>
       await (_db.select(_db.noteRows)..limit(1)).getSingleOrNull() != null;
 
+  Future<bool> hasPendingSyncChanges() async {
+    final dirtyNote =
+        await (_db.select(_db.noteRows)
+              ..where((row) => row.isDirty.equals(true))
+              ..limit(1))
+            .getSingleOrNull();
+    if (dirtyNote != null) return true;
+    return await (_db.select(_db.attachments)
+              ..where((row) => row.isDirty.equals(true))
+              ..limit(1))
+            .getSingleOrNull() !=
+        null;
+  }
+
+  /// Removes only the local mirror and index. The selected GitHub repository
+  /// and its contents are never modified. A lease prevents clearing while a
+  /// foreground or background sync owns the same database.
+  Future<void> clearLocalCache() async {
+    final lease = await acquireSyncLease(
+      owner: 'cache-clear-${DateTime.now().microsecondsSinceEpoch}',
+    );
+    if (lease == null) {
+      throw StateError('Wait for the current sync to finish before clearing.');
+    }
+    try {
+      if (await _notesRoot.exists()) {
+        for (final entry in await _notesRoot.list().toList()) {
+          await entry.delete(recursive: true);
+        }
+      }
+      await _notesRoot.create(recursive: true);
+      await _db.transaction(() async {
+        await _db.delete(_db.todoEntries).go();
+        await _db.delete(_db.todoIndexStates).go();
+        await _db.delete(_db.attachments).go();
+        await _db.delete(_db.syncOperations).go();
+        await _db.delete(_db.noteRows).go();
+      });
+    } finally {
+      await releaseSyncLease(lease);
+    }
+  }
+
   Stream<List<Note>> search(String input) {
     final query = _db.select(_db.noteRows)
       ..where((row) => row.isPendingDeletion.equals(false));
