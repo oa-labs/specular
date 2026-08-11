@@ -34,6 +34,9 @@ class NoteRepository {
     return query.watch().map((rows) => rows.map(_toNote).toList());
   }
 
+  Future<bool> hasLocalNotes() async =>
+      await (_db.select(_db.noteRows)..limit(1)).getSingleOrNull() != null;
+
   Stream<List<Note>> search(String input) {
     final query = _db.select(_db.noteRows)
       ..where((row) => row.isPendingDeletion.equals(false));

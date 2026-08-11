@@ -36,6 +36,7 @@ final syncControllerProvider = ChangeNotifierProvider<SyncController>(
   (ref) => SyncController(
     ref.watch(syncEngineProvider),
     ref.watch(secureStorageProvider),
+    ref.watch(noteRepositoryProvider),
   ),
 );
 final voiceServiceProvider = Provider<VoiceService>(
@@ -86,10 +87,11 @@ class SyncUiState {
 /// Gives foreground syncs one consistent visual state. Background work stays
 /// intentionally quiet: Android may run it while there is no app to present.
 class SyncController extends ChangeNotifier {
-  SyncController(this._engine, this._storage);
+  SyncController(this._engine, this._storage, this._repository);
 
   final GitHubSyncEngine _engine;
   final FlutterSecureStorage _storage;
+  final NoteRepository _repository;
   SyncUiState _state = const SyncUiState();
   var _activeSyncs = 0;
 
@@ -99,8 +101,12 @@ class SyncController extends ChangeNotifier {
     if (await GitHubSettings.load(_storage) == null) {
       return _engine.sync();
     }
+    final hasCompletedInitialSync =
+        await _storage.read(key: initialSyncCompletedStorageKey) == 'true';
+    // Existing installs predate this UI flag but already have a local library.
+    // Only block the UI for a genuinely empty library's first sync.
     final isInitialSync =
-        await _storage.read(key: initialSyncCompletedStorageKey) != 'true';
+        !hasCompletedInitialSync && !await _repository.hasLocalNotes();
     _activeSyncs++;
     _state = SyncUiState(
       isSyncing: true,
@@ -110,7 +116,7 @@ class SyncController extends ChangeNotifier {
     notifyListeners();
     try {
       final result = await _engine.sync(onProgress: _updateProgress);
-      if (isInitialSync && result.message == 'Synced with GitHub') {
+      if (!hasCompletedInitialSync && result.message == 'Synced with GitHub') {
         await _storage.write(
           key: initialSyncCompletedStorageKey,
           value: 'true',

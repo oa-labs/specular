@@ -34,6 +34,12 @@ class SyncResult {
       error == null && message != 'GitHub sync is not configured.';
 }
 
+class _ConcurrentRefUpdate implements Exception {
+  const _ConcurrentRefUpdate(this.error);
+
+  final DioException error;
+}
+
 class GitHubSettings {
   const GitHubSettings({
     required this.token,
@@ -117,34 +123,48 @@ class GitHubSyncEngine {
   final Dio _dio;
   Future<void> _tail = Future.value();
 
-  Future<SyncResult> sync({SyncProgressCallback? onProgress}) =>
-      _serialized(() async {
-        onProgress?.call(const SyncProgress(message: 'Connecting to GitHub…'));
-        final settings = await _settingsLoader();
-        if (settings == null) return const SyncResult.notConfigured();
-        final lease = await _repository.acquireSyncLease(
-          owner: 'github-${DateTime.now().microsecondsSinceEpoch}-$hashCode',
-        );
-        if (lease == null) {
-          return const SyncResult.success('Another sync is already running.');
-        }
-        final renewal = Timer.periodic(const Duration(minutes: 1), (_) {
-          unawaited(_repository.renewSyncLease(lease));
-        });
+  static const _maxConcurrentChangeRetries = 1;
+
+  Future<SyncResult> sync({
+    SyncProgressCallback? onProgress,
+  }) => _serialized(() async {
+    onProgress?.call(const SyncProgress(message: 'Connecting to GitHub…'));
+    final settings = await _settingsLoader();
+    if (settings == null) return const SyncResult.notConfigured();
+    final lease = await _repository.acquireSyncLease(
+      owner: 'github-${DateTime.now().microsecondsSinceEpoch}-$hashCode',
+    );
+    if (lease == null) {
+      return const SyncResult.success('Another sync is already running.');
+    }
+    final renewal = Timer.periodic(const Duration(minutes: 1), (_) {
+      unawaited(_repository.renewSyncLease(lease));
+    });
+    try {
+      for (var attempt = 0; ; attempt++) {
+        final snapshot = await _pull(settings, onProgress: onProgress);
         try {
-          final snapshot = await _pull(settings, onProgress: onProgress);
           await _push(settings, snapshot, onProgress: onProgress);
           onProgress?.call(const SyncProgress(message: 'Sync complete'));
           return const SyncResult.success('Synced with GitHub');
-        } on DioException catch (error) {
-          return SyncResult.failure(_friendlyError(error), error);
-        } catch (error) {
-          return SyncResult.failure('Sync failed: $error', error);
-        } finally {
-          renewal.cancel();
-          await _repository.releaseSyncLease(lease);
+        } on _ConcurrentRefUpdate {
+          if (attempt >= _maxConcurrentChangeRetries) rethrow;
+          onProgress?.call(
+            const SyncProgress(message: 'Remote changes detected; retrying…'),
+          );
         }
-      });
+      }
+    } on _ConcurrentRefUpdate catch (conflict) {
+      return SyncResult.failure(_friendlyError(conflict.error), conflict.error);
+    } on DioException catch (error) {
+      return SyncResult.failure(_friendlyError(error), error);
+    } catch (error) {
+      return SyncResult.failure('Sync failed: $error', error);
+    } finally {
+      renewal.cancel();
+      await _repository.releaseSyncLease(lease);
+    }
+  });
 
   Future<T> _serialized<T>(Future<T> Function() operation) {
     final result = _tail.then((_) => operation());
@@ -435,11 +455,19 @@ class GitHubSyncEngine {
     );
     final commitSha = commit.data?['sha'] as String?;
     if (commitSha == null) throw StateError('GitHub returned no commit SHA');
-    await _dio.patch<void>(
-      '/repos/${settings.owner}/${settings.repo}/git/refs/heads/${Uri.encodeComponent(snapshot.branch)}',
-      data: {'sha': commitSha, 'force': false},
-      options: _options(settings),
-    );
+    try {
+      await _dio.patch<void>(
+        '/repos/${settings.owner}/${settings.repo}/git/refs/heads/${Uri.encodeComponent(snapshot.branch)}',
+        data: {'sha': commitSha, 'force': false},
+        options: _options(settings),
+      );
+    } on DioException catch (error) {
+      final status = error.response?.statusCode;
+      if (status == 409 || status == 422) {
+        throw _ConcurrentRefUpdate(error);
+      }
+      rethrow;
+    }
     await _repository.acknowledgeNotesSynced(acknowledgements);
     for (final entry in attachmentAcks.entries) {
       await _repository.markAttachmentSynced(entry.key, entry.value);

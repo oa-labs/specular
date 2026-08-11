@@ -102,6 +102,51 @@ void main() {
       expect((await repository.get(note.id))!.isDirty, isFalse);
     },
   );
+
+  test(
+    'retries a rejected ref update against a fresh remote snapshot',
+    () async {
+      final root = await Directory.systemTemp.createTemp(
+        'specular-github-test-',
+      );
+      final database = AppDatabase.forTesting(NativeDatabase.memory());
+      final repository = NoteRepository(
+        database,
+        Directory('${root.path}/notes'),
+      );
+      final note = await repository.create(
+        title: 'Checklist',
+        body: '+ [ ] Ship',
+      );
+      await repository.markSynced(note, 'base-blob');
+      await repository.toggleTodo((await repository.watchTodos().first).single);
+      final github = _FakeGitHub(
+        path: note.path,
+        content: note.rawMarkdown,
+        rejectFirstRefUpdate: true,
+      );
+      addTearDown(() async {
+        await database.close();
+        await root.delete(recursive: true);
+      });
+
+      final result = await GitHubSyncEngine(
+        repository,
+        const FlutterSecureStorage(),
+        dio: Dio()..httpClientAdapter = github.adapter,
+        settingsLoader: () async => const GitHubSettings(
+          token: 'test-token',
+          owner: 'owner',
+          repo: 'notes',
+        ),
+      ).sync();
+
+      expect(result.isSuccess, isTrue);
+      expect(github.refUpdates, 2);
+      expect(github.commitCreates, 2);
+      expect((await repository.get(note.id))!.isDirty, isFalse);
+    },
+  );
 }
 
 class _FakeGitHub {
@@ -109,14 +154,17 @@ class _FakeGitHub {
     required this.path,
     required this.content,
     this.pauseFirstRepositoryRead = false,
+    this.rejectFirstRefUpdate = false,
   });
 
   final String path;
   final String content;
   final bool pauseFirstRepositoryRead;
+  final bool rejectFirstRefUpdate;
   final _firstRead = Completer<void>();
   final _resume = Completer<void>();
   var _paused = false;
+  var _refUpdateRejected = false;
   var refUpdates = 0;
   var commitCreates = 0;
   final contentsApiRequests = <String>[];
@@ -139,6 +187,7 @@ class _FakeGitHub {
     if (requestPath.contains('/contents/'))
       contentsApiRequests.add(requestPath);
     if (requestPath.contains('/git/blobs/')) blobRequests.add(requestPath);
+    var statusCode = 200;
     final response = switch ((request.method, requestPath)) {
       ('GET', '/repos/owner/notes') => {'default_branch': 'main'},
       ('GET', '/repos/owner/notes/git/ref/heads/main') => {
@@ -164,13 +213,22 @@ class _FakeGitHub {
       }(),
       ('PATCH', '/repos/owner/notes/git/refs/heads/main') => () {
         refUpdates++;
+        if (rejectFirstRefUpdate && !_refUpdateRejected) {
+          _refUpdateRejected = true;
+          statusCode = 422;
+          return {'message': 'Reference update failed'};
+        }
         return {'ref': 'refs/heads/main'};
       }(),
       _ => {'message': 'Unexpected $requestPath'},
     };
     return ResponseBody.fromString(
       jsonEncode(response),
-      response['message'] == null ? 200 : 404,
+      response['message'] == null
+          ? statusCode
+          : statusCode == 200
+          ? 404
+          : statusCode,
       headers: {
         Headers.contentTypeHeader: [Headers.jsonContentType],
       },
