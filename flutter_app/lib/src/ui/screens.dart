@@ -571,13 +571,6 @@ class NoteDetailScreen extends ConsumerWidget {
                     context.push('/editor/${Uri.encodeComponent(note.id)}'),
                 icon: const Icon(Icons.edit),
               ),
-              IconButton(
-                tooltip: 'Record into note',
-                onPressed: () => context.push(
-                  '/editor/${Uri.encodeComponent(note.id)}?voice=true',
-                ),
-                icon: const Icon(Icons.mic),
-              ),
               PopupMenuButton<_NoteAction>(
                 onSelected: (action) {
                   switch (action) {
@@ -1402,26 +1395,41 @@ List<TodoItem> preserveTodoOrder(
 class _TodoListState extends ConsumerState<_TodoList> {
   var _previousOrder = <TodoItem>[];
 
+  Future<void> _refresh() async {
+    final result = await ref.read(syncControllerProvider).sync();
+    if (!mounted) return;
+
+    ref.invalidate(todosProvider(widget.filter));
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(result.message)));
+  }
+
   @override
-  Widget build(BuildContext context) => ref
-      .watch(todosProvider(widget.filter))
-      .when(
-        loading: () => const Center(child: CircularProgressIndicator()),
-        error: (error, _) => Center(child: Text('$error')),
-        data: (todos) {
-          final orderedTodos = preserveTodoOrder(todos, _previousOrder);
-          _previousOrder = orderedTodos;
-          return ListView(
-            children: [
-              for (final todo in orderedTodos)
-                _TodoRow(
-                  key: ValueKey((todo.noteId, todo.taskIndex)),
-                  todo: todo,
-                ),
-            ],
-          );
-        },
-      );
+  Widget build(BuildContext context) => RefreshIndicator(
+    onRefresh: _refresh,
+    child: ref
+        .watch(todosProvider(widget.filter))
+        .when(
+          loading: () => const Center(child: CircularProgressIndicator()),
+          error: (error, _) =>
+              _RefreshableMessage('Unable to load to-dos: $error'),
+          data: (todos) {
+            final orderedTodos = preserveTodoOrder(todos, _previousOrder);
+            _previousOrder = orderedTodos;
+            return ListView(
+              physics: const AlwaysScrollableScrollPhysics(),
+              children: [
+                for (final todo in orderedTodos)
+                  _TodoRow(
+                    key: ValueKey((todo.noteId, todo.taskIndex)),
+                    todo: todo,
+                  ),
+              ],
+            );
+          },
+        ),
+  );
 }
 
 class _TodoRow extends ConsumerWidget {
