@@ -184,8 +184,9 @@ class _FakeGitHub {
       await _resume.future;
     }
     final requestPath = request.path;
-    if (requestPath.contains('/contents/'))
+    if (requestPath.contains('/contents/')) {
       contentsApiRequests.add(requestPath);
+    }
     if (requestPath.contains('/git/blobs/')) blobRequests.add(requestPath);
     var statusCode = 200;
     final response = switch ((request.method, requestPath)) {

@@ -13,11 +13,7 @@ import 'app_database.dart';
 /// The Markdown files remain canonical. SQLite is a transactional index and
 /// sync journal shared with the legacy Android widget.
 class NoteRepository {
-  NoteRepository(
-    this._db,
-    this._notesRoot, {
-    Future<void> Function()? onLocalChange,
-  }) : _onLocalChange = onLocalChange;
+  NoteRepository(this._db, this._notesRoot, {this._onLocalChange});
 
   final AppDatabase _db;
   final Directory _notesRoot;
@@ -56,8 +52,9 @@ class NoteRepository {
         _db.noteRows.id.equalsExp(_db.todoEntries.noteId),
       ),
     ])..where(_db.noteRows.isPendingDeletion.equals(false));
-    if (!includeCompleted)
+    if (!includeCompleted) {
       query.where(_db.todoEntries.isCompleted.equals(false));
+    }
     query.orderBy([
       OrderingTerm.desc(_db.noteRows.updatedAt),
       OrderingTerm.asc(_db.todoEntries.taskIndex),
@@ -418,12 +415,13 @@ class NoteRepository {
   }
 
   Future<Note> appendToToday(String markdown) async {
-    if (markdown.trim().isEmpty)
+    if (markdown.trim().isEmpty) {
       throw ArgumentError.value(
         markdown,
         'markdown',
         'A capture cannot be blank',
       );
+    }
     final today = await getOrCreateToday();
     return save(
       today,
@@ -477,8 +475,9 @@ class NoteRepository {
     final target = _normalizeMarkdownPath(requestedPath);
     if (target == note.path) return note;
     final existing = await findByPath(target);
-    if (existing != null && existing.id != note.id)
+    if (existing != null && existing.id != note.id) {
       throw StateError('A note already exists at $target.');
+    }
     final source = _file(note.path);
     final destination = _file(target);
     await destination.parent.create(recursive: true);
@@ -648,8 +647,9 @@ class NoteRepository {
   }
 
   Future<Note> importImage(Note note, File source) async {
-    if (!await source.exists())
+    if (!await source.exists()) {
       throw StateError('The selected image is no longer available.');
+    }
     var extension = p.extension(source.path).toLowerCase();
     if (extension.isEmpty || extension.length > 8) extension = '.jpg';
     final assetPath = 'attachments/${_uuid.v4()}$extension';
@@ -776,8 +776,9 @@ class NoteRepository {
     if (value.isEmpty ||
         value.contains('://') ||
         value.startsWith('data:') ||
-        value.startsWith('file:'))
+        value.startsWith('file:')) {
       return null;
+    }
     final base = value.startsWith('attachments/') || value.startsWith('assets/')
         ? ''
         : p.dirname(notePath);
@@ -786,8 +787,9 @@ class NoteRepository {
         .replaceAll('\\', '/');
     if (!(resolved.startsWith('attachments/') ||
             resolved.startsWith('assets/')) ||
-        resolved.endsWith('.reflect.md'))
+        resolved.endsWith('.reflect.md')) {
       return null;
+    }
     final file = _file(resolved);
     return await file.exists() ? file : null;
   }

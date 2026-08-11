@@ -151,8 +151,9 @@ class VoiceService {
           final session = VoiceSession.fromJson(
             Map<String, dynamic>.from(decoded),
           );
-          if (session.state != VoiceSessionState.complete)
+          if (session.state != VoiceSessionState.complete) {
             sessions.add(session);
+          }
         }
       } catch (_) {
         // A malformed manifest must never prevent discovery of other audio.
@@ -163,8 +164,9 @@ class VoiceService {
   }
 
   Future<String> retry(VoiceSession session) async {
-    if (isRecording)
+    if (isRecording) {
       throw StateError('Stop the active recording before retrying.');
+    }
     _session = session;
     _sessionDirectory = Directory(
       File(session.segments.first.path).parent.path,
@@ -372,8 +374,9 @@ class VoiceService {
   List<int> _wavHeader(int dataLength) {
     final bytes = ByteData(44);
     void text(int offset, String value) {
-      for (var i = 0; i < value.length; i++)
+      for (var i = 0; i < value.length; i++) {
         bytes.setUint8(offset + i, value.codeUnitAt(i));
+      }
     }
 
     text(0, 'RIFF');
@@ -517,8 +520,9 @@ class VoiceService {
     final message = first is Map ? first['message'] : null;
     final content = message is Map ? message['content'] : null;
     final cleaned = content is String ? content.trim() : '';
-    if (cleaned.isEmpty)
+    if (cleaned.isEmpty) {
       throw StateError('The cleanup provider returned no text.');
+    }
     return cleaned;
   }
 
@@ -553,16 +557,17 @@ class VoiceService {
       socket.listen(
         _handleRealtimeEvent,
         onDone: () {
-          if (isRecording)
+          if (isRecording) {
             _updates.add(
               const VoiceLiveUpdate(
                 '',
                 status: 'Live transcription reconnecting…',
               ),
             );
+          }
         },
         onError: (_) {
-          if (isRecording)
+          if (isRecording) {
             _updates.add(
               const VoiceLiveUpdate(
                 '',
@@ -570,6 +575,7 @@ class VoiceService {
                     'Live transcription unavailable; audio is safe locally.',
               ),
             );
+          }
         },
       );
     } catch (_) {
@@ -647,21 +653,27 @@ class VoiceService {
       await _platform.invokeMethod<void>('startForegroundRecording', {
         'sessionId': id,
       });
-    } on MissingPluginException {}
+    } on MissingPluginException {
+      // Foreground-service support is Android-specific; recording still works
+      // where the platform bridge is unavailable.
+    }
   }
 
   Future<void> _stopForegroundService() async {
     try {
       await _platform.invokeMethod<void>('stopForegroundRecording');
-    } on MissingPluginException {}
+    } on MissingPluginException {
+      // Nothing to stop when the host platform has no foreground service.
+    }
   }
 
   Future<String?> _openAiKey() async {
     final direct = (await _storage.read(key: 'voice_openai_api_key'))?.trim();
     if (direct?.isNotEmpty == true) return direct;
     final provider = await _storage.read(key: 'voice_provider');
-    if (provider == 'OPENAI')
+    if (provider == 'OPENAI') {
       return (await _storage.read(key: 'voice_api_key'))?.trim();
+    }
     return null;
   }
 

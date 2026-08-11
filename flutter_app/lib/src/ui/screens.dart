@@ -33,10 +33,7 @@ String? noteFolderLabel(Note note) {
 }
 
 List<String> noteFolders(Iterable<Note> notes) {
-  final folders = <String>{
-    for (final note in notes)
-      if (noteFolderLabel(note) case final folder?) folder,
-  };
+  final folders = <String>{for (final note in notes) ?noteFolderLabel(note)};
   return folders.toList()
     ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
 }
@@ -517,7 +514,7 @@ class _NoteTile extends StatelessWidget {
               Padding(
                 padding: const EdgeInsets.only(top: 4),
                 child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.end,
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     if (summary.isNotEmpty)
                       Expanded(
@@ -583,12 +580,14 @@ class NoteDetailScreen extends ConsumerWidget {
       future: ref.read(noteRepositoryProvider).get(id),
       builder: (context, snapshot) {
         final note = snapshot.data;
-        if (!snapshot.hasData)
+        if (!snapshot.hasData) {
           return const Scaffold(
             body: Center(child: CircularProgressIndicator()),
           );
-        if (note == null)
+        }
+        if (note == null) {
           return const Scaffold(body: Center(child: Text('Note not found')));
+        }
         return Scaffold(
           appBar: AppBar(
             actions: [
@@ -661,15 +660,17 @@ class NoteDetailScreen extends ConsumerWidget {
           .generate(note.body);
       await ref.read(noteRepositoryProvider).updateSummary(note, summary);
       ref.invalidate(notesProvider);
-      if (context.mounted)
+      if (context.mounted) {
         ScaffoldMessenger.of(
           context,
         ).showSnackBar(SnackBar(content: Text('Summary: $summary')));
+      }
     } catch (error) {
-      if (context.mounted)
+      if (context.mounted) {
         ScaffoldMessenger.of(
           context,
         ).showSnackBar(SnackBar(content: Text('$error')));
+      }
     }
   }
 
@@ -717,13 +718,15 @@ class NoteDetailScreen extends ConsumerWidget {
       final renamed = await ref
           .read(noteRepositoryProvider)
           .rename(note, requested);
-      if (context.mounted)
+      if (context.mounted) {
         context.go('/note/${Uri.encodeComponent(renamed.id)}');
+      }
     } catch (error) {
-      if (context.mounted)
+      if (context.mounted) {
         ScaffoldMessenger.of(
           context,
         ).showSnackBar(SnackBar(content: Text('$error')));
+      }
     }
   }
 
@@ -903,11 +906,12 @@ class _AttachmentImage extends ConsumerWidget {
         .resolveAttachment(notePath, uri.toString()),
     builder: (context, snapshot) {
       final file = snapshot.data;
-      if (file == null)
+      if (file == null) {
         return const Padding(
           padding: EdgeInsets.all(8),
           child: Icon(Icons.broken_image_outlined),
         );
+      }
       return Padding(
         padding: const EdgeInsets.symmetric(vertical: 8),
         child: Image.file(
@@ -1630,17 +1634,19 @@ class _VoiceCaptureScreenState extends ConsumerState<VoiceCaptureScreen> {
       final transcript = await ref
           .read(voiceServiceProvider)
           .stopAndTranscribe();
-      if (mounted)
+      if (mounted) {
         setState(() {
           _transcript.text = transcript;
           _recording = false;
         });
+      }
     } catch (error) {
-      if (mounted)
+      if (mounted) {
         setState(() {
           _recording = false;
           _error = '$error';
         });
+      }
     } finally {
       if (mounted) setState(() => _busy = false);
     }

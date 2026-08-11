@@ -58,8 +58,9 @@ class AiSummaryService {
               .replaceAll(RegExp(r'''^["']|["']$'''), '')
         : '';
     final plainText = MarkdownContract.plainText(normalized);
-    if (plainText.isEmpty)
+    if (plainText.isEmpty) {
       throw StateError('The AI provider returned no summary.');
+    }
     return plainText.split(' ').take(6).join(' ');
   }
 }

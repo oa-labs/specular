@@ -190,5 +190,6 @@ app to preserve its data.
 
 - [Reflect GitHub sync contract](docs/reflect-contract.md) — repository layout,
   note format, attachments, and conflict behavior
+- [GitHub sync guide](docs/SYNC.md) — token setup, sync behavior, and recovery
 - [Android GitHub sync implementation plan](docs/plans/2026-08-06-android-github-sync.md)
   — implementation history and technical plan

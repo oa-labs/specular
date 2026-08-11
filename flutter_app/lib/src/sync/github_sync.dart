@@ -505,8 +505,9 @@ class GitHubSyncEngine {
       options: _options(settings),
     );
     final content = response.data?['content'] as String?;
-    if (content == null)
+    if (content == null) {
       throw StateError('GitHub returned no content for blob $sha');
+    }
     return utf8.decode(base64Decode(content.replaceAll('\n', '')));
   }
 
@@ -516,8 +517,9 @@ class GitHubSyncEngine {
       options: _options(settings),
     );
     final content = response.data?['content'] as String?;
-    if (content == null)
+    if (content == null) {
       throw StateError('GitHub returned no content for blob $sha');
+    }
     return base64Decode(content.replaceAll('\n', ''));
   }
 

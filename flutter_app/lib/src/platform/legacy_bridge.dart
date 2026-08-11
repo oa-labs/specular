@@ -47,10 +47,12 @@ class LegacyBridge {
     if (await storage.read(key: _completeKey) == 'true') return;
     for (final entry in state.secrets.entries) {
       final value = entry.value;
-      if (value is String && value.isNotEmpty)
+      if (value is String && value.isNotEmpty) {
         await storage.write(key: entry.key, value: value);
-      if (value is bool)
+      }
+      if (value is bool) {
         await storage.write(key: entry.key, value: value.toString());
+      }
     }
     if (state.deselectedFolders.isNotEmpty) {
       await storage.write(
@@ -59,8 +61,9 @@ class LegacyBridge {
       );
     }
     await storage.write(key: _completeKey, value: 'true');
-    if (Platform.isAndroid)
+    if (Platform.isAndroid) {
       await _channel.invokeMethod<void>('markLegacyMigrationComplete');
+    }
   }
 
   static Future<LegacyState?> readBackgroundState(
