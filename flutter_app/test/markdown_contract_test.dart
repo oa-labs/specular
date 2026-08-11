@@ -172,5 +172,18 @@ summary: "**Project** [plan](https://example.com)"
         '+ [ ] First global\n- [x] Local checkbox\n+ [x] Done global\nParagraph',
       );
     });
+
+    test('skips empty global tasks without changing later task indexes', () {
+      const source = '+ [ ]\n+ [ ] Actual task\n+ [x]   ';
+
+      final tasks = TodoMarkdown.extract(source);
+
+      expect(tasks.map((task) => task.text), ['Actual task']);
+      expect(tasks.single.index, 1);
+      expect(
+        TodoMarkdown.toggleGlobalAt(source, tasks.single.index),
+        '+ [ ]\n+ [x] Actual task\n+ [x]   ',
+      );
+    });
   });
 }

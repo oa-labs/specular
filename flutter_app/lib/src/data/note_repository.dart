@@ -128,6 +128,7 @@ class NoteRepository {
               noteTitle: row.readTable(_db.noteRows).title,
             ),
           )
+          .where((todo) => todo.text.trim().isNotEmpty)
           .toList(),
     );
   }

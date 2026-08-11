@@ -259,11 +259,11 @@ class MarkdownContract {
 
 class TodoMarkdown {
   static final _checkbox = RegExp(
-    r'^\s*[-*+]\s+\[([ xX])\]\s*(.*)$',
+    r'^[ \t]*[-*+][ \t]+\[([ xX])\][ \t]*(.*)$',
     multiLine: true,
   );
   static final _globalTask = RegExp(
-    r'^\s*\+\s+\[([ xX])\]\s*(.*)$',
+    r'^[ \t]*\+[ \t]+\[([ xX])\][ \t]*(.*)$',
     multiLine: true,
   );
 
@@ -273,11 +273,12 @@ class TodoMarkdown {
     String markdown,
   ) => [
     for (final (index, match) in _globalTask.allMatches(markdown).indexed)
-      (
-        index: index,
-        text: match.group(2)?.trim() ?? '',
-        completed: match.group(1)?.toLowerCase() == 'x',
-      ),
+      if ((match.group(2)?.trim() ?? '').isNotEmpty)
+        (
+          index: index,
+          text: match.group(2)!.trim(),
+          completed: match.group(1)?.toLowerCase() == 'x',
+        ),
   ];
 
   /// Toggles a task by its index within the global `+` task list.
