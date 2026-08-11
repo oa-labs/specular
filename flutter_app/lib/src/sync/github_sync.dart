@@ -99,18 +99,72 @@ class _RemoteSnapshot {
   final String treeSha;
 }
 
+/// The branch head and tree from a completed sync. Keeping this outside the
+/// note database lets an unchanged remote be recognized with one ref request,
+/// rather than downloading and walking the full tree again.
+class _CachedRemoteSnapshot {
+  const _CachedRemoteSnapshot({
+    required this.branch,
+    required this.commitSha,
+    required this.treeSha,
+  });
+
+  final String branch;
+  final String commitSha;
+  final String treeSha;
+
+  _RemoteSnapshot toSnapshot() =>
+      _RemoteSnapshot(branch: branch, commitSha: commitSha, treeSha: treeSha);
+
+  String encode() => jsonEncode({
+    'branch': branch,
+    'commitSha': commitSha,
+    'treeSha': treeSha,
+  });
+
+  static _CachedRemoteSnapshot? decode(String value) {
+    try {
+      final data = jsonDecode(value);
+      if (data is! Map) return null;
+      final branch = data['branch'];
+      final commitSha = data['commitSha'];
+      final treeSha = data['treeSha'];
+      if (branch is! String || commitSha is! String || treeSha is! String) {
+        return null;
+      }
+      if (branch.isEmpty || commitSha.isEmpty || treeSha.isEmpty) return null;
+      return _CachedRemoteSnapshot(
+        branch: branch,
+        commitSha: commitSha,
+        treeSha: treeSha,
+      );
+    } on FormatException {
+      return null;
+    }
+  }
+}
+
 class GitHubSyncEngine {
   GitHubSyncEngine(
     this._repository,
     FlutterSecureStorage storage, {
     Dio? dio,
     Future<GitHubSettings?> Function()? settingsLoader,
+    Future<String?> Function(String key)? cacheRead,
+    Future<void> Function(String key, String value)? cacheWrite,
   }) : _settingsLoader = settingsLoader ?? (() => GitHubSettings.load(storage)),
+       _cacheRead = cacheRead ?? ((key) => storage.read(key: key)),
+       _cacheWrite =
+           cacheWrite ??
+           ((key, value) => storage.write(key: key, value: value)),
        _dio =
            dio ??
            Dio(
              BaseOptions(
                baseUrl: 'https://api.github.com',
+               connectTimeout: const Duration(seconds: 12),
+               sendTimeout: const Duration(seconds: 20),
+               receiveTimeout: const Duration(seconds: 30),
                headers: const {
                  'Accept': 'application/vnd.github+json',
                  'X-GitHub-Api-Version': '2022-11-28',
@@ -120,6 +174,8 @@ class GitHubSyncEngine {
 
   final NoteRepository _repository;
   final Future<GitHubSettings?> Function() _settingsLoader;
+  final Future<String?> Function(String key) _cacheRead;
+  final Future<void> Function(String key, String value) _cacheWrite;
   final Dio _dio;
   Future<void> _tail = Future.value();
 
@@ -144,7 +200,12 @@ class GitHubSyncEngine {
       for (var attempt = 0; ; attempt++) {
         final snapshot = await _pull(settings, onProgress: onProgress);
         try {
-          await _push(settings, snapshot, onProgress: onProgress);
+          final completedSnapshot = await _push(
+            settings,
+            snapshot,
+            onProgress: onProgress,
+          );
+          await _saveCachedSnapshot(settings, completedSnapshot);
           onProgress?.call(const SyncProgress(message: 'Sync complete'));
           return const SyncResult.success('Synced with GitHub');
         } on _ConcurrentRefUpdate {
@@ -306,17 +367,26 @@ class GitHubSyncEngine {
     GitHubSettings settings, {
     SyncProgressCallback? onProgress,
   }) async {
-    final repository = await _dio.get<Map<String, dynamic>>(
-      '/repos/${settings.owner}/${settings.repo}',
-      options: _options(settings),
-    );
-    final branch = repository.data!['default_branch'] as String;
-    final ref = await _dio.get<Map<String, dynamic>>(
-      '/repos/${settings.owner}/${settings.repo}/git/ref/heads/$branch',
-      options: _options(settings),
-    );
+    final cached = await _loadCachedSnapshot(settings);
+    var branch = cached?.branch ?? await _defaultBranch(settings);
+    late Response<Map<String, dynamic>> ref;
+    try {
+      ref = await _branchRef(settings, branch);
+    } on DioException catch (error) {
+      // A repository's default branch can change. Resolve it once again when
+      // an otherwise valid cached branch no longer exists.
+      if (cached == null || error.response?.statusCode != 404) rethrow;
+      branch = await _defaultBranch(settings);
+      ref = await _branchRef(settings, branch);
+    }
     final commitSha =
         (ref.data!['object'] as Map<String, dynamic>)['sha'] as String;
+    if (cached != null &&
+        cached.branch == branch &&
+        cached.commitSha == commitSha) {
+      onProgress?.call(const SyncProgress(message: 'Remote is up to date…'));
+      return cached.toSnapshot();
+    }
     final commit = await _dio.get<Map<String, dynamic>>(
       '/repos/${settings.owner}/${settings.repo}/git/commits/$commitSha',
       options: _options(settings),
@@ -395,14 +465,16 @@ class GitHubSyncEngine {
         ),
       );
     }
-    return _RemoteSnapshot(
+    final snapshot = _RemoteSnapshot(
       branch: branch,
       commitSha: commitSha,
       treeSha: treeSha,
     );
+    await _saveCachedSnapshot(settings, snapshot);
+    return snapshot;
   }
 
-  Future<void> _push(
+  Future<_RemoteSnapshot> _push(
     GitHubSettings settings,
     _RemoteSnapshot snapshot, {
     SyncProgressCallback? onProgress,
@@ -474,7 +546,7 @@ class GitHubSyncEngine {
         ),
       );
     }
-    if (entries.isEmpty) return;
+    if (entries.isEmpty) return snapshot;
 
     onProgress?.call(const SyncProgress(message: 'Saving your changes…'));
 
@@ -512,6 +584,64 @@ class GitHubSyncEngine {
     await _repository.acknowledgeNotesSynced(acknowledgements);
     for (final entry in attachmentAcks.entries) {
       await _repository.markAttachmentSynced(entry.key, entry.value);
+    }
+    return _RemoteSnapshot(
+      branch: snapshot.branch,
+      commitSha: commitSha,
+      treeSha: newTreeSha,
+    );
+  }
+
+  Future<String> _defaultBranch(GitHubSettings settings) async {
+    final repository = await _dio.get<Map<String, dynamic>>(
+      '/repos/${settings.owner}/${settings.repo}',
+      options: _options(settings),
+    );
+    return repository.data!['default_branch'] as String;
+  }
+
+  Future<Response<Map<String, dynamic>>> _branchRef(
+    GitHubSettings settings,
+    String branch,
+  ) => _dio.get<Map<String, dynamic>>(
+    '/repos/${settings.owner}/${settings.repo}/git/ref/heads/${Uri.encodeComponent(branch)}',
+    options: _options(settings),
+  );
+
+  String _cacheKey(GitHubSettings settings) {
+    final repository =
+        '${settings.owner.toLowerCase()}/${settings.repo.toLowerCase()}';
+    return 'github_remote_head_${base64UrlEncode(utf8.encode(repository)).replaceAll('=', '')}';
+  }
+
+  Future<_CachedRemoteSnapshot?> _loadCachedSnapshot(
+    GitHubSettings settings,
+  ) async {
+    try {
+      final value = await _cacheRead(_cacheKey(settings));
+      return value == null ? null : _CachedRemoteSnapshot.decode(value);
+    } catch (_) {
+      // The cache is purely an optimization. A storage issue must never stop a
+      // user from syncing their notes.
+      return null;
+    }
+  }
+
+  Future<void> _saveCachedSnapshot(
+    GitHubSettings settings,
+    _RemoteSnapshot snapshot,
+  ) async {
+    try {
+      await _cacheWrite(
+        _cacheKey(settings),
+        _CachedRemoteSnapshot(
+          branch: snapshot.branch,
+          commitSha: snapshot.commitSha,
+          treeSha: snapshot.treeSha,
+        ).encode(),
+      );
+    } catch (_) {
+      // See _loadCachedSnapshot: syncing safely matters more than caching.
     }
   }
 
@@ -564,13 +694,25 @@ class GitHubSyncEngine {
     return base64Decode(content.replaceAll('\n', ''));
   }
 
-  /// GitHub truncates recursive tree responses for large repositories. Walking
-  /// each directory tree avoids that global cap while retaining the exact blob
-  /// SHAs needed for a snapshot-consistent pull.
+  /// Most repositories fit in GitHub's recursive tree response, which makes a
+  /// complete remote scan one request. For larger repositories GitHub marks
+  /// that response as truncated; then walk individual directories to retain a
+  /// complete, snapshot-consistent view.
   Future<List<Map<String, dynamic>>> _allTreeEntries(
     GitHubSettings settings,
     String rootTreeSha,
   ) async {
+    final recursive = await _dio.get<Map<String, dynamic>>(
+      '/repos/${settings.owner}/${settings.repo}/git/trees/$rootTreeSha',
+      queryParameters: const {'recursive': '1'},
+      options: _options(settings),
+    );
+    if (recursive.data?['truncated'] != true) {
+      return List<Map<String, dynamic>>.from(
+        recursive.data?['tree'] as List? ?? const <dynamic>[],
+      ).where((entry) => entry['type'] != 'tree').toList();
+    }
+
     final files = <Map<String, dynamic>>[];
     final pending = <({String prefix, String sha})>[
       (prefix: '', sha: rootTreeSha),
@@ -648,16 +790,31 @@ class GitHubSyncEngine {
       }
       return 'GitHub API rate limit reached. Your local edits are safe.';
     }
+    final description = '${error.error}'.toLowerCase();
+    if (code == null &&
+        (description.contains('failed host lookup') ||
+            description.contains('getaddrinfo') ||
+            description.contains('name or service not known'))) {
+      return 'GitHub DNS lookup failed. Check your connection, VPN, or Private DNS, then try again. Your local edits are safe.';
+    }
+    if (code == null && error.type == DioExceptionType.connectionError) {
+      return 'Network unavailable. Your local edits are safe.';
+    }
+    if (code == null && error.type == DioExceptionType.connectionTimeout) {
+      return 'Timed out connecting to GitHub. Check your connection, then try again. Your local edits are safe.';
+    }
+    if (code == null &&
+        (error.type == DioExceptionType.sendTimeout ||
+            error.type == DioExceptionType.receiveTimeout)) {
+      return 'GitHub sync timed out. Check your connection, then try again. Your local edits are safe.';
+    }
     return switch (code) {
       401 => 'GitHub token is invalid or expired.',
       403 => 'GitHub denied access. Check the token\'s Contents permission.',
       404 => 'GitHub repository or branch was not found.',
       409 || 422 =>
         'GitHub rejected a concurrent change; pull again to preserve both versions.',
-      _ =>
-        error.type == DioExceptionType.connectionError
-            ? 'Network unavailable. Your local edits are safe.'
-            : 'GitHub sync failed${code == null ? '' : ' ($code)'}.',
+      _ => 'GitHub sync failed${code == null ? '' : ' ($code)'}.',
     };
   }
 }

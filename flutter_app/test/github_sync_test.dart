@@ -185,6 +185,69 @@ void main() {
       expect(result.message, contains('local edits are safe'));
     },
   );
+
+  test('uses the cached remote head to skip an unchanged tree scan', () async {
+    final root = await Directory.systemTemp.createTemp('specular-github-test-');
+    final database = AppDatabase.forTesting(NativeDatabase.memory());
+    final repository = NoteRepository(
+      database,
+      Directory('${root.path}/notes'),
+    );
+    final note = await repository.create(
+      title: 'Checklist',
+      body: '+ [ ] Ship',
+    );
+    await repository.markSynced(note, 'base-blob');
+    final github = _FakeGitHub(path: note.path, content: note.rawMarkdown);
+    final cache = <String, String>{};
+    addTearDown(() async {
+      await database.close();
+      await root.delete(recursive: true);
+    });
+
+    final engine = GitHubSyncEngine(
+      repository,
+      const FlutterSecureStorage(),
+      dio: Dio()..httpClientAdapter = github.adapter,
+      settingsLoader: () async => const GitHubSettings(
+        token: 'test-token',
+        owner: 'owner',
+        repo: 'notes',
+      ),
+      cacheRead: (key) async => cache[key],
+      cacheWrite: (key, value) async => cache[key] = value,
+    );
+
+    expect((await engine.sync()).isSuccess, isTrue);
+    expect((await engine.sync()).isSuccess, isTrue);
+
+    expect(github.repositoryReads, 1);
+    expect(github.refReads, 2);
+    expect(github.treeReads, 1);
+  });
+
+  test('identifies GitHub DNS failures', () async {
+    final root = await Directory.systemTemp.createTemp('specular-github-test-');
+    final database = AppDatabase.forTesting(NativeDatabase.memory());
+    addTearDown(() async {
+      await database.close();
+      await root.delete(recursive: true);
+    });
+
+    final result = await GitHubSyncEngine(
+      NoteRepository(database, Directory('${root.path}/notes')),
+      const FlutterSecureStorage(),
+      dio: Dio()..httpClientAdapter = const _DnsErrorAdapter(),
+      settingsLoader: () async => const GitHubSettings(
+        token: 'test-token',
+        owner: 'owner',
+        repo: 'notes',
+      ),
+    ).sync();
+
+    expect(result.isSuccess, isFalse);
+    expect(result.message, contains('GitHub DNS lookup failed'));
+  });
 }
 
 class _FakeGitHub {
@@ -205,6 +268,9 @@ class _FakeGitHub {
   var _refUpdateRejected = false;
   var refUpdates = 0;
   var commitCreates = 0;
+  var repositoryReads = 0;
+  var refReads = 0;
+  var treeReads = 0;
   final contentsApiRequests = <String>[];
   final blobRequests = <String>[];
 
@@ -226,6 +292,17 @@ class _FakeGitHub {
       contentsApiRequests.add(requestPath);
     }
     if (requestPath.contains('/git/blobs/')) blobRequests.add(requestPath);
+    if (request.method == 'GET' && requestPath == '/repos/owner/notes') {
+      repositoryReads++;
+    }
+    if (request.method == 'GET' &&
+        requestPath == '/repos/owner/notes/git/ref/heads/main') {
+      refReads++;
+    }
+    if (request.method == 'GET' &&
+        requestPath == '/repos/owner/notes/git/trees/tree-1') {
+      treeReads++;
+    }
     var statusCode = 200;
     final response = switch ((request.method, requestPath)) {
       ('GET', '/repos/owner/notes') => {'default_branch': 'main'},
@@ -314,6 +391,24 @@ class _ErrorAdapter implements HttpClientAdapter {
       Headers.contentTypeHeader: [Headers.jsonContentType],
       ...headers,
     },
+  );
+
+  @override
+  void close({bool force = false}) {}
+}
+
+class _DnsErrorAdapter implements HttpClientAdapter {
+  const _DnsErrorAdapter();
+
+  @override
+  Future<ResponseBody> fetch(
+    RequestOptions options,
+    Stream<Uint8List>? requestStream,
+    Future<void>? cancelFuture,
+  ) => throw DioException(
+    requestOptions: options,
+    type: DioExceptionType.connectionError,
+    error: const SocketException('Failed host lookup: api.github.com'),
   );
 
   @override
