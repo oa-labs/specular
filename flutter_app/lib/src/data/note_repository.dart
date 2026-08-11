@@ -333,21 +333,24 @@ class NoteRepository {
   Future<void> reconcileRemoteRemovals(Set<String> remotePaths) async {
     final localNotes = (await _db.select(_db.noteRows).get()).map(_toNote);
     for (final note in localNotes) {
-      if (remotePaths.contains(note.path) ||
-          note.isConflict ||
-          note.pendingRenameFromPath != null) {
+      final expectedRemotePath = note.isPendingDeletion
+          ? note.pendingRenameFromPath ?? note.path
+          : note.path;
+      if (remotePaths.contains(expectedRemotePath)) continue;
+
+      // A pending deletion is already satisfied when its path is absent from
+      // the remote snapshot. This includes local-only conflict copies, which
+      // must not remain forever in the sync queue.
+      if (note.isPendingDeletion) {
+        await completeDeletion(note);
         continue;
       }
+      if (note.pendingRenameFromPath != null) continue;
+      if (note.isConflict) continue;
 
       // A note with no remote SHA has never been published, so its absence from
-      // the remote tree is expected. A pending unsynced deletion can be
-      // completed immediately because there is no remote counterpart to remove.
+      // the remote tree is expected.
       if (note.lastRemoteSha == null) {
-        if (note.isPendingDeletion) await completeDeletion(note);
-        continue;
-      }
-      if (note.isPendingDeletion) {
-        await _removeStoredNote(note);
         continue;
       }
       if (note.isDirty) await preserveConflict(note);

@@ -75,6 +75,7 @@ class SyncUiState {
     this.message = '',
     this.completed,
     this.total,
+    this.itemLabel,
   });
 
   final bool isSyncing;
@@ -82,12 +83,14 @@ class SyncUiState {
   final String message;
   final int? completed;
   final int? total;
+  final String? itemLabel;
 }
 
 /// Gives foreground syncs one consistent visual state. Background work stays
 /// intentionally quiet: Android may run it while there is no app to present.
 class SyncController extends ChangeNotifier {
   SyncController(this._engine, this._storage, this._repository) {
+    unawaited(_loadDiagnostics());
     unawaited(_refreshSharedSyncActivity());
     _activityPoll = Timer.periodic(
       const Duration(seconds: 1),
@@ -101,9 +104,25 @@ class SyncController extends ChangeNotifier {
   SyncUiState _state = const SyncUiState();
   var _activeSyncs = 0;
   var _sharedSyncActive = false;
+  var _diagnosticsEnabled = false;
   late final Timer _activityPoll;
 
   SyncUiState get state => _state;
+
+  Future<void> setDiagnosticsEnabled(bool enabled) async {
+    _diagnosticsEnabled = enabled;
+    await SyncDiagnostics.setEnabled(_storage, enabled);
+    await _refreshSharedSyncActivity();
+  }
+
+  Future<void> _loadDiagnostics() async {
+    try {
+      _diagnosticsEnabled = await SyncDiagnostics.isEnabled(_storage);
+      await _refreshSharedSyncActivity();
+    } catch (_) {
+      // Diagnostics default to off if secure storage is unavailable.
+    }
+  }
 
   Future<SyncResult> sync() async {
     if (await GitHubSettings.load(_storage) == null) {
@@ -148,26 +167,58 @@ class SyncController extends ChangeNotifier {
 
   void _updateProgress(SyncProgress progress) {
     if (!state.isSyncing) return;
+    if (!_diagnosticsEnabled && SyncDiagnostics.isDetailedStage(progress)) {
+      return;
+    }
     _state = SyncUiState(
       isSyncing: true,
       isInitialSync: state.isInitialSync,
       message: progress.message,
       completed: progress.completed,
       total: progress.total,
+      itemLabel: progress.itemLabel,
     );
     notifyListeners();
   }
 
   Future<void> _refreshSharedSyncActivity({bool notify = true}) async {
     final active = await _repository.isGitHubSyncActive();
-    if (_sharedSyncActive == active) return;
+    SyncProgress? sharedProgress;
+    if (active) {
+      try {
+        sharedProgress = await SharedSyncProgress.load(_storage);
+      } catch (_) {
+        // A generic active state still communicates background work if secure
+        // storage is briefly unavailable.
+      }
+    }
+    if (!_diagnosticsEnabled &&
+        sharedProgress != null &&
+        SyncDiagnostics.isDetailedStage(sharedProgress)) {
+      sharedProgress = null;
+    }
+    final next = active
+        ? SyncUiState(
+            isSyncing: true,
+            message: sharedProgress?.message ?? 'Syncing with GitHub…',
+            completed: sharedProgress?.completed,
+            total: sharedProgress?.total,
+            itemLabel: sharedProgress?.itemLabel,
+          )
+        : const SyncUiState();
+    final changed =
+        _sharedSyncActive != active ||
+        (_activeSyncs == 0 &&
+            (state.message != next.message ||
+                state.completed != next.completed ||
+                state.total != next.total ||
+                state.itemLabel != next.itemLabel));
     _sharedSyncActive = active;
     // A foreground sync supplies detailed progress, so only replace the UI
     // state when the durable lease belongs to another isolate.
     if (_activeSyncs != 0) return;
-    _state = active
-        ? const SyncUiState(isSyncing: true, message: 'Syncing with GitHub…')
-        : const SyncUiState();
+    if (!changed) return;
+    _state = next;
     if (notify) notifyListeners();
   }
 
@@ -338,7 +389,89 @@ class _SpecularAppState extends ConsumerState<SpecularApp> {
           child ?? const SizedBox.shrink(),
           if (syncState.isSyncing && syncState.isInitialSync)
             _InitialSyncOverlay(state: syncState),
+          if (syncState.isSyncing && !syncState.isInitialSync)
+            _SyncProgressSnackbar(state: syncState),
         ],
+      ),
+    );
+  }
+}
+
+/// A persistent, snackbar-shaped sync status. Unlike Scaffold snackbars it is
+/// not replaced by navigation or by a screen's own confirmation messages.
+class _SyncProgressSnackbar extends StatelessWidget {
+  const _SyncProgressSnackbar({required this.state});
+
+  final SyncUiState state;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    final total = state.total;
+    final completed = state.completed;
+    final hasProgress = total != null && total > 0 && completed != null;
+    final progress = hasProgress ? (completed / total).clamp(0.0, 1.0) : null;
+    final text = hasProgress
+        ? switch (state.itemLabel) {
+            'notes' => 'Syncing $completed of $total notes',
+            'attachments' => 'Syncing $completed of $total attachments',
+            'changes' => 'Uploading $completed of $total changes',
+            _ => '$completed of $total complete',
+          }
+        : state.message.isEmpty
+        ? 'Syncing with GitHub…'
+        : state.message;
+    return Positioned(
+      left: 12,
+      right: 12,
+      bottom: 12,
+      child: SafeArea(
+        top: false,
+        child: Semantics(
+          liveRegion: true,
+          label: text,
+          child: Material(
+            color: colors.inverseSurface,
+            elevation: 6,
+            borderRadius: BorderRadius.circular(8),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 10),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Row(
+                    children: [
+                      SizedBox.square(
+                        dimension: 18,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: colors.inversePrimary,
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Text(
+                          text,
+                          style: TextStyle(color: colors.onInverseSurface),
+                        ),
+                      ),
+                    ],
+                  ),
+                  if (progress != null) ...[
+                    const SizedBox(height: 10),
+                    LinearProgressIndicator(
+                      value: progress,
+                      color: colors.inversePrimary,
+                      backgroundColor: colors.onInverseSurface.withValues(
+                        alpha: .24,
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ),
+        ),
       ),
     );
   }

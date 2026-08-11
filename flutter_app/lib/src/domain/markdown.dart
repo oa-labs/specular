@@ -184,6 +184,25 @@ class MarkdownContract {
     return '---\n${lines.join('\n')}\n---\n${parsed.body}';
   }
 
+  /// Generated summaries are derived metadata, not a competing edit to a
+  /// note's content. This lets sync accept the remote note when its only local
+  /// difference is the generated `summary:` frontmatter line.
+  static bool differsOnlyBySummary(String local, String remote) {
+    final localParsed = parse(local);
+    final remoteParsed = parse(remote);
+    if (localParsed.body != remoteParsed.body) return false;
+    return _frontmatterWithoutSummary(localParsed.frontmatter) ==
+        _frontmatterWithoutSummary(remoteParsed.frontmatter);
+  }
+
+  static String? _frontmatterWithoutSummary(String? frontmatter) {
+    if (frontmatter == null) return null;
+    return frontmatter
+        .split('\n')
+        .where((line) => !line.startsWith('summary:'))
+        .join('\n');
+  }
+
   static String _encodeScalar(String value) =>
       '"${value.replaceAll('\\', '\\\\').replaceAll('"', '\\"').replaceAll('\n', ' ').trim()}"';
 

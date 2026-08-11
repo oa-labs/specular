@@ -15,6 +15,43 @@ const _immediateName = 'github_immediate_sync';
 const _taskName = 'github_sync';
 const syncIntervalStorageKey = 'github_sync_interval_minutes';
 
+/// Progress callbacks are intentionally synchronous so the sync engine never
+/// waits on UI plumbing. Persisting every counter increment, however, makes a
+/// 122-change upload enqueue hundreds of encrypted-storage writes behind the
+/// network work. Keep just the newest state while a write is in flight.
+class _SharedProgressReporter {
+  _SharedProgressReporter(this._storage);
+
+  final FlutterSecureStorage _storage;
+  SyncProgress? _latest;
+  Future<void>? _writing;
+
+  void report(SyncProgress progress) {
+    _latest = progress;
+    _writing ??= _drain();
+  }
+
+  Future<void> _drain() async {
+    while (_latest != null) {
+      final progress = _latest!;
+      _latest = null;
+      try {
+        await SharedSyncProgress.save(_storage, progress);
+      } catch (_) {
+        // The sync itself remains safe if this optional UI status cannot be
+        // persisted in the headless isolate.
+      }
+    }
+    _writing = null;
+  }
+
+  Future<void> flush() async {
+    while (_writing != null) {
+      await _writing;
+    }
+  }
+}
+
 @pragma('vm:entry-point')
 void specularBackgroundDispatcher() {
   Workmanager().executeTask((task, inputData) async {
@@ -26,16 +63,25 @@ void specularBackgroundDispatcher() {
     final state = await LegacyBridge.readBackgroundState(storage);
     if (state == null) return true;
     final database = AppDatabase.openLegacy(state);
+    final progressReporter = _SharedProgressReporter(storage);
+
     try {
       final result = await GitHubSyncEngine(
         NoteRepository(database, Directory(state.notesPath)),
         storage,
-      ).sync();
+      ).sync(onProgress: progressReporter.report);
+      await progressReporter.flush();
       if (result.message == 'Synced with GitHub') {
         await storage.write(key: initialSyncCompletedStorageKey, value: 'true');
       }
       return result.isSuccess || result.error == null;
     } finally {
+      await progressReporter.flush();
+      try {
+        await SharedSyncProgress.clear(storage);
+      } catch (_) {
+        // A stale status is ignored whenever the durable lease is inactive.
+      }
       await database.close();
     }
   });

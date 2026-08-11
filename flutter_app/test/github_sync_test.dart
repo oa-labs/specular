@@ -52,6 +52,53 @@ void main() {
   });
 
   test(
+    'does not create a conflict for a generated-summary-only difference',
+    () async {
+      final root = await Directory.systemTemp.createTemp(
+        'specular-github-test-',
+      );
+      final database = AppDatabase.forTesting(NativeDatabase.memory());
+      final repository = NoteRepository(
+        database,
+        Directory('${root.path}/notes'),
+      );
+      final note = await repository.create(
+        title: 'Checklist',
+        body: '+ [ ] Ship',
+      );
+      final remoteContent = note.rawMarkdown;
+      await repository.markSynced(note, 'outdated-blob');
+      await repository.updateSummary(
+        (await repository.get(note.id))!,
+        'Generated checklist summary',
+      );
+      final github = _FakeGitHub(path: note.path, content: remoteContent);
+      addTearDown(() async {
+        await database.close();
+        await root.delete(recursive: true);
+      });
+
+      final result = await GitHubSyncEngine(
+        repository,
+        const FlutterSecureStorage(),
+        dio: Dio()..httpClientAdapter = github.adapter,
+        settingsLoader: () async => const GitHubSettings(
+          token: 'test-token',
+          owner: 'owner',
+          repo: 'notes',
+        ),
+      ).sync();
+
+      expect(result.isSuccess, isTrue);
+      expect((await repository.get(note.id))!.isDirty, isFalse);
+      expect(
+        (await repository.watchNotes().first).where((note) => note.isConflict),
+        isEmpty,
+      );
+    },
+  );
+
+  test(
     'overlapping syncs share a lease and publish one atomic commit',
     () async {
       final root = await Directory.systemTemp.createTemp(
@@ -149,6 +196,53 @@ void main() {
   );
 
   test(
+    'does not re-upload changes when branch protection rejects a ref',
+    () async {
+      final root = await Directory.systemTemp.createTemp(
+        'specular-github-test-',
+      );
+      final database = AppDatabase.forTesting(NativeDatabase.memory());
+      final repository = NoteRepository(
+        database,
+        Directory('${root.path}/notes'),
+      );
+      final note = await repository.create(
+        title: 'Checklist',
+        body: '+ [ ] Ship',
+      );
+      await repository.markSynced(note, 'base-blob');
+      await repository.toggleTodo((await repository.watchTodos().first).single);
+      final github = _FakeGitHub(
+        path: note.path,
+        content: note.rawMarkdown,
+        refUpdateErrorMessage:
+            'Protected branch update failed for refs/heads/main.',
+      );
+      addTearDown(() async {
+        await database.close();
+        await root.delete(recursive: true);
+      });
+
+      final result = await GitHubSyncEngine(
+        repository,
+        const FlutterSecureStorage(),
+        dio: Dio()..httpClientAdapter = github.adapter,
+        settingsLoader: () async => const GitHubSettings(
+          token: 'test-token',
+          owner: 'owner',
+          repo: 'notes',
+        ),
+      ).sync();
+
+      expect(result.isSuccess, isFalse);
+      expect(result.message, contains('branch protection'));
+      expect(github.refUpdates, 1);
+      expect(github.commitCreates, 1);
+      expect((await repository.get(note.id))!.isDirty, isTrue);
+    },
+  );
+
+  test(
     'reports GitHub rate-limit reset time without risking local edits',
     () async {
       final root = await Directory.systemTemp.createTemp(
@@ -226,6 +320,58 @@ void main() {
     expect(github.treeReads, 1);
   });
 
+  test(
+    'treats deletion of an already-absent remote note as complete',
+    () async {
+      final root = await Directory.systemTemp.createTemp(
+        'specular-github-test-',
+      );
+      final database = AppDatabase.forTesting(NativeDatabase.memory());
+      final repository = NoteRepository(
+        database,
+        Directory('${root.path}/notes'),
+      );
+      final remoteNote = await repository.create(
+        title: 'Remote note',
+        body: 'Already published',
+      );
+      await repository.markSynced(remoteNote, 'base-blob');
+      final github = _FakeGitHub(
+        path: remoteNote.path,
+        content: remoteNote.rawMarkdown,
+      );
+      final cache = <String, String>{};
+      addTearDown(() async {
+        await database.close();
+        await root.delete(recursive: true);
+      });
+      final engine = GitHubSyncEngine(
+        repository,
+        const FlutterSecureStorage(),
+        dio: Dio()..httpClientAdapter = github.adapter,
+        settingsLoader: () async => const GitHubSettings(
+          token: 'test-token',
+          owner: 'owner',
+          repo: 'notes',
+        ),
+        cacheRead: (key) async => cache[key],
+        cacheWrite: (key, value) async => cache[key] = value,
+      );
+      expect((await engine.sync()).isSuccess, isTrue);
+
+      final temporary = await repository.create(
+        title: 'Temporary conflict copy',
+        body: 'Never published',
+      );
+      await repository.delete(temporary);
+      expect((await engine.sync()).isSuccess, isTrue);
+
+      expect(await repository.get(temporary.id), isNull);
+      expect(github.treeCreates, 0);
+      expect(github.commitCreates, 0);
+    },
+  );
+
   test('identifies GitHub DNS failures', () async {
     final root = await Directory.systemTemp.createTemp('specular-github-test-');
     final database = AppDatabase.forTesting(NativeDatabase.memory());
@@ -248,6 +394,36 @@ void main() {
     expect(result.isSuccess, isFalse);
     expect(result.message, contains('GitHub DNS lookup failed'));
   });
+
+  test('explains when branch protection blocks a sync', () async {
+    final root = await Directory.systemTemp.createTemp('specular-github-test-');
+    final database = AppDatabase.forTesting(NativeDatabase.memory());
+    addTearDown(() async {
+      await database.close();
+      await root.delete(recursive: true);
+    });
+
+    final result = await GitHubSyncEngine(
+      NoteRepository(database, Directory('${root.path}/notes')),
+      const FlutterSecureStorage(),
+      dio: Dio()
+        ..httpClientAdapter = _ErrorAdapter(
+          statusCode: 422,
+          body: const {
+            'message': 'Protected branch update failed for refs/heads/main.',
+          },
+          headers: const {},
+        ),
+      settingsLoader: () async => const GitHubSettings(
+        token: 'test-token',
+        owner: 'owner',
+        repo: 'notes',
+      ),
+    ).sync();
+
+    expect(result.isSuccess, isFalse);
+    expect(result.message, contains('branch protection'));
+  });
 }
 
 class _FakeGitHub {
@@ -256,17 +432,20 @@ class _FakeGitHub {
     required this.content,
     this.pauseFirstRepositoryRead = false,
     this.rejectFirstRefUpdate = false,
+    this.refUpdateErrorMessage,
   });
 
   final String path;
   final String content;
   final bool pauseFirstRepositoryRead;
   final bool rejectFirstRefUpdate;
+  final String? refUpdateErrorMessage;
   final _firstRead = Completer<void>();
   final _resume = Completer<void>();
   var _paused = false;
   var _refUpdateRejected = false;
   var refUpdates = 0;
+  var treeCreates = 0;
   var commitCreates = 0;
   var repositoryReads = 0;
   var refReads = 0;
@@ -322,13 +501,20 @@ class _FakeGitHub {
         'content': base64Encode(utf8.encode(content)),
       },
       ('POST', '/repos/owner/notes/git/blobs') => {'sha': 'new-blob'},
-      ('POST', '/repos/owner/notes/git/trees') => {'sha': 'tree-2'},
+      ('POST', '/repos/owner/notes/git/trees') => () {
+        treeCreates++;
+        return {'sha': 'tree-2'};
+      }(),
       ('POST', '/repos/owner/notes/git/commits') => () {
         commitCreates++;
         return {'sha': 'commit-2'};
       }(),
       ('PATCH', '/repos/owner/notes/git/refs/heads/main') => () {
         refUpdates++;
+        if (refUpdateErrorMessage != null) {
+          statusCode = 422;
+          return {'message': refUpdateErrorMessage};
+        }
         if (rejectFirstRefUpdate && !_refUpdateRejected) {
           _refUpdateRejected = true;
           statusCode = 422;

@@ -169,10 +169,21 @@ class _NoteListScreenState extends ConsumerState<NoteListScreen> {
   }
 
   Future<void> _generateMissingSummaries(List<Note> notes) async {
+    // Onboarding and repository imports must establish their remote baseline
+    // before derived AI metadata is allowed to alter Markdown. Otherwise a
+    // freshly imported note can look like a competing local edit and produce
+    // a needless conflict copy.
+    final initialSyncCompleted =
+        await ref
+            .read(secureStorageProvider)
+            .read(key: initialSyncCompletedStorageKey) ==
+        'true';
+    if (!initialSyncCompleted) return;
     final generator = ref.read(aiSummaryServiceProvider);
     if (!await generator.isConfigured()) return;
     for (final note in notes) {
       if (note.isPendingDeletion ||
+          note.isDirty ||
           hasUsableSummary(note) ||
           !_summaryJobs.add(note.id)) {
         continue;
@@ -1894,6 +1905,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   var _loadingRepositories = false;
   var _selectingRepository = false;
   var _syncIntervalMinutes = SyncScheduler.defaultIntervalMinutes;
+  var _syncDiagnosticsEnabled = false;
   var _configuredOwner = '';
   var _configuredRepo = '';
   String? _repositoryError;
@@ -1913,6 +1925,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     _configuredOwner = _owner.text.trim();
     _configuredRepo = _repo.text.trim();
     _syncIntervalMinutes = await SyncScheduler.intervalFromStorage(storage);
+    _syncDiagnosticsEnabled = await SyncDiagnostics.isEnabled(storage);
     _aiUrl.text = await storage.read(key: 'ai_provider_url') ?? '';
     _aiKey.text = await storage.read(key: 'ai_provider_api_key') ?? '';
     _aiModel.text =
@@ -2089,6 +2102,65 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     await ref
         .read(secureStorageProvider)
         .write(key: themeModeStorageKey, value: themeModeStorageValue(mode));
+  }
+
+  Future<void> _setSyncDiagnostics(bool value) async {
+    setState(() => _syncDiagnosticsEnabled = value);
+    try {
+      await ref.read(syncControllerProvider).setDiagnosticsEnabled(value);
+    } catch (_) {
+      if (mounted) setState(() => _syncDiagnosticsEnabled = !value);
+    }
+  }
+
+  Future<void> _showSyncLog() async {
+    final entries = await SyncDiagnostics.read(ref.read(secureStorageProvider));
+    if (!mounted) return;
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetContext) => SafeArea(
+        child: SizedBox(
+          height: MediaQuery.sizeOf(sheetContext).height * .7,
+          child: Column(
+            children: [
+              const ListTile(title: Text('GitHub sync log')),
+              Expanded(
+                child: entries.isEmpty
+                    ? const Center(
+                        child: Text('No sync activity recorded yet.'),
+                      )
+                    : ListView.separated(
+                        itemCount: entries.length,
+                        separatorBuilder: (_, _) => const Divider(height: 1),
+                        itemBuilder: (_, index) {
+                          final entry = entries[entries.length - 1 - index];
+                          return ListTile(
+                            dense: true,
+                            title: Text(entry.message),
+                            subtitle: Text(_syncLogTimestamp(entry.timestamp)),
+                          );
+                        },
+                      ),
+              ),
+              Align(
+                alignment: Alignment.centerRight,
+                child: TextButton.icon(
+                  onPressed: () async {
+                    await SyncDiagnostics.clear(
+                      ref.read(secureStorageProvider),
+                    );
+                    if (sheetContext.mounted) Navigator.pop(sheetContext);
+                  },
+                  icon: const Icon(Icons.delete_outline),
+                  label: const Text('Clear log'),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   Future<void> _chooseRepository() async {
@@ -2287,6 +2359,28 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                       }
                     },
             ),
+            ExpansionTile(
+              leading: const Icon(Icons.bug_report_outlined),
+              title: const Text('Sync diagnostics'),
+              subtitle: const Text(
+                'Show detailed sync stages and keep a troubleshooting log.',
+              ),
+              children: [
+                SwitchListTile(
+                  value: _syncDiagnosticsEnabled,
+                  onChanged: _setSyncDiagnostics,
+                  title: const Text('Show detailed sync stages'),
+                ),
+                ListTile(
+                  leading: const Icon(Icons.receipt_long_outlined),
+                  title: const Text('View sync log'),
+                  subtitle: const Text(
+                    'The most recent 30 phase and error messages.',
+                  ),
+                  onTap: _showSyncLog,
+                ),
+              ],
+            ),
             if (_isChangingRepository) ...[
               const SizedBox(height: 8),
               OutlinedButton.icon(
@@ -2386,4 +2480,11 @@ String _syncIntervalLabel(int minutes) {
   if (minutes < 60) return 'Every $minutes minutes';
   final hours = minutes ~/ 60;
   return hours == 1 ? 'Every hour' : 'Every $hours hours';
+}
+
+String _syncLogTimestamp(DateTime timestamp) {
+  final local = timestamp.toLocal();
+  String twoDigits(int value) => value.toString().padLeft(2, '0');
+  return '${local.year}-${twoDigits(local.month)}-${twoDigits(local.day)} '
+      '${twoDigits(local.hour)}:${twoDigits(local.minute)}:${twoDigits(local.second)}';
 }

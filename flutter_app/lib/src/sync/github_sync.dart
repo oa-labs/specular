@@ -8,19 +8,154 @@ import '../data/note_repository.dart';
 import '../domain/markdown.dart';
 
 const initialSyncCompletedStorageKey = 'initial_sync_completed';
+const syncDiagnosticsStorageKey = 'github_sync_diagnostics';
 
 /// A concrete unit of sync work reported to the foreground UI. The totals are
 /// based on the repository snapshot, rather than an indeterminate timer, so
 /// first-time setup can say exactly how far through the import it is.
 class SyncProgress {
-  const SyncProgress({required this.message, this.completed, this.total});
+  const SyncProgress({
+    required this.message,
+    this.completed,
+    this.total,
+    this.itemLabel,
+  });
 
   final String message;
   final int? completed;
   final int? total;
+  final String? itemLabel;
 }
 
 typedef SyncProgressCallback = void Function(SyncProgress progress);
+
+/// Lightweight progress shared by the foreground Flutter engine and
+/// WorkManager's headless isolate. The database lease determines whether this
+/// status is live; storage only carries the display details.
+class SharedSyncProgress {
+  static const _messageKey = 'github_sync_progress_message';
+  static const _completedKey = 'github_sync_progress_completed';
+  static const _totalKey = 'github_sync_progress_total';
+  static const _itemLabelKey = 'github_sync_progress_item_label';
+
+  static Future<void> save(
+    FlutterSecureStorage storage,
+    SyncProgress progress,
+  ) async {
+    await Future.wait([
+      storage.write(key: _messageKey, value: progress.message),
+      storage.write(key: _completedKey, value: progress.completed?.toString()),
+      storage.write(key: _totalKey, value: progress.total?.toString()),
+      storage.write(key: _itemLabelKey, value: progress.itemLabel),
+    ]);
+  }
+
+  static Future<SyncProgress?> load(FlutterSecureStorage storage) async {
+    final values = await Future.wait([
+      storage.read(key: _messageKey),
+      storage.read(key: _completedKey),
+      storage.read(key: _totalKey),
+      storage.read(key: _itemLabelKey),
+    ]);
+    final message = values[0];
+    if (message == null || message.isEmpty) return null;
+    return SyncProgress(
+      message: message,
+      completed: int.tryParse(values[1] ?? ''),
+      total: int.tryParse(values[2] ?? ''),
+      itemLabel: values[3],
+    );
+  }
+
+  static Future<void> clear(FlutterSecureStorage storage) => Future.wait([
+    storage.delete(key: _messageKey),
+    storage.delete(key: _completedKey),
+    storage.delete(key: _totalKey),
+    storage.delete(key: _itemLabelKey),
+  ]);
+}
+
+class SyncLogEntry {
+  const SyncLogEntry({required this.timestamp, required this.message});
+
+  final DateTime timestamp;
+  final String message;
+
+  Map<String, String> encode() => {
+    'timestamp': timestamp.toUtc().toIso8601String(),
+    'message': message,
+  };
+
+  static SyncLogEntry? decode(Object? value) {
+    if (value is! Map) return null;
+    final timestamp = DateTime.tryParse(value['timestamp']?.toString() ?? '');
+    final message = value['message']?.toString();
+    if (timestamp == null || message == null || message.isEmpty) return null;
+    return SyncLogEntry(timestamp: timestamp.toLocal(), message: message);
+  }
+}
+
+/// Settings and a small, non-sensitive troubleshooting trail for GitHub sync.
+/// It deliberately contains phase/error text only, never request data, note
+/// content, repository credentials, or GitHub tokens.
+class SyncDiagnostics {
+  static const _logKey = 'github_sync_diagnostic_log';
+  static const _maxEntries = 30;
+
+  static Future<bool> isEnabled(FlutterSecureStorage storage) async =>
+      await storage.read(key: syncDiagnosticsStorageKey) == 'true';
+
+  static Future<void> setEnabled(FlutterSecureStorage storage, bool enabled) =>
+      storage.write(key: syncDiagnosticsStorageKey, value: '$enabled');
+
+  static bool isDetailedStage(SyncProgress progress) =>
+      progress.itemLabel == null &&
+      switch (progress.message) {
+        'Remote is up to date…' ||
+        'Checking deleted notes…' ||
+        'Creating GitHub commit…' ||
+        'Publishing GitHub commit…' ||
+        'Recording synced notes locally…' ||
+        'Remote changes detected; retrying…' => true,
+        _ => false,
+      };
+
+  static Future<List<SyncLogEntry>> read(FlutterSecureStorage storage) async {
+    try {
+      final value = await storage.read(key: _logKey);
+      if (value == null || value.isEmpty) return const [];
+      final decoded = jsonDecode(value);
+      if (decoded is! List) return const [];
+      return decoded
+          .map(SyncLogEntry.decode)
+          .whereType<SyncLogEntry>()
+          .toList(growable: false);
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  static Future<void> append(
+    FlutterSecureStorage storage,
+    String message,
+  ) async {
+    final entries = await read(storage);
+    final updated = [
+      ...entries,
+      SyncLogEntry(timestamp: DateTime.now(), message: message),
+    ];
+    final retained = updated.length > _maxEntries
+        ? updated.sublist(updated.length - _maxEntries)
+        : updated;
+    await storage.write(
+      key: _logKey,
+      value: jsonEncode(retained.map((entry) => entry.encode()).toList()),
+    );
+  }
+
+  static Future<void> clear(FlutterSecureStorage storage) =>
+      storage.delete(key: _logKey);
+}
 
 class SyncResult {
   const SyncResult._(this.message, [this.error]);
@@ -38,6 +173,36 @@ class _ConcurrentRefUpdate implements Exception {
   const _ConcurrentRefUpdate(this.error);
 
   final DioException error;
+}
+
+/// GitHub uses 422 for several distinct failures. Only a non-fast-forward
+/// ref update is worth retrying; retrying a protected branch or validation
+/// failure needlessly uploads every local blob a second time.
+bool _isRetryableRefUpdate(DioException error) {
+  if (error.response?.statusCode == 409) return true;
+  if (error.response?.statusCode != 422) return false;
+  final detail = _githubErrorDetail(error).toLowerCase();
+  return detail.contains('fast forward') ||
+      detail.contains('reference update failed') ||
+      detail.contains('reference update');
+}
+
+String _githubErrorDetail(DioException error) {
+  final data = error.response?.data;
+  if (data is! Map) return '';
+  final parts = <String>[];
+  final message = data['message']?.toString();
+  if (message != null && message.isNotEmpty) parts.add(message);
+  final errors = data['errors'];
+  if (errors is List) {
+    for (final entry in errors.whereType<Map>()) {
+      for (final key in const ['message', 'code', 'field', 'resource']) {
+        final value = entry[key]?.toString();
+        if (value != null && value.isNotEmpty) parts.add(value);
+      }
+    }
+  }
+  return parts.join(': ');
 }
 
 class GitHubSettings {
@@ -153,6 +318,7 @@ class GitHubSyncEngine {
     Future<String?> Function(String key)? cacheRead,
     Future<void> Function(String key, String value)? cacheWrite,
   }) : _settingsLoader = settingsLoader ?? (() => GitHubSettings.load(storage)),
+       _storage = storage,
        _cacheRead = cacheRead ?? ((key) => storage.read(key: key)),
        _cacheWrite =
            cacheWrite ??
@@ -173,65 +339,102 @@ class GitHubSyncEngine {
            );
 
   final NoteRepository _repository;
+  final FlutterSecureStorage _storage;
   final Future<GitHubSettings?> Function() _settingsLoader;
   final Future<String?> Function(String key) _cacheRead;
   final Future<void> Function(String key, String value) _cacheWrite;
   final Dio _dio;
   Future<void> _tail = Future.value();
+  Future<void> _diagnosticWrites = Future.value();
+  String? _lastLoggedStage;
 
   static const _maxConcurrentChangeRetries = 1;
 
-  Future<SyncResult> sync({
-    SyncProgressCallback? onProgress,
-  }) => _serialized(() async {
-    onProgress?.call(const SyncProgress(message: 'Connecting to GitHub…'));
-    final settings = await _settingsLoader();
-    if (settings == null) return const SyncResult.notConfigured();
-    final lease = await _repository.acquireSyncLease(
-      owner: 'github-${DateTime.now().microsecondsSinceEpoch}-$hashCode',
-    );
-    if (lease == null) {
-      return const SyncResult.success('Another sync is already running.');
-    }
-    final renewal = Timer.periodic(const Duration(minutes: 1), (_) {
-      unawaited(_repository.renewSyncLease(lease));
-    });
-    try {
-      for (var attempt = 0; ; attempt++) {
-        final snapshot = await _pull(settings, onProgress: onProgress);
-        try {
-          final completedSnapshot = await _push(
-            settings,
-            snapshot,
-            onProgress: onProgress,
-          );
-          await _saveCachedSnapshot(settings, completedSnapshot);
-          onProgress?.call(const SyncProgress(message: 'Sync complete'));
-          return const SyncResult.success('Synced with GitHub');
-        } on _ConcurrentRefUpdate {
-          if (attempt >= _maxConcurrentChangeRetries) rethrow;
-          onProgress?.call(
-            const SyncProgress(message: 'Remote changes detected; retrying…'),
-          );
-        }
+  Future<SyncResult> sync({SyncProgressCallback? onProgress}) => _serialized(
+    () async {
+      _lastLoggedStage = null;
+      void report(SyncProgress progress) {
+        onProgress?.call(progress);
+        _recordDiagnostic(progress);
       }
-    } on _ConcurrentRefUpdate catch (conflict) {
-      return SyncResult.failure(_friendlyError(conflict.error), conflict.error);
-    } on DioException catch (error) {
-      return SyncResult.failure(_friendlyError(error), error);
-    } catch (error) {
-      return SyncResult.failure('Sync failed: $error', error);
-    } finally {
-      renewal.cancel();
-      await _repository.releaseSyncLease(lease);
-    }
-  });
+
+      report(const SyncProgress(message: 'Connecting to GitHub…'));
+      final settings = await _settingsLoader();
+      if (settings == null) return const SyncResult.notConfigured();
+      final lease = await _repository.acquireSyncLease(
+        owner: 'github-${DateTime.now().microsecondsSinceEpoch}-$hashCode',
+      );
+      if (lease == null) {
+        return const SyncResult.success('Another sync is already running.');
+      }
+      final renewal = Timer.periodic(const Duration(minutes: 1), (_) {
+        unawaited(_repository.renewSyncLease(lease));
+      });
+      try {
+        for (var attempt = 0; ; attempt++) {
+          final snapshot = await _pull(settings, onProgress: report);
+          try {
+            final completedSnapshot = await _push(
+              settings,
+              snapshot,
+              onProgress: report,
+            );
+            await _saveCachedSnapshot(settings, completedSnapshot);
+            report(const SyncProgress(message: 'Sync complete'));
+            await _flushDiagnostics();
+            return const SyncResult.success('Synced with GitHub');
+          } on _ConcurrentRefUpdate {
+            if (attempt >= _maxConcurrentChangeRetries) rethrow;
+            report(
+              const SyncProgress(message: 'Remote changes detected; retrying…'),
+            );
+          }
+        }
+      } on _ConcurrentRefUpdate catch (conflict) {
+        final message = _friendlyError(conflict.error);
+        _recordDiagnostic(SyncProgress(message: 'Failed: $message'));
+        await _flushDiagnostics();
+        return SyncResult.failure(message, conflict.error);
+      } on DioException catch (error) {
+        final message = _friendlyError(error);
+        _recordDiagnostic(SyncProgress(message: 'Failed: $message'));
+        await _flushDiagnostics();
+        return SyncResult.failure(message, error);
+      } catch (error) {
+        final message = 'Sync failed: $error';
+        _recordDiagnostic(SyncProgress(message: 'Failed: $message'));
+        await _flushDiagnostics();
+        return SyncResult.failure(message, error);
+      } finally {
+        renewal.cancel();
+        await _repository.releaseSyncLease(lease);
+      }
+    },
+  );
 
   Future<T> _serialized<T>(Future<T> Function() operation) {
     final result = _tail.then((_) => operation());
     _tail = result.then<void>((_) {}, onError: (error, stackTrace) {});
     return result;
   }
+
+  void _recordDiagnostic(SyncProgress progress) {
+    // Counter changes are intentionally omitted: they would make the log
+    // noisy and turn a large sync into hundreds of encrypted storage writes.
+    if (progress.itemLabel != null || progress.message == _lastLoggedStage) {
+      return;
+    }
+    _lastLoggedStage = progress.message;
+    _diagnosticWrites = _diagnosticWrites.then((_) async {
+      try {
+        await SyncDiagnostics.append(_storage, progress.message);
+      } catch (_) {
+        // Diagnostics are optional and must never prevent a sync.
+      }
+    });
+  }
+
+  Future<void> _flushDiagnostics() => _diagnosticWrites;
 
   Options _options(GitHubSettings settings) =>
       Options(headers: {'Authorization': 'Bearer ${settings.token}'});
@@ -400,6 +603,7 @@ class GitHubSyncEngine {
         message: 'Checking your notes…',
         completed: 0,
         total: markdownEntries.length,
+        itemLabel: 'notes',
       ),
     );
     for (var index = 0; index < markdownEntries.length; index++) {
@@ -417,10 +621,21 @@ class GitHubSyncEngine {
         final sameId = await _repository.get(
           MarkdownContract.identityFor(path, parsed.id),
         );
-        if (local?.isDirty == true && local?.isPendingDeletion != true) {
-          await _repository.preserveConflict(local!);
+        if (local?.isDirty == true &&
+            local?.isPendingDeletion != true &&
+            !MarkdownContract.differsOnlyBySummary(
+              local!.rawMarkdown,
+              content,
+            )) {
+          await _repository.preserveConflict(local);
         }
-        if (sameId != null && sameId.path != path && sameId.isDirty) {
+        if (sameId != null &&
+            sameId.path != path &&
+            sameId.isDirty &&
+            !MarkdownContract.differsOnlyBySummary(
+              sameId.rawMarkdown,
+              content,
+            )) {
           await _repository.preserveConflict(sameId);
         }
         await _repository.applyRemote(path: path, sha: remoteSha, raw: content);
@@ -430,6 +645,7 @@ class GitHubSyncEngine {
           message: 'Checking your notes…',
           completed: index + 1,
           total: markdownEntries.length,
+          itemLabel: 'notes',
         ),
       );
     }
@@ -442,6 +658,7 @@ class GitHubSyncEngine {
         message: 'Checking attachments…',
         completed: 0,
         total: attachmentEntries.length,
+        itemLabel: 'attachments',
       ),
     );
     for (var index = 0; index < attachmentEntries.length; index++) {
@@ -462,6 +679,7 @@ class GitHubSyncEngine {
           message: 'Checking attachments…',
           completed: index + 1,
           total: attachmentEntries.length,
+          itemLabel: 'attachments',
         ),
       );
     }
@@ -484,6 +702,21 @@ class GitHubSyncEngine {
     final attachmentAcks = <String, String>{};
     final attachments = await _repository.dirtyAttachments();
     final notes = await _repository.dirtyNotes();
+    final requestedDeletions = <String>{
+      for (final note in notes)
+        if (note.isPendingDeletion)
+          note.pendingRenameFromPath ?? note.path
+        else if (note.pendingRenameFromPath != null)
+          note.pendingRenameFromPath!,
+    };
+    Set<String>? remotePaths;
+    if (requestedDeletions.isNotEmpty) {
+      onProgress?.call(const SyncProgress(message: 'Checking deleted notes…'));
+      remotePaths = (await _allTreeEntries(
+        settings,
+        snapshot.treeSha,
+      )).map((entry) => entry['path'] as String).toSet();
+    }
     final uploadCount = attachments.length + notes.length;
     onProgress?.call(
       SyncProgress(
@@ -492,6 +725,7 @@ class GitHubSyncEngine {
             : 'Uploading local changes…',
         completed: 0,
         total: uploadCount,
+        itemLabel: 'changes',
       ),
     );
 
@@ -511,13 +745,19 @@ class GitHubSyncEngine {
           message: 'Uploading local changes…',
           completed: uploaded,
           total: uploadCount,
+          itemLabel: 'changes',
         ),
       );
     }
     for (final note in notes) {
       if (note.isPendingDeletion) {
         final path = note.pendingRenameFromPath ?? note.path;
-        entries[path] = _treeDeletion(path);
+        // GitHub rejects a tree containing a null SHA for a path that is not
+        // present in the base tree. Deletion is already satisfied in that
+        // case, so acknowledge it locally without adding an invalid entry.
+        if (remotePaths!.contains(path)) {
+          entries[path] = _treeDeletion(path);
+        }
         acknowledgements[note.id] = (revision: note.localRevision, sha: null);
         uploaded++;
         onProgress?.call(
@@ -525,13 +765,15 @@ class GitHubSyncEngine {
             message: 'Uploading local changes…',
             completed: uploaded,
             total: uploadCount,
+            itemLabel: 'changes',
           ),
         );
         continue;
       }
       final sha = await _createBlob(settings, utf8.encode(note.rawMarkdown));
       entries[note.path] = _treeBlob(note.path, sha);
-      if (note.pendingRenameFromPath != null) {
+      if (note.pendingRenameFromPath != null &&
+          remotePaths!.contains(note.pendingRenameFromPath)) {
         entries[note.pendingRenameFromPath!] = _treeDeletion(
           note.pendingRenameFromPath!,
         );
@@ -543,10 +785,16 @@ class GitHubSyncEngine {
           message: 'Uploading local changes…',
           completed: uploaded,
           total: uploadCount,
+          itemLabel: 'changes',
         ),
       );
     }
-    if (entries.isEmpty) return snapshot;
+    if (entries.isEmpty) {
+      // The only changes may have been deletions of files that are already
+      // absent remotely. They still need to leave the local dirty queue.
+      await _repository.acknowledgeNotesSynced(acknowledgements);
+      return snapshot;
+    }
 
     onProgress?.call(const SyncProgress(message: 'Saving your changes…'));
 
@@ -557,6 +805,7 @@ class GitHubSyncEngine {
     );
     final newTreeSha = tree.data?['sha'] as String?;
     if (newTreeSha == null) throw StateError('GitHub returned no tree SHA');
+    onProgress?.call(const SyncProgress(message: 'Creating GitHub commit…'));
     final commit = await _dio.post<Map<String, dynamic>>(
       '/repos/${settings.owner}/${settings.repo}/git/commits',
       data: {
@@ -568,6 +817,7 @@ class GitHubSyncEngine {
     );
     final commitSha = commit.data?['sha'] as String?;
     if (commitSha == null) throw StateError('GitHub returned no commit SHA');
+    onProgress?.call(const SyncProgress(message: 'Publishing GitHub commit…'));
     try {
       await _dio.patch<void>(
         '/repos/${settings.owner}/${settings.repo}/git/refs/heads/${Uri.encodeComponent(snapshot.branch)}',
@@ -575,12 +825,14 @@ class GitHubSyncEngine {
         options: _options(settings),
       );
     } on DioException catch (error) {
-      final status = error.response?.statusCode;
-      if (status == 409 || status == 422) {
+      if (_isRetryableRefUpdate(error)) {
         throw _ConcurrentRefUpdate(error);
       }
       rethrow;
     }
+    onProgress?.call(
+      const SyncProgress(message: 'Recording synced notes locally…'),
+    );
     await _repository.acknowledgeNotesSynced(acknowledgements);
     for (final entry in attachmentAcks.entries) {
       await _repository.markAttachmentSynced(entry.key, entry.value);
@@ -767,16 +1019,14 @@ class GitHubSyncEngine {
 
   String _friendlyError(DioException error) {
     final code = error.response?.statusCode;
-    final responseMessage = error.response?.data is Map
-        ? (error.response?.data as Map)['message']?.toString().toLowerCase()
-        : null;
+    final responseDetail = _githubErrorDetail(error);
+    final responseMessage = responseDetail.toLowerCase();
     final rateLimitRemaining = error.response?.headers.value(
       'x-ratelimit-remaining',
     );
     final rateLimitReset = error.response?.headers.value('x-ratelimit-reset');
     final rateLimited =
-        rateLimitRemaining == '0' ||
-        responseMessage?.contains('rate limit') == true;
+        rateLimitRemaining == '0' || responseMessage.contains('rate limit');
     if (code == 403 && rateLimited) {
       final resetSeconds = int.tryParse(rateLimitReset ?? '');
       if (resetSeconds != null) {
@@ -808,12 +1058,27 @@ class GitHubSyncEngine {
             error.type == DioExceptionType.receiveTimeout)) {
       return 'GitHub sync timed out. Check your connection, then try again. Your local edits are safe.';
     }
+    if (code == 409) {
+      return 'GitHub rejected a concurrent change; pull again to preserve both versions.';
+    }
+    if (code == 422) {
+      if (responseMessage.contains('protected') ||
+          responseMessage.contains('branch rule') ||
+          responseMessage.contains('ruleset')) {
+        return 'GitHub branch protection prevents direct sync commits. Allow this token to push to the branch or choose an unprotected branch.';
+      }
+      if (responseMessage.contains('fast forward') ||
+          responseMessage.contains('reference update')) {
+        return 'GitHub rejected a concurrent change; pull again to preserve both versions.';
+      }
+      return responseDetail.isEmpty
+          ? 'GitHub rejected this branch update. Your local edits are safe.'
+          : 'GitHub rejected this branch update: $responseDetail';
+    }
     return switch (code) {
       401 => 'GitHub token is invalid or expired.',
       403 => 'GitHub denied access. Check the token\'s Contents permission.',
       404 => 'GitHub repository or branch was not found.',
-      409 || 422 =>
-        'GitHub rejected a concurrent change; pull again to preserve both versions.',
       _ => 'GitHub sync failed${code == null ? '' : ' ($code)'}.',
     };
   }
