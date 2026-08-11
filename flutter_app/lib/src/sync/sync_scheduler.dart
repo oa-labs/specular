@@ -30,6 +30,9 @@ void specularBackgroundDispatcher() {
         NoteRepository(database, Directory(state.notesPath)),
         storage,
       ).sync();
+      if (result.message == 'Synced with GitHub') {
+        await storage.write(key: initialSyncCompletedStorageKey, value: 'true');
+      }
       return result.isSuccess || result.error == null;
     } finally {
       await database.close();

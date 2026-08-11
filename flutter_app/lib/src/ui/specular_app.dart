@@ -32,6 +32,12 @@ final syncEngineProvider = Provider<GitHubSyncEngine>(
     ref.watch(secureStorageProvider),
   ),
 );
+final syncControllerProvider = ChangeNotifierProvider<SyncController>(
+  (ref) => SyncController(
+    ref.watch(syncEngineProvider),
+    ref.watch(secureStorageProvider),
+  ),
+);
 final voiceServiceProvider = Provider<VoiceService>(
   (ref) => VoiceService(ref.watch(secureStorageProvider)),
 );
@@ -60,6 +66,78 @@ final todosProvider = StreamProvider.family<List<TodoItem>, TodoFilter>(
 
 const lastRouteStorageKey = 'last_route';
 const themeModeStorageKey = 'theme_mode';
+
+class SyncUiState {
+  const SyncUiState({
+    this.isSyncing = false,
+    this.isInitialSync = false,
+    this.message = '',
+    this.completed,
+    this.total,
+  });
+
+  final bool isSyncing;
+  final bool isInitialSync;
+  final String message;
+  final int? completed;
+  final int? total;
+}
+
+/// Gives foreground syncs one consistent visual state. Background work stays
+/// intentionally quiet: Android may run it while there is no app to present.
+class SyncController extends ChangeNotifier {
+  SyncController(this._engine, this._storage);
+
+  final GitHubSyncEngine _engine;
+  final FlutterSecureStorage _storage;
+  SyncUiState _state = const SyncUiState();
+  var _activeSyncs = 0;
+
+  SyncUiState get state => _state;
+
+  Future<SyncResult> sync() async {
+    if (await GitHubSettings.load(_storage) == null) {
+      return _engine.sync();
+    }
+    final isInitialSync =
+        await _storage.read(key: initialSyncCompletedStorageKey) != 'true';
+    _activeSyncs++;
+    _state = SyncUiState(
+      isSyncing: true,
+      isInitialSync: isInitialSync,
+      message: isInitialSync ? 'Preparing your notes…' : 'Syncing with GitHub…',
+    );
+    notifyListeners();
+    try {
+      final result = await _engine.sync(onProgress: _updateProgress);
+      if (isInitialSync && result.message == 'Synced with GitHub') {
+        await _storage.write(
+          key: initialSyncCompletedStorageKey,
+          value: 'true',
+        );
+      }
+      return result;
+    } finally {
+      _activeSyncs--;
+      if (_activeSyncs == 0) {
+        _state = const SyncUiState();
+        notifyListeners();
+      }
+    }
+  }
+
+  void _updateProgress(SyncProgress progress) {
+    if (!state.isSyncing) return;
+    _state = SyncUiState(
+      isSyncing: true,
+      isInitialSync: state.isInitialSync,
+      message: progress.message,
+      completed: progress.completed,
+      total: progress.total,
+    );
+    notifyListeners();
+  }
+}
 
 ThemeMode themeModeFromStorage(String? value) =>
     value == 'dark' ? ThemeMode.dark : ThemeMode.light;
@@ -190,6 +268,7 @@ class _SpecularAppState extends ConsumerState<SpecularApp> {
   Widget build(BuildContext context) {
     const amber = Color(0xffd97706);
     final themeMode = ref.watch(themeModeControllerProvider).themeMode;
+    final syncState = ref.watch(syncControllerProvider).state;
     return MaterialApp.router(
       title: 'Specular',
       debugShowCheckedModeBanner: false,
@@ -215,6 +294,144 @@ class _SpecularAppState extends ConsumerState<SpecularApp> {
       ),
       themeMode: themeMode,
       routerConfig: _router,
+      builder: (context, child) => Stack(
+        children: [
+          child ?? const SizedBox.shrink(),
+          if (syncState.isSyncing && syncState.isInitialSync)
+            _InitialSyncOverlay(state: syncState),
+        ],
+      ),
+    );
+  }
+}
+
+class SpecularWordmark extends StatefulWidget {
+  const SpecularWordmark({super.key, required this.isSyncing});
+
+  final bool isSyncing;
+
+  @override
+  State<SpecularWordmark> createState() => _SpecularWordmarkState();
+}
+
+class _SpecularWordmarkState extends State<SpecularWordmark>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 1450),
+  );
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.isSyncing) _controller.repeat();
+  }
+
+  @override
+  void didUpdateWidget(covariant SpecularWordmark oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.isSyncing && !oldWidget.isSyncing) {
+      _controller.repeat();
+    } else if (!widget.isSyncing && oldWidget.isSyncing) {
+      _controller
+        ..stop()
+        ..value = 0;
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final style = Theme.of(context).textTheme.titleLarge;
+    final base = Text('Specular', style: style);
+    if (!widget.isSyncing) return base;
+    final highlight = Theme.of(context).colorScheme.primary;
+    return Semantics(
+      label: 'Specular, syncing',
+      liveRegion: true,
+      child: AnimatedBuilder(
+        animation: _controller,
+        child: base,
+        builder: (context, child) {
+          final sweep = -2 + _controller.value * 4;
+          return ShaderMask(
+            blendMode: BlendMode.srcATop,
+            shaderCallback: (bounds) => LinearGradient(
+              begin: Alignment(sweep, 0),
+              end: Alignment(sweep + 1, 0),
+              colors: [
+                Colors.transparent,
+                highlight.withValues(alpha: .9),
+                Colors.transparent,
+              ],
+              stops: const [0, .5, 1],
+            ).createShader(bounds),
+            child: child,
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _InitialSyncOverlay extends StatelessWidget {
+  const _InitialSyncOverlay({required this.state});
+
+  final SyncUiState state;
+
+  @override
+  Widget build(BuildContext context) {
+    final progress = state.total == null || state.total == 0
+        ? null
+        : state.completed! / state.total!;
+    final detail = state.total == null
+        ? null
+        : '${state.completed ?? 0} of ${state.total}';
+    return Material(
+      color: Theme.of(context).colorScheme.scrim.withValues(alpha: .52),
+      child: Center(
+        child: Semantics(
+          liveRegion: true,
+          label: 'Initial sync in progress. ${state.message}',
+          child: Container(
+            width: 300,
+            margin: const EdgeInsets.all(24),
+            padding: const EdgeInsets.all(24),
+            decoration: BoxDecoration(
+              color: Theme.of(context).colorScheme.surface,
+              borderRadius: BorderRadius.circular(24),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  Icons.auto_awesome,
+                  color: Theme.of(context).colorScheme.primary,
+                  size: 32,
+                ),
+                const SizedBox(height: 16),
+                Text(
+                  'Setting up Specular',
+                  style: Theme.of(context).textTheme.titleLarge,
+                ),
+                const SizedBox(height: 8),
+                Text(state.message, textAlign: TextAlign.center),
+                const SizedBox(height: 20),
+                LinearProgressIndicator(value: progress),
+                if (detail != null) ...[
+                  const SizedBox(height: 8),
+                  Text(detail, style: Theme.of(context).textTheme.labelMedium),
+                ],
+              ],
+            ),
+          ),
+        ),
+      ),
     );
   }
 }

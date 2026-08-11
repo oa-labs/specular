@@ -7,6 +7,21 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import '../data/note_repository.dart';
 import '../domain/markdown.dart';
 
+const initialSyncCompletedStorageKey = 'initial_sync_completed';
+
+/// A concrete unit of sync work reported to the foreground UI. The totals are
+/// based on the repository snapshot, rather than an indeterminate timer, so
+/// first-time setup can say exactly how far through the import it is.
+class SyncProgress {
+  const SyncProgress({required this.message, this.completed, this.total});
+
+  final String message;
+  final int? completed;
+  final int? total;
+}
+
+typedef SyncProgressCallback = void Function(SyncProgress progress);
+
 class SyncResult {
   const SyncResult._(this.message, [this.error]);
   const SyncResult.success(String message) : this._(message);
@@ -102,31 +117,34 @@ class GitHubSyncEngine {
   final Dio _dio;
   Future<void> _tail = Future.value();
 
-  Future<SyncResult> sync() => _serialized(() async {
-    final settings = await _settingsLoader();
-    if (settings == null) return const SyncResult.notConfigured();
-    final lease = await _repository.acquireSyncLease(
-      owner: 'github-${DateTime.now().microsecondsSinceEpoch}-$hashCode',
-    );
-    if (lease == null) {
-      return const SyncResult.success('Another sync is already running.');
-    }
-    final renewal = Timer.periodic(const Duration(minutes: 1), (_) {
-      unawaited(_repository.renewSyncLease(lease));
-    });
-    try {
-      final snapshot = await _pull(settings);
-      await _push(settings, snapshot);
-      return const SyncResult.success('Synced with GitHub');
-    } on DioException catch (error) {
-      return SyncResult.failure(_friendlyError(error), error);
-    } catch (error) {
-      return SyncResult.failure('Sync failed: $error', error);
-    } finally {
-      renewal.cancel();
-      await _repository.releaseSyncLease(lease);
-    }
-  });
+  Future<SyncResult> sync({SyncProgressCallback? onProgress}) =>
+      _serialized(() async {
+        onProgress?.call(const SyncProgress(message: 'Connecting to GitHub…'));
+        final settings = await _settingsLoader();
+        if (settings == null) return const SyncResult.notConfigured();
+        final lease = await _repository.acquireSyncLease(
+          owner: 'github-${DateTime.now().microsecondsSinceEpoch}-$hashCode',
+        );
+        if (lease == null) {
+          return const SyncResult.success('Another sync is already running.');
+        }
+        final renewal = Timer.periodic(const Duration(minutes: 1), (_) {
+          unawaited(_repository.renewSyncLease(lease));
+        });
+        try {
+          final snapshot = await _pull(settings, onProgress: onProgress);
+          await _push(settings, snapshot, onProgress: onProgress);
+          onProgress?.call(const SyncProgress(message: 'Sync complete'));
+          return const SyncResult.success('Synced with GitHub');
+        } on DioException catch (error) {
+          return SyncResult.failure(_friendlyError(error), error);
+        } catch (error) {
+          return SyncResult.failure('Sync failed: $error', error);
+        } finally {
+          renewal.cancel();
+          await _repository.releaseSyncLease(lease);
+        }
+      });
 
   Future<T> _serialized<T>(Future<T> Function() operation) {
     final result = _tail.then((_) => operation());
@@ -223,7 +241,10 @@ class GitHubSyncEngine {
     }
   }
 
-  Future<_RemoteSnapshot> _pull(GitHubSettings settings) async {
+  Future<_RemoteSnapshot> _pull(
+    GitHubSettings settings, {
+    SyncProgressCallback? onProgress,
+  }) async {
     final repository = await _dio.get<Map<String, dynamic>>(
       '/repos/${settings.owner}/${settings.repo}',
       options: _options(settings),
@@ -243,7 +264,15 @@ class GitHubSyncEngine {
         (commit.data!['tree'] as Map<String, dynamic>)['sha'] as String;
     final entries = await _allTreeEntries(settings, treeSha);
     final markdownEntries = entries.where(_isMarkdownNote).toList();
-    for (final entry in markdownEntries) {
+    onProgress?.call(
+      SyncProgress(
+        message: 'Checking your notes…',
+        completed: 0,
+        total: markdownEntries.length,
+      ),
+    );
+    for (var index = 0; index < markdownEntries.length; index++) {
+      final entry = markdownEntries[index];
       final path = entry['path'] as String;
       final remoteSha = entry['sha'] as String;
       final local = await _repository.findByPath(path);
@@ -251,32 +280,58 @@ class GitHubSyncEngine {
       // this note has neither changed remotely nor needs to be re-indexed.
       // This also deliberately leaves unsynced local edits alone: their
       // lastRemoteSha still identifies the remote version they were based on.
-      if (local?.lastRemoteSha == remoteSha) continue;
-      final content = await _blobContent(settings, remoteSha);
-      final parsed = MarkdownContract.parse(content);
-      final sameId = await _repository.get(
-        MarkdownContract.identityFor(path, parsed.id),
-      );
-      if (local?.isDirty == true && local?.isPendingDeletion != true) {
-        await _repository.preserveConflict(local!);
+      if (local?.lastRemoteSha != remoteSha) {
+        final content = await _blobContent(settings, remoteSha);
+        final parsed = MarkdownContract.parse(content);
+        final sameId = await _repository.get(
+          MarkdownContract.identityFor(path, parsed.id),
+        );
+        if (local?.isDirty == true && local?.isPendingDeletion != true) {
+          await _repository.preserveConflict(local!);
+        }
+        if (sameId != null && sameId.path != path && sameId.isDirty) {
+          await _repository.preserveConflict(sameId);
+        }
+        await _repository.applyRemote(path: path, sha: remoteSha, raw: content);
       }
-      if (sameId != null && sameId.path != path && sameId.isDirty)
-        await _repository.preserveConflict(sameId);
-      await _repository.applyRemote(path: path, sha: remoteSha, raw: content);
+      onProgress?.call(
+        SyncProgress(
+          message: 'Checking your notes…',
+          completed: index + 1,
+          total: markdownEntries.length,
+        ),
+      );
     }
     await _repository.reconcileRemoteRemovals(
       markdownEntries.map((entry) => entry['path'] as String).toSet(),
     );
-    for (final entry in entries.where(_isAttachment)) {
+    final attachmentEntries = entries.where(_isAttachment).toList();
+    onProgress?.call(
+      SyncProgress(
+        message: 'Checking attachments…',
+        completed: 0,
+        total: attachmentEntries.length,
+      ),
+    );
+    for (var index = 0; index < attachmentEntries.length; index++) {
+      final entry = attachmentEntries[index];
       final path = entry['path'] as String;
       final remoteSha = entry['sha'] as String;
       final local = await _repository.attachment(path);
-      if (local?.lastRemoteSha == remoteSha || local?.isDirty == true) continue;
-      await _repository.applyRemoteAttachment(
-        path: path,
-        sha: remoteSha,
-        bytes: await _blobBytes(settings, remoteSha),
-        mimeType: _mimeFor(path),
+      if (local?.lastRemoteSha != remoteSha && local?.isDirty != true) {
+        await _repository.applyRemoteAttachment(
+          path: path,
+          sha: remoteSha,
+          bytes: await _blobBytes(settings, remoteSha),
+          mimeType: _mimeFor(path),
+        );
+      }
+      onProgress?.call(
+        SyncProgress(
+          message: 'Checking attachments…',
+          completed: index + 1,
+          total: attachmentEntries.length,
+        ),
       );
     }
     return _RemoteSnapshot(
@@ -286,25 +341,59 @@ class GitHubSyncEngine {
     );
   }
 
-  Future<void> _push(GitHubSettings settings, _RemoteSnapshot snapshot) async {
+  Future<void> _push(
+    GitHubSettings settings,
+    _RemoteSnapshot snapshot, {
+    SyncProgressCallback? onProgress,
+  }) async {
     final entries = <String, Map<String, dynamic>>{};
     final acknowledgements = <String, ({int revision, String? sha})>{};
     final attachmentAcks = <String, String>{};
+    final attachments = await _repository.dirtyAttachments();
+    final notes = await _repository.dirtyNotes();
+    final uploadCount = attachments.length + notes.length;
+    onProgress?.call(
+      SyncProgress(
+        message: uploadCount == 0
+            ? 'Finishing up…'
+            : 'Uploading local changes…',
+        completed: 0,
+        total: uploadCount,
+      ),
+    );
 
     // All blobs are assembled against the exact tree pulled above and exposed
     // in one commit. A failed ref update changes no remote files.
-    for (final attachment in await _repository.dirtyAttachments()) {
+    var uploaded = 0;
+    for (final attachment in attachments) {
       final bytes = await _repository.attachmentBytes(attachment.path);
-      if (bytes == null) continue;
-      final sha = await _createBlob(settings, bytes);
-      entries[attachment.path] = _treeBlob(attachment.path, sha);
-      attachmentAcks[attachment.path] = sha;
+      if (bytes != null) {
+        final sha = await _createBlob(settings, bytes);
+        entries[attachment.path] = _treeBlob(attachment.path, sha);
+        attachmentAcks[attachment.path] = sha;
+      }
+      uploaded++;
+      onProgress?.call(
+        SyncProgress(
+          message: 'Uploading local changes…',
+          completed: uploaded,
+          total: uploadCount,
+        ),
+      );
     }
-    for (final note in await _repository.dirtyNotes()) {
+    for (final note in notes) {
       if (note.isPendingDeletion) {
         final path = note.pendingRenameFromPath ?? note.path;
         entries[path] = _treeDeletion(path);
         acknowledgements[note.id] = (revision: note.localRevision, sha: null);
+        uploaded++;
+        onProgress?.call(
+          SyncProgress(
+            message: 'Uploading local changes…',
+            completed: uploaded,
+            total: uploadCount,
+          ),
+        );
         continue;
       }
       final sha = await _createBlob(settings, utf8.encode(note.rawMarkdown));
@@ -315,8 +404,18 @@ class GitHubSyncEngine {
         );
       }
       acknowledgements[note.id] = (revision: note.localRevision, sha: sha);
+      uploaded++;
+      onProgress?.call(
+        SyncProgress(
+          message: 'Uploading local changes…',
+          completed: uploaded,
+          total: uploadCount,
+        ),
+      );
     }
     if (entries.isEmpty) return;
+
+    onProgress?.call(const SyncProgress(message: 'Saving your changes…'));
 
     final tree = await _dio.post<Map<String, dynamic>>(
       '/repos/${settings.owner}/${settings.repo}/git/trees',

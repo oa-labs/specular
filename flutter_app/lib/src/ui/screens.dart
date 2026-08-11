@@ -158,7 +158,7 @@ class _NoteListScreenState extends ConsumerState<NoteListScreen> {
   }
 
   Future<void> _refresh() async {
-    final result = await ref.read(syncEngineProvider).sync();
+    final result = await ref.read(syncControllerProvider).sync();
     if (!mounted) return;
 
     // The database watch normally updates the list after a pull. Invalidating
@@ -314,7 +314,9 @@ class _NoteListScreenState extends ConsumerState<NoteListScreen> {
     );
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Specular'),
+        title: SpecularWordmark(
+          isSyncing: ref.watch(syncControllerProvider).state.isSyncing,
+        ),
         actions: [
           IconButton(
             tooltip: 'View to-dos',
@@ -1785,7 +1787,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         key: 'voice_use_preview_key',
         value: _usePreviewKey.toString(),
       );
-      final sync = await ref.read(syncEngineProvider).sync();
+      final sync = await ref.read(syncControllerProvider).sync();
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Settings saved. ${sync.message}')),
