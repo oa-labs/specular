@@ -489,32 +489,63 @@ class _NoteTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final folder = noteFolderLabel(note);
     final summary = hasUsableSummary(note) ? note.summary! : '';
-    return ListTile(
-      title: Row(
-        children: [
-          if (note.isPinned)
-            const Padding(
-              padding: EdgeInsets.only(right: 6),
-              child: Icon(Icons.push_pin, size: 16),
-            ),
-          Expanded(child: Text(note.title.isEmpty ? 'Untitled' : note.title)),
-        ],
-      ),
-      subtitle: summary.isEmpty
-          ? null
-          : Text(summary, maxLines: 2, overflow: TextOverflow.ellipsis),
-      trailing: folder == null && !note.isConflict
-          ? null
-          : Row(
-              mainAxisSize: MainAxisSize.min,
+    final hasMetadata = folder != null || note.isConflict;
+    final theme = Theme.of(context);
+    return InkWell(
+      onTap: () => context.push('/note/${Uri.encodeComponent(note.id)}'),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
               children: [
-                if (note.isConflict)
-                  const Icon(Icons.warning_amber_rounded, color: Colors.orange),
-                if (note.isConflict && folder != null) const SizedBox(width: 8),
-                if (folder != null) _FolderBadge(label: folder),
+                if (note.isPinned)
+                  const Padding(
+                    padding: EdgeInsets.only(right: 6),
+                    child: Icon(Icons.push_pin, size: 16),
+                  ),
+                Expanded(
+                  child: Text(
+                    note.title.isEmpty ? 'Untitled' : note.title,
+                    style: theme.textTheme.titleMedium,
+                  ),
+                ),
               ],
             ),
-      onTap: () => context.push('/note/${Uri.encodeComponent(note.id)}'),
+            if (summary.isNotEmpty || hasMetadata)
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    if (summary.isNotEmpty)
+                      Expanded(
+                        child: Text(
+                          summary,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: theme.textTheme.bodyMedium?.copyWith(
+                            color: theme.colorScheme.onSurfaceVariant,
+                          ),
+                        ),
+                      ),
+                    if (summary.isNotEmpty && hasMetadata)
+                      const SizedBox(width: 8),
+                    if (note.isConflict)
+                      const Icon(
+                        Icons.warning_amber_rounded,
+                        color: Colors.orange,
+                      ),
+                    if (note.isConflict && folder != null)
+                      const SizedBox(width: 8),
+                    if (folder != null) _FolderBadge(label: folder),
+                  ],
+                ),
+              ),
+          ],
+        ),
+      ),
     );
   }
 }
