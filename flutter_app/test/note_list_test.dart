@@ -100,4 +100,36 @@ void main() {
     ]);
     expect(stableOrder[1].isCompleted, isTrue);
   });
+
+  test('keeps to-dos together when a note gains a task', () {
+    TodoItem todo(String noteId, int taskIndex, String text) => TodoItem(
+      noteId: noteId,
+      taskIndex: taskIndex,
+      text: text,
+      isCompleted: false,
+      noteTitle: noteId,
+    );
+
+    final stableOrder = preserveTodoOrder(
+      [
+        todo('updated-note', 0, 'First task'),
+        todo('updated-note', 1, 'New task'),
+        todo('other-note', 0, 'Other task'),
+      ],
+      [
+        todo('other-note', 0, 'Other task'),
+        todo('updated-note', 0, 'First task'),
+      ],
+    );
+
+    expect(
+      groupTodosByNote(
+        stableOrder,
+      ).map((group) => group.map((todo) => todo.text).toList()).toList(),
+      [
+        ['Other task'],
+        ['First task', 'New task'],
+      ],
+    );
+  });
 }

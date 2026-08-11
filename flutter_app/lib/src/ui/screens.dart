@@ -1372,24 +1372,39 @@ class _TodoList extends ConsumerStatefulWidget {
   ConsumerState<_TodoList> createState() => _TodoListState();
 }
 
-/// Keeps a visible to-do list from jumping when a note update changes the
-/// repository's default ordering. Items that arrive after the first result are
-/// added in repository order, while existing items keep their place.
+/// Keeps note groups from jumping when an update changes the repository's
+/// default ordering. New tasks join their existing note group, while tasks
+/// from a newly seen note are added in repository order.
 List<TodoItem> preserveTodoOrder(
   List<TodoItem> todos,
   List<TodoItem> previousOrder,
 ) {
-  final todosById = {
-    for (final todo in todos) (todo.noteId, todo.taskIndex): todo,
-  };
-  final previousIds = {
-    for (final todo in previousOrder) (todo.noteId, todo.taskIndex),
-  };
-  return [
-    for (final todo in previousOrder) ?todosById[(todo.noteId, todo.taskIndex)],
-    for (final todo in todos)
-      if (!previousIds.contains((todo.noteId, todo.taskIndex))) todo,
-  ];
+  final todosByNote = <String, List<TodoItem>>{};
+  for (final todo in todos) {
+    todosByNote.putIfAbsent(todo.noteId, () => []).add(todo);
+  }
+
+  final orderedNoteIds = <String>{};
+  final orderedTodos = <TodoItem>[];
+  for (final todo in previousOrder) {
+    if (orderedNoteIds.add(todo.noteId)) {
+      orderedTodos.addAll(todosByNote[todo.noteId] ?? const []);
+    }
+  }
+  for (final todo in todos) {
+    if (orderedNoteIds.add(todo.noteId)) {
+      orderedTodos.addAll(todosByNote[todo.noteId]!);
+    }
+  }
+  return orderedTodos;
+}
+
+List<List<TodoItem>> groupTodosByNote(Iterable<TodoItem> todos) {
+  final groups = <String, List<TodoItem>>{};
+  for (final todo in todos) {
+    groups.putIfAbsent(todo.noteId, () => []).add(todo);
+  }
+  return groups.values.toList(growable: false);
 }
 
 class _TodoListState extends ConsumerState<_TodoList> {
@@ -1420,16 +1435,48 @@ class _TodoListState extends ConsumerState<_TodoList> {
             return ListView(
               physics: const AlwaysScrollableScrollPhysics(),
               children: [
-                for (final todo in orderedTodos)
-                  _TodoRow(
-                    key: ValueKey((todo.noteId, todo.taskIndex)),
-                    todo: todo,
+                for (final todosForNote in groupTodosByNote(orderedTodos))
+                  _TodoNoteGroup(
+                    key: ValueKey(todosForNote.first.noteId),
+                    todos: todosForNote,
                   ),
               ],
             );
           },
         ),
   );
+}
+
+class _TodoNoteGroup extends StatelessWidget {
+  const _TodoNoteGroup({super.key, required this.todos});
+
+  final List<TodoItem> todos;
+
+  @override
+  Widget build(BuildContext context) {
+    final note = todos.first;
+    return Padding(
+      padding: const EdgeInsets.only(top: 10, bottom: 4),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          InkWell(
+            onTap: () =>
+                context.push('/note/${Uri.encodeComponent(note.noteId)}'),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+              child: Text(
+                note.noteTitle,
+                style: Theme.of(context).textTheme.titleSmall,
+              ),
+            ),
+          ),
+          for (final todo in todos)
+            _TodoRow(key: ValueKey((todo.noteId, todo.taskIndex)), todo: todo),
+        ],
+      ),
+    );
+  }
 }
 
 class _TodoRow extends ConsumerWidget {
@@ -1468,11 +1515,6 @@ class _TodoRow extends ConsumerWidget {
                     styleSheet: MarkdownStyleSheet.fromTheme(
                       Theme.of(context),
                     ).copyWith(p: Theme.of(context).textTheme.bodyLarge),
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    todo.noteTitle,
-                    style: Theme.of(context).textTheme.bodySmall,
                   ),
                 ],
               ),
