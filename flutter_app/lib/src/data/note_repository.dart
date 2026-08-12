@@ -177,8 +177,16 @@ class NoteRepository {
     if (term.isNotEmpty) {
       final pattern = '%${term.replaceAll('%', '\\%').replaceAll('_', '\\_')}%';
       query.where((row) => row.title.like(pattern) | row.body.like(pattern));
+      // A title hit is more likely to identify the intended note than a hit
+      // somewhere in its content. Keep recently updated notes first within
+      // each match group.
+      query.orderBy([
+        (row) => OrderingTerm.desc(row.title.like(pattern)),
+        (row) => OrderingTerm.desc(row.updatedAt),
+      ]);
+    } else {
+      query.orderBy([(row) => OrderingTerm.desc(row.updatedAt)]);
     }
-    query.orderBy([(row) => OrderingTerm.desc(row.updatedAt)]);
     return query.watch().map((rows) => rows.map(_toNote).toList());
   }
 

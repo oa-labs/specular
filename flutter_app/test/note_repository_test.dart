@@ -9,6 +9,34 @@ import 'package:specular/src/data/note_repository.dart';
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
+  test('ranks title matches ahead of newer body-only matches', () async {
+    final root = await Directory.systemTemp.createTemp('specular-notes-test-');
+    final database = AppDatabase.forTesting(NativeDatabase.memory());
+    addTearDown(() async {
+      await database.close();
+      await root.delete(recursive: true);
+    });
+    final repository = NoteRepository(
+      database,
+      Directory('${root.path}/notes'),
+    );
+    final titleMatch = await repository.create(title: 'Project Aurora');
+    final bodyMatch = await repository.create(
+      title: 'Meeting notes',
+      body: 'Discuss Project Aurora launch.',
+    );
+    await (database.update(database.noteRows)
+          ..where((row) => row.id.equals(titleMatch.id)))
+        .write(const NoteRowsCompanion(updatedAt: Value(1)));
+    await (database.update(database.noteRows)
+          ..where((row) => row.id.equals(bodyMatch.id)))
+        .write(const NoteRowsCompanion(updatedAt: Value(2)));
+
+    final results = await repository.search('Project Aurora').first;
+
+    expect(results.map((note) => note.id), [titleMatch.id, bodyMatch.id]);
+  });
+
   test('creates regular and daily notes in a Kotlin-style schema', () async {
     final root = await Directory.systemTemp.createTemp('specular-notes-test-');
     final database = AppDatabase.forTesting(NativeDatabase.memory());
