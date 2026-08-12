@@ -9,6 +9,7 @@ import '../domain/markdown.dart';
 
 const initialSyncCompletedStorageKey = 'initial_sync_completed';
 const syncDiagnosticsStorageKey = 'github_sync_diagnostics';
+const lastSuccessfulGitHubSyncStorageKey = 'last_successful_github_sync_at';
 
 /// A concrete unit of sync work reported to the foreground UI. The totals are
 /// based on the repository snapshot, rather than an indeterminate timer, so
@@ -350,67 +351,72 @@ class GitHubSyncEngine {
 
   static const _maxConcurrentChangeRetries = 1;
 
-  Future<SyncResult> sync({SyncProgressCallback? onProgress}) => _serialized(
-    () async {
-      _lastLoggedStage = null;
-      void report(SyncProgress progress) {
-        onProgress?.call(progress);
-        _recordDiagnostic(progress);
-      }
+  Future<SyncResult> sync({
+    SyncProgressCallback? onProgress,
+    bool forceFullRemoteScan = false,
+  }) => _serialized(() async {
+    _lastLoggedStage = null;
+    void report(SyncProgress progress) {
+      onProgress?.call(progress);
+      _recordDiagnostic(progress);
+    }
 
-      report(const SyncProgress(message: 'Connecting to GitHub…'));
-      final settings = await _settingsLoader();
-      if (settings == null) return const SyncResult.notConfigured();
-      final lease = await _repository.acquireSyncLease(
-        owner: 'github-${DateTime.now().microsecondsSinceEpoch}-$hashCode',
-      );
-      if (lease == null) {
-        return const SyncResult.success('Another sync is already running.');
-      }
-      final renewal = Timer.periodic(const Duration(minutes: 1), (_) {
-        unawaited(_repository.renewSyncLease(lease));
-      });
-      try {
-        for (var attempt = 0; ; attempt++) {
-          final snapshot = await _pull(settings, onProgress: report);
-          try {
-            final completedSnapshot = await _push(
-              settings,
-              snapshot,
-              onProgress: report,
-            );
-            await _saveCachedSnapshot(settings, completedSnapshot);
-            report(const SyncProgress(message: 'Sync complete'));
-            await _flushDiagnostics();
-            return const SyncResult.success('Synced with GitHub');
-          } on _ConcurrentRefUpdate {
-            if (attempt >= _maxConcurrentChangeRetries) rethrow;
-            report(
-              const SyncProgress(message: 'Remote changes detected; retrying…'),
-            );
-          }
+    report(const SyncProgress(message: 'Connecting to GitHub…'));
+    final settings = await _settingsLoader();
+    if (settings == null) return const SyncResult.notConfigured();
+    final lease = await _repository.acquireSyncLease(
+      owner: 'github-${DateTime.now().microsecondsSinceEpoch}-$hashCode',
+    );
+    if (lease == null) {
+      return const SyncResult.success('Another sync is already running.');
+    }
+    final renewal = Timer.periodic(const Duration(minutes: 1), (_) {
+      unawaited(_repository.renewSyncLease(lease));
+    });
+    try {
+      for (var attempt = 0; ; attempt++) {
+        final snapshot = await _pull(
+          settings,
+          onProgress: report,
+          forceFullRemoteScan: forceFullRemoteScan,
+        );
+        try {
+          final completedSnapshot = await _push(
+            settings,
+            snapshot,
+            onProgress: report,
+          );
+          await _saveCachedSnapshot(settings, completedSnapshot);
+          report(const SyncProgress(message: 'Sync complete'));
+          await _flushDiagnostics();
+          return const SyncResult.success('Synced with GitHub');
+        } on _ConcurrentRefUpdate {
+          if (attempt >= _maxConcurrentChangeRetries) rethrow;
+          report(
+            const SyncProgress(message: 'Remote changes detected; retrying…'),
+          );
         }
-      } on _ConcurrentRefUpdate catch (conflict) {
-        final message = _friendlyError(conflict.error);
-        _recordDiagnostic(SyncProgress(message: 'Failed: $message'));
-        await _flushDiagnostics();
-        return SyncResult.failure(message, conflict.error);
-      } on DioException catch (error) {
-        final message = _friendlyError(error);
-        _recordDiagnostic(SyncProgress(message: 'Failed: $message'));
-        await _flushDiagnostics();
-        return SyncResult.failure(message, error);
-      } catch (error) {
-        final message = 'Sync failed: $error';
-        _recordDiagnostic(SyncProgress(message: 'Failed: $message'));
-        await _flushDiagnostics();
-        return SyncResult.failure(message, error);
-      } finally {
-        renewal.cancel();
-        await _repository.releaseSyncLease(lease);
       }
-    },
-  );
+    } on _ConcurrentRefUpdate catch (conflict) {
+      final message = _friendlyError(conflict.error);
+      _recordDiagnostic(SyncProgress(message: 'Failed: $message'));
+      await _flushDiagnostics();
+      return SyncResult.failure(message, conflict.error);
+    } on DioException catch (error) {
+      final message = _friendlyError(error);
+      _recordDiagnostic(SyncProgress(message: 'Failed: $message'));
+      await _flushDiagnostics();
+      return SyncResult.failure(message, error);
+    } catch (error) {
+      final message = 'Sync failed: $error';
+      _recordDiagnostic(SyncProgress(message: 'Failed: $message'));
+      await _flushDiagnostics();
+      return SyncResult.failure(message, error);
+    } finally {
+      renewal.cancel();
+      await _repository.releaseSyncLease(lease);
+    }
+  });
 
   Future<T> _serialized<T>(Future<T> Function() operation) {
     final result = _tail.then((_) => operation());
@@ -485,7 +491,8 @@ class GitHubSyncEngine {
     }
   }
 
-  /// Confirms that a selected repository contains Markdown before saving it.
+  /// Confirms that a selected repository exists and has an initialized branch.
+  /// A repository with no Markdown is a valid first backup destination.
   Future<void> validateRepository(
     String token,
     GitHubRepository repository,
@@ -514,12 +521,46 @@ class GitHubSyncEngine {
       );
       final treeSha =
           (commit.data!['tree'] as Map<String, dynamic>)['sha'] as String;
-      final entries = await _allTreeEntries(settings, treeSha);
-      if (!entries.any(_isMarkdownNote)) {
-        throw GitHubRepositoryException(
-          '${repository.fullName} has no Markdown notes on ${repository.defaultBranch}.',
-        );
-      }
+      await _allTreeEntries(settings, treeSha);
+    } on DioException catch (error) {
+      throw GitHubRepositoryException(_friendlyError(error));
+    }
+  }
+
+  /// Creates an initialized private repository for the authenticated user.
+  /// `auto_init` gives the sync engine a branch to pull before its first push.
+  Future<GitHubRepository> createPrivateRepository(
+    String token, {
+    required String name,
+  }) async {
+    final normalizedToken = token.trim();
+    final normalizedName = name.trim();
+    if (normalizedToken.isEmpty || normalizedName.isEmpty) {
+      throw const GitHubRepositoryException('Enter a repository name first.');
+    }
+    try {
+      final response = await _dio.post<Map<String, dynamic>>(
+        '/user/repos',
+        data: {
+          'name': normalizedName,
+          'description': 'Private Markdown backup created by Specular.',
+          'private': true,
+          'auto_init': true,
+        },
+        options: Options(headers: {'Authorization': 'Bearer $normalizedToken'}),
+      );
+      final row = response.data!;
+      final owner = Map<String, dynamic>.from(
+        row['owner'] as Map? ?? const <String, dynamic>{},
+      );
+      return GitHubRepository(
+        id: row['id'] as int,
+        owner: owner['login'] as String,
+        name: row['name'] as String,
+        fullName: row['full_name'] as String,
+        defaultBranch: row['default_branch'] as String? ?? 'main',
+        isPrivate: true,
+      );
     } on DioException catch (error) {
       throw GitHubRepositoryException(_friendlyError(error));
     }
@@ -569,6 +610,7 @@ class GitHubSyncEngine {
   Future<_RemoteSnapshot> _pull(
     GitHubSettings settings, {
     SyncProgressCallback? onProgress,
+    bool forceFullRemoteScan = false,
   }) async {
     final cached = await _loadCachedSnapshot(settings);
     var branch = cached?.branch ?? await _defaultBranch(settings);
@@ -586,7 +628,8 @@ class GitHubSyncEngine {
         (ref.data!['object'] as Map<String, dynamic>)['sha'] as String;
     if (cached != null &&
         cached.branch == branch &&
-        cached.commitSha == commitSha) {
+        cached.commitSha == commitSha &&
+        !forceFullRemoteScan) {
       onProgress?.call(const SyncProgress(message: 'Remote is up to date…'));
       return cached.toSnapshot();
     }
@@ -596,6 +639,19 @@ class GitHubSyncEngine {
     );
     final treeSha =
         (commit.data!['tree'] as Map<String, dynamic>)['sha'] as String;
+    final changedFiles = cached == null || forceFullRemoteScan
+        ? null
+        : await _compareChangedFiles(settings, cached.commitSha, commitSha);
+    if (changedFiles != null) {
+      await _applyComparedFiles(settings, changedFiles, onProgress: onProgress);
+      final snapshot = _RemoteSnapshot(
+        branch: branch,
+        commitSha: commitSha,
+        treeSha: treeSha,
+      );
+      await _saveCachedSnapshot(settings, snapshot);
+      return snapshot;
+    }
     final entries = await _allTreeEntries(settings, treeSha);
     final markdownEntries = entries.where(_isMarkdownNote).toList();
     onProgress?.call(
@@ -616,29 +672,7 @@ class GitHubSyncEngine {
       // This also deliberately leaves unsynced local edits alone: their
       // lastRemoteSha still identifies the remote version they were based on.
       if (local?.lastRemoteSha != remoteSha) {
-        final content = await _blobContent(settings, remoteSha);
-        final parsed = MarkdownContract.parse(content);
-        final sameId = await _repository.get(
-          MarkdownContract.identityFor(path, parsed.id),
-        );
-        if (local?.isDirty == true &&
-            local?.isPendingDeletion != true &&
-            !MarkdownContract.differsOnlyBySummary(
-              local!.rawMarkdown,
-              content,
-            )) {
-          await _repository.preserveConflict(local);
-        }
-        if (sameId != null &&
-            sameId.path != path &&
-            sameId.isDirty &&
-            !MarkdownContract.differsOnlyBySummary(
-              sameId.rawMarkdown,
-              content,
-            )) {
-          await _repository.preserveConflict(sameId);
-        }
-        await _repository.applyRemote(path: path, sha: remoteSha, raw: content);
+        await _applyRemoteMarkdown(settings, path, remoteSha);
       }
       onProgress?.call(
         SyncProgress(
@@ -690,6 +724,152 @@ class GitHubSyncEngine {
     );
     await _saveCachedSnapshot(settings, snapshot);
     return snapshot;
+  }
+
+  /// Uses GitHub's compare response for ordinary fast-forward updates. GitHub
+  /// returns no more than 300 changed files here, so larger or non-linear
+  /// histories deliberately fall back to the complete tree scan below.
+  Future<List<Map<String, dynamic>>?> _compareChangedFiles(
+    GitHubSettings settings,
+    String base,
+    String head,
+  ) async {
+    try {
+      final response = await _dio.get<Map<String, dynamic>>(
+        '/repos/${settings.owner}/${settings.repo}/compare/$base...$head',
+        options: _options(settings),
+      );
+      final data = response.data!;
+      final files = data['files'];
+      if (data['status'] != 'ahead' || files is! List || files.length >= 300) {
+        return null;
+      }
+      final parsed = files
+          .whereType<Map>()
+          .map((file) => Map<String, dynamic>.from(file))
+          .toList(growable: false);
+      return parsed.length == files.length ? parsed : null;
+    } on DioException catch (error) {
+      // A force-push or an old cached commit can make the comparison
+      // unavailable. A complete tree scan remains correct in either case.
+      if (error.response?.statusCode == 404 ||
+          error.response?.statusCode == 422) {
+        return null;
+      }
+      rethrow;
+    }
+  }
+
+  Future<void> _applyComparedFiles(
+    GitHubSettings settings,
+    List<Map<String, dynamic>> files, {
+    SyncProgressCallback? onProgress,
+  }) async {
+    final notes = files
+        .where((file) => _isMarkdownPath(file['filename'] as String? ?? ''))
+        .toList(growable: false);
+    onProgress?.call(
+      SyncProgress(
+        message: 'Checking notes…',
+        completed: 0,
+        total: notes.length,
+        itemLabel: 'notes',
+      ),
+    );
+    final removedNotePaths = <String>[];
+    for (var index = 0; index < notes.length; index++) {
+      final file = notes[index];
+      final path = file['filename'] as String;
+      final status = file['status'] as String? ?? '';
+      if (status == 'removed') {
+        removedNotePaths.add(path);
+      } else {
+        final sha = file['sha'] as String?;
+        if (sha == null || sha.isEmpty) {
+          throw StateError('GitHub returned no blob SHA for $path');
+        }
+        await _applyRemoteMarkdown(settings, path, sha);
+        final previousPath = file['previous_filename'] as String?;
+        if (status == 'renamed' && previousPath != null) {
+          removedNotePaths.add(previousPath);
+        }
+      }
+      onProgress?.call(
+        SyncProgress(
+          message: 'Checking notes…',
+          completed: index + 1,
+          total: notes.length,
+          itemLabel: 'notes',
+        ),
+      );
+    }
+    for (final path in removedNotePaths) {
+      await _repository.reconcileRemoteRemoval(path);
+    }
+
+    final attachments = files
+        .where((file) => _isAttachmentPath(file['filename'] as String? ?? ''))
+        .where((file) => file['status'] != 'removed')
+        .toList(growable: false);
+    onProgress?.call(
+      SyncProgress(
+        message: 'Checking attachments…',
+        completed: 0,
+        total: attachments.length,
+        itemLabel: 'attachments',
+      ),
+    );
+    for (var index = 0; index < attachments.length; index++) {
+      final file = attachments[index];
+      final path = file['filename'] as String;
+      final sha = file['sha'] as String?;
+      if (sha == null || sha.isEmpty) {
+        throw StateError('GitHub returned no blob SHA for $path');
+      }
+      final local = await _repository.attachment(path);
+      if (local?.lastRemoteSha != sha && local?.isDirty != true) {
+        await _repository.applyRemoteAttachment(
+          path: path,
+          sha: sha,
+          bytes: await _blobBytes(settings, sha),
+          mimeType: _mimeFor(path),
+        );
+      }
+      onProgress?.call(
+        SyncProgress(
+          message: 'Checking attachments…',
+          completed: index + 1,
+          total: attachments.length,
+          itemLabel: 'attachments',
+        ),
+      );
+    }
+  }
+
+  Future<void> _applyRemoteMarkdown(
+    GitHubSettings settings,
+    String path,
+    String remoteSha,
+  ) async {
+    final local = await _repository.findByPath(path);
+    if (local?.lastRemoteSha == remoteSha) return;
+    final content = await _blobContent(settings, remoteSha);
+    final parsed = MarkdownContract.parse(content);
+    final sameId = await _repository.get(
+      MarkdownContract.identityFor(path, parsed.id),
+    );
+    if (local?.isDirty == true &&
+        local?.isPendingDeletion != true &&
+        !MarkdownContract.differsOnlyBySummary(local!.rawMarkdown, content)) {
+      await _repository.preserveConflict(local);
+    }
+    if (sameId != null &&
+        sameId.path != path &&
+        sameId.isDirty &&
+        !MarkdownContract.differsOnlyBySummary(sameId.rawMarkdown, content)) {
+      await _repository.preserveConflict(sameId);
+    }
+    await _repository.applyRemote(path: path, sha: remoteSha, raw: content);
   }
 
   Future<_RemoteSnapshot> _push(
@@ -997,17 +1177,20 @@ class GitHubSyncEngine {
 
   bool _isMarkdownNote(Map<String, dynamic> entry) {
     final path = entry['path'] as String? ?? '';
-    return entry['type'] == 'blob' &&
-        path.endsWith('.md') &&
-        !path.endsWith('.reflect.md');
+    return entry['type'] == 'blob' && _isMarkdownPath(path);
   }
 
   bool _isAttachment(Map<String, dynamic> entry) {
     final path = entry['path'] as String? ?? '';
-    return entry['type'] == 'blob' &&
-        (path.startsWith('attachments/') || path.startsWith('assets/')) &&
-        !path.endsWith('.reflect.md');
+    return entry['type'] == 'blob' && _isAttachmentPath(path);
   }
+
+  bool _isMarkdownPath(String path) =>
+      path.endsWith('.md') && !path.endsWith('.reflect.md');
+
+  bool _isAttachmentPath(String path) =>
+      (path.startsWith('attachments/') || path.startsWith('assets/')) &&
+      !path.endsWith('.reflect.md');
 
   String? _mimeFor(String path) => switch (path.toLowerCase().split('.').last) {
     'png' => 'image/png',

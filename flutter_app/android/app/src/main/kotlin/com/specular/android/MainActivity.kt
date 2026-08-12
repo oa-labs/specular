@@ -2,6 +2,7 @@ package com.specular.android
 
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import io.flutter.embedding.android.FlutterActivity
@@ -21,6 +22,7 @@ import com.specular.android.widget.TodoWidgetProvider
  */
 class MainActivity : FlutterActivity() {
     private var widgetChannel: MethodChannel? = null
+    private var pendingDocumentResult: MethodChannel.Result? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -56,6 +58,19 @@ class MainActivity : FlutterActivity() {
                 }
             }
         }
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, DOCUMENT_CHANNEL)
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "createBackupDocument" -> openDocumentCreator(
+                        call.argument<String>("name") ?: "specular-backup.zip", result)
+                    "openBackupDocument" -> openDocumentPicker(result)
+                    "writeDocument" -> copyToDocument(
+                        call.argument<String>("uri"), call.argument<String>("sourcePath"), result)
+                    "readDocument" -> copyFromDocument(
+                        call.argument<String>("uri"), call.argument<String>("destinationPath"), result)
+                    else -> result.notImplemented()
+                }
+            }
     }
 
     override fun getInitialRoute(): String? = routeFor(intent)
@@ -65,6 +80,77 @@ class MainActivity : FlutterActivity() {
         setIntent(intent)
         val route = routeFor(intent) ?: return
         widgetChannel?.invokeMethod("navigate", mapOf("route" to route))
+    }
+
+    @Deprecated("Deprecated in Android API")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != CREATE_DOCUMENT_REQUEST && requestCode != OPEN_DOCUMENT_REQUEST) return
+        val result = pendingDocumentResult ?: return
+        pendingDocumentResult = null
+        val uri = data?.data
+        if (resultCode != RESULT_OK || uri == null) {
+            result.success(null)
+            return
+        }
+        try {
+            contentResolver.takePersistableUriPermission(
+                uri, data.flags and (Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION))
+            result.success(uri.toString())
+        } catch (_: Exception) {
+            // A provider is allowed not to support persistent permissions; the
+            // URI still remains valid for this immediate export/import.
+            result.success(uri.toString())
+        }
+    }
+
+    private fun openDocumentCreator(name: String, result: MethodChannel.Result) {
+        if (pendingDocumentResult != null) {
+            result.error("busy", "Another document picker is open.", null)
+            return
+        }
+        pendingDocumentResult = result
+        startActivityForResult(Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "application/zip"
+            putExtra(Intent.EXTRA_TITLE, name)
+            addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
+        }, CREATE_DOCUMENT_REQUEST)
+    }
+
+    private fun openDocumentPicker(result: MethodChannel.Result) {
+        if (pendingDocumentResult != null) {
+            result.error("busy", "Another document picker is open.", null)
+            return
+        }
+        pendingDocumentResult = result
+        startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "application/zip"
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
+        }, OPEN_DOCUMENT_REQUEST)
+    }
+
+    private fun copyToDocument(uriValue: String?, sourcePath: String?, result: MethodChannel.Result) = try {
+        if (uriValue == null || sourcePath == null) throw IllegalArgumentException("Missing backup file.")
+        java.io.File(sourcePath).inputStream().use { input ->
+            contentResolver.openOutputStream(Uri.parse(uriValue))!!.use { output -> input.copyTo(output) }
+        }
+        result.success(null)
+    } catch (error: Exception) {
+        result.error("write_failed", error.message, null)
+    }
+
+    private fun copyFromDocument(uriValue: String?, destinationPath: String?, result: MethodChannel.Result) = try {
+        if (uriValue == null || destinationPath == null) throw IllegalArgumentException("Missing backup file.")
+        val destination = java.io.File(destinationPath)
+        destination.parentFile?.mkdirs()
+        contentResolver.openInputStream(Uri.parse(uriValue))!!.use { input ->
+            destination.outputStream().use { output -> input.copyTo(output) }
+        }
+        result.success(null)
+    } catch (error: Exception) {
+        result.error("read_failed", error.message, null)
     }
 
     private fun routeFor(intent: Intent): String? = when (intent.action) {
@@ -130,6 +216,9 @@ class MainActivity : FlutterActivity() {
     private companion object {
         const val CHANNEL = "com.specular.android/legacy"
         const val WIDGET_CHANNEL = "com.specular.android/widget"
+        const val DOCUMENT_CHANNEL = "com.specular.android/documents"
+        const val CREATE_DOCUMENT_REQUEST = 4901
+        const val OPEN_DOCUMENT_REQUEST = 4902
         const val MIGRATION_PREFS = "flutter_migration"
         const val MIGRATION_COMPLETE = "complete"
         const val DATABASE_REBUILT_FOR_FLUTTER = "database_rebuilt_for_flutter_v1"

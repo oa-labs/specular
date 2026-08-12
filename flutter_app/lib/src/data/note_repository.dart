@@ -20,6 +20,17 @@ class NoteRepository {
   final _uuid = const Uuid();
   final Future<void> Function()? _onLocalChange;
 
+  /// The canonical Markdown library, exposed read-only for portable backup.
+  Directory get notesRoot => _notesRoot;
+
+  Future<List<Note>> notesForBackup() async =>
+      (await (_db.select(_db.noteRows)
+                ..where((row) => row.isPendingDeletion.equals(false))
+                ..orderBy([(row) => OrderingTerm.asc(row.path)]))
+              .get())
+          .map(_toNote)
+          .toList();
+
   Stream<List<Note>> watchNotes() {
     final query = _db.select(_db.noteRows)
       ..where((row) => row.isPendingDeletion.equals(false))
@@ -86,6 +97,74 @@ class NoteRepository {
         await _db.delete(_db.syncOperations).go();
         await _db.delete(_db.noteRows).go();
       });
+    } finally {
+      await releaseSyncLease(lease);
+    }
+  }
+
+  /// Restores a validated portable backup into an empty, disconnected library.
+  /// Restored content is local-only and marked dirty so a later, explicit
+  /// GitHub setup can publish it normally.
+  Future<void> restorePortableBackup(
+    Directory source, {
+    required Map<String, bool> pinnedByPath,
+  }) async {
+    if (await hasLocalNotes()) {
+      throw StateError('Restore requires an empty note library.');
+    }
+    final lease = await acquireSyncLease(
+      owner: 'portable-restore-${DateTime.now().microsecondsSinceEpoch}',
+    );
+    if (lease == null) throw StateError('Wait for the current sync to finish.');
+    try {
+      await _notesRoot.create(recursive: true);
+      await for (final entity in source.list(recursive: true)) {
+        if (entity is! File) continue;
+        final relative = p
+            .relative(entity.path, from: source.path)
+            .replaceAll('\\', '/');
+        final destination = _file(relative);
+        await destination.parent.create(recursive: true);
+        await entity.copy(destination.path);
+      }
+      await importExistingFilesIfNeeded();
+      final notes = await notesForBackup();
+      await _db.transaction(() async {
+        for (final note in notes) {
+          await (_db.update(
+            _db.noteRows,
+          )..where((row) => row.id.equals(note.id))).write(
+            NoteRowsCompanion(
+              isPinned: Value(pinnedByPath[note.path] ?? false),
+              lastRemoteSha: const Value.absent(),
+              isDirty: const Value(true),
+            ),
+          );
+        }
+        await for (final entity in _notesRoot.list(recursive: true)) {
+          if (entity is! File) continue;
+          final relative = p
+              .relative(entity.path, from: _notesRoot.path)
+              .replaceAll('\\', '/');
+          if (!(relative.startsWith('attachments/') ||
+              relative.startsWith('assets/'))) {
+            continue;
+          }
+          final extension = p.extension(relative).toLowerCase();
+          await _db
+              .into(_db.attachments)
+              .insertOnConflictUpdate(
+                AttachmentsCompanion.insert(
+                  path: relative,
+                  mimeType: Value(_mimeFor(extension)),
+                  lastRemoteSha: const Value.absent(),
+                  isDirty: true,
+                  updatedAt: DateTime.now().millisecondsSinceEpoch,
+                ),
+              );
+        }
+      });
+      _scheduleSync();
     } finally {
       await releaseSyncLease(lease);
     }
@@ -338,25 +417,40 @@ class NoteRepository {
           ? note.pendingRenameFromPath ?? note.path
           : note.path;
       if (remotePaths.contains(expectedRemotePath)) continue;
-
-      // A pending deletion is already satisfied when its path is absent from
-      // the remote snapshot. This includes local-only conflict copies, which
-      // must not remain forever in the sync queue.
-      if (note.isPendingDeletion) {
-        await completeDeletion(note);
-        continue;
-      }
-      if (note.pendingRenameFromPath != null) continue;
-      if (note.isConflict) continue;
-
-      // A note with no remote SHA has never been published, so its absence from
-      // the remote tree is expected.
-      if (note.lastRemoteSha == null) {
-        continue;
-      }
-      if (note.isDirty) await preserveConflict(note);
-      await _removeStoredNote(note);
+      await _reconcileRemoteRemoval(note);
     }
+  }
+
+  /// Applies one known remote deletion without requiring a complete tree
+  /// scan. This is used by GitHub's compare response for fast incremental
+  /// pulls.
+  Future<void> reconcileRemoteRemoval(String remotePath) async {
+    final localNotes = (await _db.select(_db.noteRows).get()).map(_toNote);
+    for (final note in localNotes) {
+      final expectedRemotePath = note.isPendingDeletion
+          ? note.pendingRenameFromPath ?? note.path
+          : note.path;
+      if (expectedRemotePath != remotePath) continue;
+      await _reconcileRemoteRemoval(note);
+    }
+  }
+
+  Future<void> _reconcileRemoteRemoval(Note note) async {
+    // A pending deletion is already satisfied when its path is absent from
+    // the remote snapshot. This includes local-only conflict copies, which
+    // must not remain forever in the sync queue.
+    if (note.isPendingDeletion) {
+      await completeDeletion(note);
+      return;
+    }
+    if (note.pendingRenameFromPath != null) return;
+
+    // A note with no remote SHA has never been published, so its absence from
+    // the remote tree is expected. Clean conflict copies, however, have a
+    // remote SHA and should follow a remote deletion just like any other note.
+    if (note.lastRemoteSha == null) return;
+    if (note.isDirty) await preserveConflict(note);
+    await _removeStoredNote(note);
   }
 
   Future<void> setPinned(Note note, bool isPinned) =>

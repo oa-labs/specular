@@ -6,7 +6,7 @@ Specular synchronizes a local Markdown library directly with a GitHub repository
 
 - Use a repository on `github.com`; public and private repositories work.
 - Create a fine-grained GitHub personal access token with **Contents: Read and write** permission for that repository.
-- The repository must already contain at least one supported Markdown note. Specular supports notes at the root and under `notes/`, and daily notes under `daily/`.
+- An existing repository may be empty. Specular supports notes at the root and under `notes/`, and daily notes under `daily/`.
 
 OAuth is planned but is not currently available. A personal access token is the supported sign-in method.
 
@@ -16,6 +16,11 @@ OAuth is planned but is not currently available. A personal access token is the 
 2. Enter the GitHub personal access token.
 3. Choose **Choose repository**, select the desired repository, and allow Specular to validate that it contains Markdown notes.
 4. Select **Save and sync**.
+
+For a simpler first backup, use **Create a private GitHub backup** in Settings.
+It opens GitHub authorization, creates an initialized private repository in the
+user's personal account, and syncs the device library. The authorization screen
+explains GitHub's repository permission before leaving the app.
 
 The first sync imports remote notes and supported attachments into the app's private storage. Existing local notes are preserved; if they conflict with a remote file, Specular creates a conflict copy rather than overwriting them.
 
@@ -54,6 +59,9 @@ Review the conflict note, merge the desired content manually, and delete the ext
 ## Change repositories or rebuild the local mirror
 
 Specular never applies a newly selected repository on top of the existing local mirror. In **Settings**, choose the new repository and select **Switch repository**. Specular validates it first, then requires confirmation before it removes the device's local notes, attachments, search index, and pending sync state. The GitHub repositories are never changed by this action.
+
+Choose **Disconnect GitHub** to stop sync and remove GitHub credentials from
+this device without removing either the local library or the remote repository.
 
 Use **Clear local sync cache** to discard the current device mirror and import the configured repository again. Both actions warn when there are unsynced local edits; those edits must be synced first or will be lost.
 

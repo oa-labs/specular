@@ -72,7 +72,13 @@ void specularBackgroundDispatcher() {
       ).sync(onProgress: progressReporter.report);
       await progressReporter.flush();
       if (result.message == 'Synced with GitHub') {
-        await storage.write(key: initialSyncCompletedStorageKey, value: 'true');
+        await Future.wait([
+          storage.write(key: initialSyncCompletedStorageKey, value: 'true'),
+          storage.write(
+            key: lastSuccessfulGitHubSyncStorageKey,
+            value: DateTime.now().toUtc().toIso8601String(),
+          ),
+        ]);
       }
       return result.isSuccess || result.error == null;
     } finally {

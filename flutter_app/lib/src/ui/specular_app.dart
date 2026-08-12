@@ -13,6 +13,7 @@ import '../data/note_repository.dart';
 import '../ai/ai_summary_service.dart';
 import '../domain/note.dart';
 import '../sync/github_sync.dart';
+import '../sync/github_auth.dart';
 import '../voice/voice_service.dart';
 import '../platform/widget_bridge.dart';
 import 'screens.dart';
@@ -31,6 +32,9 @@ final syncEngineProvider = Provider<GitHubSyncEngine>(
     ref.watch(noteRepositoryProvider),
     ref.watch(secureStorageProvider),
   ),
+);
+final gitHubAuthorizationProvider = Provider<GitHubAuthorizationService>(
+  (ref) => GitHubAuthorizationService(ref.watch(secureStorageProvider)),
 );
 final syncControllerProvider = ChangeNotifierProvider<SyncController>(
   (ref) => SyncController(
@@ -67,6 +71,50 @@ final todosProvider = StreamProvider.family<List<TodoItem>, TodoFilter>(
 
 const lastRouteStorageKey = 'last_route';
 const themeModeStorageKey = 'theme_mode';
+const onboardingCompletedStorageKey = 'onboarding_completed';
+const backupPromptDismissedStorageKey = 'backup_prompt_dismissed';
+
+enum BackupStatusKind { localOnly, pending, backedUp }
+
+class BackupStatus {
+  const BackupStatus({
+    required this.kind,
+    this.repository,
+    this.lastSuccessfulSync,
+  });
+
+  final BackupStatusKind kind;
+  final String? repository;
+  final DateTime? lastSuccessfulSync;
+}
+
+Future<BackupStatus> readBackupStatus(
+  FlutterSecureStorage storage,
+  NoteRepository repository,
+) async {
+  final settings = await GitHubSettings.load(storage);
+  if (settings == null) {
+    return const BackupStatus(kind: BackupStatusKind.localOnly);
+  }
+  if (await repository.hasPendingSyncChanges()) {
+    return BackupStatus(
+      kind: BackupStatusKind.pending,
+      repository: '${settings.owner}/${settings.repo}',
+    );
+  }
+  final saved = await storage.read(key: lastSuccessfulGitHubSyncStorageKey);
+  if (saved == null) {
+    return BackupStatus(
+      kind: BackupStatusKind.pending,
+      repository: '${settings.owner}/${settings.repo}',
+    );
+  }
+  return BackupStatus(
+    kind: BackupStatusKind.backedUp,
+    repository: '${settings.owner}/${settings.repo}',
+    lastSuccessfulSync: DateTime.tryParse(saved),
+  );
+}
 
 class SyncUiState {
   const SyncUiState({
@@ -124,9 +172,9 @@ class SyncController extends ChangeNotifier {
     }
   }
 
-  Future<SyncResult> sync() async {
+  Future<SyncResult> sync({bool forceFullRemoteScan = false}) async {
     if (await GitHubSettings.load(_storage) == null) {
-      return _engine.sync();
+      return _engine.sync(forceFullRemoteScan: forceFullRemoteScan);
     }
     final hasCompletedInitialSync =
         await _storage.read(key: initialSyncCompletedStorageKey) == 'true';
@@ -142,11 +190,20 @@ class SyncController extends ChangeNotifier {
     );
     notifyListeners();
     try {
-      final result = await _engine.sync(onProgress: _updateProgress);
+      final result = await _engine.sync(
+        onProgress: _updateProgress,
+        forceFullRemoteScan: forceFullRemoteScan,
+      );
       if (!hasCompletedInitialSync && result.message == 'Synced with GitHub') {
         await _storage.write(
           key: initialSyncCompletedStorageKey,
           value: 'true',
+        );
+      }
+      if (result.isSuccess) {
+        await _storage.write(
+          key: lastSuccessfulGitHubSyncStorageKey,
+          value: DateTime.now().toUtc().toIso8601String(),
         );
       }
       return result;
@@ -413,8 +470,8 @@ class _SyncProgressSnackbar extends StatelessWidget {
     final progress = hasProgress ? (completed / total).clamp(0.0, 1.0) : null;
     final text = hasProgress
         ? switch (state.itemLabel) {
-            'notes' => 'Syncing $completed of $total notes',
-            'attachments' => 'Syncing $completed of $total attachments',
+            'notes' => 'Checking $completed of $total notes',
+            'attachments' => 'Checking $completed of $total attachments',
             'changes' => 'Uploading $completed of $total changes',
             _ => '$completed of $total complete',
           }

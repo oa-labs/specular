@@ -320,6 +320,93 @@ void main() {
     expect(github.treeReads, 1);
   });
 
+  test('uses GitHub compare for a small fast-forward remote update', () async {
+    final root = await Directory.systemTemp.createTemp('specular-github-test-');
+    final database = AppDatabase.forTesting(NativeDatabase.memory());
+    final repository = NoteRepository(
+      database,
+      Directory('${root.path}/notes'),
+    );
+    final note = await repository.create(
+      title: 'Checklist',
+      body: '+ [ ] Ship',
+    );
+    await repository.markSynced(note, 'base-blob');
+    final github = _FakeGitHub(path: note.path, content: note.rawMarkdown);
+    final cache = <String, String>{};
+    addTearDown(() async {
+      await database.close();
+      await root.delete(recursive: true);
+    });
+    final engine = GitHubSyncEngine(
+      repository,
+      const FlutterSecureStorage(),
+      dio: Dio()..httpClientAdapter = github.adapter,
+      settingsLoader: () async => const GitHubSettings(
+        token: 'test-token',
+        owner: 'owner',
+        repo: 'notes',
+      ),
+      cacheRead: (key) async => cache[key],
+      cacheWrite: (key, value) async => cache[key] = value,
+    );
+    expect((await engine.sync()).isSuccess, isTrue);
+
+    github.advance(note.rawMarkdown.replaceFirst('Ship', 'Done'));
+    expect((await engine.sync()).isSuccess, isTrue);
+
+    expect(github.compareRequests, 1);
+    expect(github.treeReads, 1);
+    expect((await repository.get(note.id))!.body, contains('Done'));
+  });
+
+  test(
+    'a full sync reconciles clean conflict copies when the head is cached',
+    () async {
+      final root = await Directory.systemTemp.createTemp(
+        'specular-github-test-',
+      );
+      final database = AppDatabase.forTesting(NativeDatabase.memory());
+      final repository = NoteRepository(
+        database,
+        Directory('${root.path}/notes'),
+      );
+      final note = await repository.create(
+        title: 'Checklist',
+        body: '+ [ ] Ship',
+      );
+      await repository.markSynced(note, 'base-blob');
+      final github = _FakeGitHub(path: note.path, content: note.rawMarkdown);
+      final cache = <String, String>{};
+      addTearDown(() async {
+        await database.close();
+        await root.delete(recursive: true);
+      });
+      final engine = GitHubSyncEngine(
+        repository,
+        const FlutterSecureStorage(),
+        dio: Dio()..httpClientAdapter = github.adapter,
+        settingsLoader: () async => const GitHubSettings(
+          token: 'test-token',
+          owner: 'owner',
+          repo: 'notes',
+        ),
+        cacheRead: (key) async => cache[key],
+        cacheWrite: (key, value) async => cache[key] = value,
+      );
+      expect((await engine.sync()).isSuccess, isTrue);
+      await repository.preserveConflict((await repository.get(note.id))!);
+      final conflict = (await repository.watchNotes().first).singleWhere(
+        (candidate) => candidate.isConflict,
+      );
+      await repository.markSynced(conflict, 'conflict-blob');
+
+      expect((await engine.sync(forceFullRemoteScan: true)).isSuccess, isTrue);
+      expect(await repository.get(conflict.id), isNull);
+      expect(github.treeReads, 2);
+    },
+  );
+
   test(
     'treats deletion of an already-absent remote note as complete',
     () async {
@@ -444,12 +531,15 @@ class _FakeGitHub {
   final _resume = Completer<void>();
   var _paused = false;
   var _refUpdateRejected = false;
+  var _remoteAdvanced = false;
+  String? _changedContent;
   var refUpdates = 0;
   var treeCreates = 0;
   var commitCreates = 0;
   var repositoryReads = 0;
   var refReads = 0;
   var treeReads = 0;
+  var compareRequests = 0;
   final contentsApiRequests = <String>[];
   final blobRequests = <String>[];
 
@@ -457,6 +547,11 @@ class _FakeGitHub {
   late final HttpClientAdapter adapter = _FakeAdapter(this);
 
   void resumeFirstRepositoryRead() => _resume.complete();
+
+  void advance(String changedContent) {
+    _remoteAdvanced = true;
+    _changedContent = changedContent;
+  }
 
   Future<ResponseBody> handle(RequestOptions request) async {
     if (pauseFirstRepositoryRead &&
@@ -482,14 +577,20 @@ class _FakeGitHub {
         requestPath == '/repos/owner/notes/git/trees/tree-1') {
       treeReads++;
     }
+    if (request.method == 'GET' && requestPath.contains('/compare/')) {
+      compareRequests++;
+    }
     var statusCode = 200;
     final response = switch ((request.method, requestPath)) {
       ('GET', '/repos/owner/notes') => {'default_branch': 'main'},
       ('GET', '/repos/owner/notes/git/ref/heads/main') => {
-        'object': {'sha': 'head-1'},
+        'object': {'sha': _remoteAdvanced ? 'head-2' : 'head-1'},
       },
       ('GET', '/repos/owner/notes/git/commits/head-1') => {
         'tree': {'sha': 'tree-1'},
+      },
+      ('GET', '/repos/owner/notes/git/commits/head-2') => {
+        'tree': {'sha': 'tree-2'},
       },
       ('GET', '/repos/owner/notes/git/trees/tree-1') => {
         'truncated': false,
@@ -499,6 +600,15 @@ class _FakeGitHub {
       },
       ('GET', '/repos/owner/notes/git/blobs/base-blob') => {
         'content': base64Encode(utf8.encode(content)),
+      },
+      ('GET', '/repos/owner/notes/git/blobs/changed-blob') => {
+        'content': base64Encode(utf8.encode(_changedContent ?? content)),
+      },
+      ('GET', '/repos/owner/notes/compare/head-1...head-2') => {
+        'status': 'ahead',
+        'files': [
+          {'filename': path, 'status': 'modified', 'sha': 'changed-blob'},
+        ],
       },
       ('POST', '/repos/owner/notes/git/blobs') => {'sha': 'new-blob'},
       ('POST', '/repos/owner/notes/git/trees') => () {

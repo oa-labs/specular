@@ -74,6 +74,29 @@ void main() {
     expect(await File('${root.path}/notes/${note.path}').exists(), isFalse);
   });
 
+  test('removes a clean conflict copy deleted remotely', () async {
+    final root = await Directory.systemTemp.createTemp('specular-notes-test-');
+    final database = AppDatabase.forTesting(NativeDatabase.memory());
+    addTearDown(() async {
+      await database.close();
+      await root.delete(recursive: true);
+    });
+    final repository = NoteRepository(
+      database,
+      Directory('${root.path}/notes'),
+    );
+    final note = await repository.create(title: 'Original');
+    await repository.preserveConflict(note);
+    final conflict = (await repository.watchNotes().first).singleWhere(
+      (candidate) => candidate.isConflict,
+    );
+    await repository.markSynced(conflict, 'remote-conflict-sha');
+
+    await repository.reconcileRemoteRemoval(conflict.path);
+
+    expect(await repository.get(conflict.id), isNull);
+  });
+
   test('clears the local mirror, index, and pending sync state', () async {
     final root = await Directory.systemTemp.createTemp('specular-notes-test-');
     final database = AppDatabase.forTesting(NativeDatabase.memory());

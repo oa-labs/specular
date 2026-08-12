@@ -4,17 +4,20 @@ import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'dart:io';
 import 'package:appflowy_editor/appflowy_editor.dart';
 
 import '../ai/ai_summary_service.dart';
+import '../backup/backup_archive.dart';
 import '../data/note_repository.dart';
 import '../domain/markdown.dart';
 import '../domain/note.dart';
 import '../sync/github_sync.dart';
 import '../sync/sync_scheduler.dart';
 import '../voice/voice_service.dart';
+import '../platform/document_bridge.dart';
 import 'note_body_editor.dart';
 import 'specular_app.dart';
 
@@ -90,6 +93,9 @@ class _NoteListScreenState extends ConsumerState<NoteListScreen> {
   var _loadedPreferences = false;
   var _createExpanded = false;
   var _openingToday = false;
+  var _onboardingComplete = false;
+  var _backupPromptDismissed = false;
+  BackupStatus? _backupStatus;
   final _summaryJobs = <String>{};
 
   @override
@@ -108,6 +114,46 @@ class _NoteListScreenState extends ConsumerState<NoteListScreen> {
           value?.split('\u001f').where((it) => it.isNotEmpty).toSet() ?? {};
       _loadedPreferences = true;
     });
+    _loadFirstRunState();
+    _refreshBackupStatus();
+  }
+
+  Future<void> _loadFirstRunState() async {
+    final storage = ref.read(secureStorageProvider);
+    final values = await Future.wait([
+      storage.read(key: onboardingCompletedStorageKey),
+      storage.read(key: backupPromptDismissedStorageKey),
+    ]);
+    if (!mounted) return;
+    setState(() {
+      _onboardingComplete = values[0] == 'true';
+      _backupPromptDismissed = values[1] == 'true';
+    });
+  }
+
+  Future<void> _refreshBackupStatus() async {
+    final status = await readBackupStatus(
+      ref.read(secureStorageProvider),
+      ref.read(noteRepositoryProvider),
+    );
+    if (!mounted) return;
+    setState(() => _backupStatus = status);
+  }
+
+  Future<void> _completeOnboarding({String? destination}) async {
+    await ref
+        .read(secureStorageProvider)
+        .write(key: onboardingCompletedStorageKey, value: 'true');
+    if (!mounted) return;
+    setState(() => _onboardingComplete = true);
+    context.push(destination ?? '/editor/new');
+  }
+
+  Future<void> _dismissBackupPrompt() async {
+    await ref
+        .read(secureStorageProvider)
+        .write(key: backupPromptDismissedStorageKey, value: 'true');
+    if (mounted) setState(() => _backupPromptDismissed = true);
   }
 
   Future<void> _saveDeselectedFolders() => ref
@@ -166,6 +212,7 @@ class _NoteListScreenState extends ConsumerState<NoteListScreen> {
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
       ..showSnackBar(SnackBar(content: Text(result.message)));
+    unawaited(_refreshBackupStatus());
   }
 
   Future<void> _generateMissingSummaries(List<Note> notes) async {
@@ -397,20 +444,54 @@ class _NoteListScreenState extends ConsumerState<NoteListScreen> {
           : RefreshIndicator(
               onRefresh: _refresh,
               child: notesState.when(
-                data: (_) => notes.isEmpty
-                    ? _RefreshableMessage(
-                        allNotes.isEmpty
-                            ? 'No notes yet. Tap the calendar to start today\'s note.'
-                            : 'No notes in selected folders. Open View options to change them.',
-                      )
-                    : ListView.separated(
-                        physics: const AlwaysScrollableScrollPhysics(),
-                        padding: const EdgeInsets.only(bottom: 88),
-                        itemCount: notes.length,
-                        separatorBuilder: (_, _) => const Divider(height: 1),
-                        itemBuilder: (_, index) =>
-                            _NoteTile(note: notes[index]),
+                data: (_) {
+                  if (allNotes.isEmpty && !_onboardingComplete) {
+                    return _FirstRunWelcome(
+                      onStart: () => _completeOnboarding(),
+                      onCreateBackup: () => _completeOnboarding(
+                        destination: '/settings?setup=guided',
                       ),
+                      onConnectExisting: () => _completeOnboarding(
+                        destination: '/settings?setup=existing',
+                      ),
+                    );
+                  }
+                  if (notes.isEmpty) {
+                    return _RefreshableMessage(
+                      allNotes.isEmpty
+                          ? 'No notes yet. Tap the calendar to start today\'s note.'
+                          : 'No notes in selected folders. Open View options to change them.',
+                    );
+                  }
+                  return ListView.separated(
+                    physics: const AlwaysScrollableScrollPhysics(),
+                    padding: const EdgeInsets.only(bottom: 88),
+                    itemCount:
+                        notes.length +
+                        ((_backupStatus?.kind == BackupStatusKind.localOnly &&
+                                !_backupPromptDismissed)
+                            ? 1
+                            : 0),
+                    separatorBuilder: (_, _) => const Divider(height: 1),
+                    itemBuilder: (_, index) {
+                      if (index == 0 &&
+                          _backupStatus?.kind == BackupStatusKind.localOnly &&
+                          !_backupPromptDismissed) {
+                        return _BackupStatusCard(
+                          status: _backupStatus!,
+                          onOpenSettings: () => context.push('/settings'),
+                          onDismiss: _dismissBackupPrompt,
+                        );
+                      }
+                      final noteIndex =
+                          _backupStatus?.kind == BackupStatusKind.localOnly &&
+                              !_backupPromptDismissed
+                          ? index - 1
+                          : index;
+                      return _NoteTile(note: notes[noteIndex]);
+                    },
+                  );
+                },
                 error: (error, _) =>
                     _RefreshableMessage('Unable to load notes: $error'),
                 loading: () => const Center(child: CircularProgressIndicator()),
@@ -489,6 +570,119 @@ class _RefreshableMessage extends StatelessWidget {
     ),
   );
 }
+
+class _FirstRunWelcome extends StatelessWidget {
+  const _FirstRunWelcome({
+    required this.onStart,
+    required this.onCreateBackup,
+    required this.onConnectExisting,
+  });
+
+  final VoidCallback onStart;
+  final VoidCallback onCreateBackup;
+  final VoidCallback onConnectExisting;
+
+  @override
+  Widget build(BuildContext context) => Center(
+    child: SingleChildScrollView(
+      padding: const EdgeInsets.all(24),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 480),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Write first. Back up when you’re ready.',
+              style: Theme.of(context).textTheme.headlineSmall,
+            ),
+            const SizedBox(height: 12),
+            const Text(
+              'Specular saves notes on this device and works offline. A GitHub '
+              'backup is optional, but protects notes when you change or lose a device.',
+            ),
+            const SizedBox(height: 24),
+            FilledButton.icon(
+              onPressed: onStart,
+              icon: const Icon(Icons.edit_note),
+              label: const Text('Start on this device'),
+            ),
+            const SizedBox(height: 12),
+            OutlinedButton.icon(
+              onPressed: onCreateBackup,
+              icon: const Icon(Icons.cloud_upload_outlined),
+              label: const Text('Create a private GitHub backup'),
+            ),
+            const SizedBox(height: 12),
+            TextButton.icon(
+              onPressed: onConnectExisting,
+              icon: const Icon(Icons.folder_open),
+              label: const Text('Connect an existing repository'),
+            ),
+          ],
+        ),
+      ),
+    ),
+  );
+}
+
+class _BackupStatusCard extends StatelessWidget {
+  const _BackupStatusCard({
+    required this.status,
+    required this.onOpenSettings,
+    required this.onDismiss,
+  });
+
+  final BackupStatus status;
+  final VoidCallback onOpenSettings;
+  final VoidCallback onDismiss;
+
+  @override
+  Widget build(BuildContext context) => Material(
+    color: Theme.of(context).colorScheme.secondaryContainer,
+    child: Padding(
+      padding: const EdgeInsets.fromLTRB(16, 12, 8, 12),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Padding(
+            padding: EdgeInsets.only(top: 2),
+            child: Icon(Icons.cloud_off_outlined),
+          ),
+          const SizedBox(width: 12),
+          const Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Your notes are not backed up'),
+                SizedBox(height: 2),
+                Text('Set up GitHub backup any time from Settings.'),
+              ],
+            ),
+          ),
+          PopupMenuButton<_BackupCardAction>(
+            onSelected: (action) {
+              if (action == _BackupCardAction.settings) onOpenSettings();
+              if (action == _BackupCardAction.dismiss) onDismiss();
+            },
+            itemBuilder: (_) => const [
+              PopupMenuItem(
+                value: _BackupCardAction.settings,
+                child: Text('Set up backup'),
+              ),
+              PopupMenuItem(
+                value: _BackupCardAction.dismiss,
+                child: Text('Dismiss'),
+              ),
+            ],
+          ),
+        ],
+      ),
+    ),
+  );
+}
+
+enum _BackupCardAction { settings, dismiss }
 
 class _NoteTile extends StatelessWidget {
   const _NoteTile({required this.note});
@@ -1909,6 +2103,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   var _configuredOwner = '';
   var _configuredRepo = '';
   String? _repositoryError;
+  BackupStatus? _backupStatus;
 
   bool get _isChangingRepository =>
       _configuredOwner.isNotEmpty &&
@@ -1945,6 +2140,10 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         _defaultVoiceCleanupModel;
     _usePreviewKey =
         await storage.read(key: 'voice_use_preview_key') != 'false';
+    _backupStatus = await readBackupStatus(
+      storage,
+      ref.read(noteRepositoryProvider),
+    );
     if (mounted) setState(() {});
   }
 
@@ -1960,6 +2159,11 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       await _persistSettings();
       final sync = await ref.read(syncControllerProvider).sync();
       if (mounted) {
+        _backupStatus = await readBackupStatus(
+          ref.read(secureStorageProvider),
+          ref.read(noteRepositoryProvider),
+        );
+        if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Settings saved. ${sync.message}')),
         );
@@ -2006,6 +2210,180 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     await SyncScheduler.setInterval(storage, _syncIntervalMinutes);
     _configuredOwner = _owner.text.trim();
     _configuredRepo = _repo.text.trim();
+  }
+
+  Future<void> _disconnectGitHub() async {
+    if (_saving) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Disconnect GitHub?'),
+        content: const Text(
+          'Notes will stay on this device. Specular will stop syncing and will not change the GitHub repository.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton.tonal(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Disconnect'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    setState(() => _saving = true);
+    try {
+      final storage = ref.read(secureStorageProvider);
+      await Future.wait([
+        storage.delete(key: 'github_token'),
+        storage.delete(key: 'repo_owner'),
+        storage.delete(key: 'repo_name'),
+        storage.delete(key: initialSyncCompletedStorageKey),
+        storage.delete(key: lastSuccessfulGitHubSyncStorageKey),
+      ]);
+      _token.clear();
+      _owner.clear();
+      _repo.clear();
+      _configuredOwner = '';
+      _configuredRepo = '';
+      _backupStatus = const BackupStatus(kind: BackupStatusKind.localOnly);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('GitHub disconnected. Local notes were kept.'),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  Future<void> _exportPortableBackup() async {
+    if (_saving) return;
+    setState(() => _saving = true);
+    final bridge = DocumentBridge();
+    File? temporary;
+    try {
+      final directory = await getTemporaryDirectory();
+      temporary = File(
+        '${directory.path}/specular-backup-${DateTime.now().millisecondsSinceEpoch}.zip',
+      );
+      await BackupArchiveService(
+        ref.read(noteRepositoryProvider),
+      ).exportTo(temporary);
+      final uri = await bridge.createBackupDocument();
+      if (uri == null) return;
+      await bridge.writeDocument(uri: uri, sourcePath: temporary.path);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Portable backup exported.')),
+        );
+      }
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Unable to export backup: $error')),
+        );
+      }
+    } finally {
+      if (temporary != null && await temporary.exists()) {
+        await temporary.delete();
+      }
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  Future<void> _restorePortableBackup() async {
+    if (_saving) return;
+    final repository = ref.read(noteRepositoryProvider);
+    if (await repository.hasLocalNotes() || _configuredOwner.isNotEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Restore requires an empty library with GitHub disconnected.',
+            ),
+          ),
+        );
+      }
+      return;
+    }
+    if (await repository.isGitHubSyncActive()) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Wait for the current sync to finish before restoring.',
+            ),
+          ),
+        );
+      }
+      return;
+    }
+    if (!mounted) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Restore a portable backup?'),
+        content: const Text(
+          'Choose a Specular backup archive. Restored notes remain local until you set up backup again.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Choose backup'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    setState(() => _saving = true);
+    Directory? temporary;
+    try {
+      final uri = await DocumentBridge().openBackupDocument();
+      if (uri == null) return;
+      final root = await getTemporaryDirectory();
+      temporary = await Directory(
+        '${root.path}/specular-restore-${DateTime.now().millisecondsSinceEpoch}',
+      ).create();
+      final archive = File('${temporary.path}/backup.zip');
+      await DocumentBridge().readDocument(
+        uri: uri,
+        destinationPath: archive.path,
+      );
+      final service = BackupArchiveService(repository);
+      final prepared = await service.prepareRestore(
+        archive,
+        Directory('${temporary.path}/staging'),
+      );
+      await service.restore(prepared);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Backup restored. Set up backup when you are ready.'),
+          ),
+        );
+      }
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Unable to restore backup: $error')),
+        );
+      }
+    } finally {
+      if (temporary != null && await temporary.exists()) {
+        await temporary.delete(recursive: true);
+      }
+      if (mounted) setState(() => _saving = false);
+    }
   }
 
   Future<bool> _confirmCacheClear({required bool switching}) async {
@@ -2163,6 +2541,23 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     );
   }
 
+  Future<void> _runFullGitHubSync() async {
+    if (_saving) return;
+    setState(() => _saving = true);
+    try {
+      final result = await ref
+          .read(syncControllerProvider)
+          .sync(forceFullRemoteScan: true);
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(result.message)));
+      }
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
   Future<void> _chooseRepository() async {
     if (_loadingRepositories || _selectingRepository) return;
     final token = _token.text.trim();
@@ -2205,7 +2600,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 const Padding(
                   padding: EdgeInsets.fromLTRB(24, 0, 24, 12),
                   child: Text(
-                    'Only repositories containing Markdown notes can be selected.',
+                    'Choose a repository for your Markdown notes. Empty repositories are ready for your first sync.',
                   ),
                 ),
                 Expanded(
@@ -2261,6 +2656,107 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     }
   }
 
+  Future<String?> _askForRepositoryName() async {
+    final controller = TextEditingController(text: 'specular-notes');
+    final value = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Name your private backup'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          decoration: const InputDecoration(
+            labelText: 'Repository name',
+            helperText: 'Only you can see this repository unless you share it.',
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () =>
+                Navigator.pop(dialogContext, controller.text.trim()),
+            child: const Text('Create backup'),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+    return value?.isEmpty == true ? null : value;
+  }
+
+  Future<void> _createPrivateBackup() async {
+    if (_saving) return;
+    final auth = ref.read(gitHubAuthorizationProvider);
+    if (!auth.isConfigured) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'GitHub sign-in is not enabled in this build. Use a personal access token below.',
+          ),
+        ),
+      );
+      return;
+    }
+    final approved = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Connect GitHub backup'),
+        content: const Text(
+          'GitHub will ask you to authorize Specular to create and sync a private repository. '
+          'This uses GitHub’s repository access permission. You can disconnect at any time.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Continue to GitHub'),
+          ),
+        ],
+      ),
+    );
+    if (approved != true || !mounted) return;
+    setState(() => _saving = true);
+    try {
+      final token = await auth.authorize();
+      if (!mounted) return;
+      setState(() => _saving = false);
+      final name = await _askForRepositoryName();
+      if (name == null || !mounted) return;
+      setState(() => _saving = true);
+      final repository = await ref
+          .read(syncEngineProvider)
+          .createPrivateRepository(token, name: name);
+      _token.text = token;
+      _owner.text = repository.owner;
+      _repo.text = repository.name;
+      await _persistSettings();
+      final result = await ref.read(syncControllerProvider).sync();
+      _backupStatus = await readBackupStatus(
+        ref.read(secureStorageProvider),
+        ref.read(noteRepositoryProvider),
+      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Private backup created. ${result.message}')),
+        );
+      }
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Unable to create GitHub backup: $error')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
   @override
   void dispose() {
     _token.dispose();
@@ -2297,6 +2793,54 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               subtitle: const Text('Turn off for light mode.'),
             ),
             const Divider(),
+            if (_backupStatus != null)
+              ListTile(
+                leading: Icon(switch (_backupStatus!.kind) {
+                  BackupStatusKind.localOnly => Icons.cloud_off_outlined,
+                  BackupStatusKind.pending => Icons.cloud_upload_outlined,
+                  BackupStatusKind.backedUp => Icons.cloud_done_outlined,
+                }),
+                title: Text(switch (_backupStatus!.kind) {
+                  BackupStatusKind.localOnly => 'Not backed up',
+                  BackupStatusKind.pending => 'Backup pending',
+                  BackupStatusKind.backedUp => 'Backed up',
+                }),
+                subtitle: Text(
+                  _backupStatus!.kind == BackupStatusKind.localOnly
+                      ? 'Notes are currently stored only on this device.'
+                      : _backupStatus!.repository ?? '',
+                ),
+              ),
+            if (_configuredOwner.isEmpty)
+              FilledButton.icon(
+                onPressed: _saving ? null : _createPrivateBackup,
+                icon: const Icon(Icons.cloud_upload_outlined),
+                label: const Text('Create a private GitHub backup'),
+              ),
+            if (_configuredOwner.isNotEmpty)
+              OutlinedButton.icon(
+                onPressed: _saving ? null : _disconnectGitHub,
+                icon: const Icon(Icons.link_off),
+                label: const Text('Disconnect GitHub'),
+              ),
+            const SizedBox(height: 8),
+            OutlinedButton.icon(
+              onPressed: _saving ? null : _exportPortableBackup,
+              icon: const Icon(Icons.save_alt_outlined),
+              label: const Text('Export portable backup'),
+            ),
+            if (_configuredOwner.isEmpty)
+              OutlinedButton.icon(
+                onPressed: _saving ? null : _restorePortableBackup,
+                icon: const Icon(Icons.restore),
+                label: const Text('Restore portable backup'),
+              ),
+            const SizedBox(height: 12),
+            Text(
+              'Advanced: use a personal access token',
+              style: Theme.of(context).textTheme.titleSmall,
+            ),
+            const SizedBox(height: 8),
             TextField(
               controller: _token,
               obscureText: true,
@@ -2378,6 +2922,15 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                     'The most recent 30 phase and error messages.',
                   ),
                   onTap: _showSyncLog,
+                ),
+                ListTile(
+                  leading: const Icon(Icons.manage_search_outlined),
+                  title: const Text('Full GitHub sync'),
+                  subtitle: const Text(
+                    'Check every remote note and apply remote deletions.',
+                  ),
+                  enabled: !_saving,
+                  onTap: _saving ? null : _runFullGitHubSync,
                 ),
               ],
             ),

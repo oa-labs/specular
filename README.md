@@ -86,13 +86,16 @@ Open Specular and create a note, a to-do, or today’s daily note. The app works
 locally without a GitHub account; your changes remain on the device until sync is
 configured.
 
-### 4. Connect GitHub (optional)
+### 4. Back up with GitHub (optional)
 
-1. Create a GitHub fine-grained personal access token with **Contents: Read and
-   write** access to the notes repository.
-2. In Specular, open **Settings**.
-3. Enter the token and choose the repository, or enter its owner and name.
-4. Select **Save and sync**.
+Open **Settings** and choose **Create a private GitHub backup** to authorize
+GitHub and create an initialized private repository. The app will upload the
+notes already on your device. This guided flow needs a build configured with
+Specular's GitHub OAuth client.
+
+Technical users can instead enter a GitHub fine-grained personal access token
+with **Contents: Read and write** access and choose an existing repository.
+Empty repositories are supported; Specular adds notes on the first sync.
 
 The first sync imports the remote notes. Thereafter, changes are pushed during
 sync and background sync runs at the cadence selected in Settings (15 minutes
@@ -184,6 +187,9 @@ app to preserve its data.
 - Specular has no Play Services, Firebase, or telemetry dependencies.
 - Notes live in the app’s local storage and, when enabled, the GitHub repository
   you selected.
+- A local-only library is not a device-recovery backup. In **Settings** you can
+  export a portable `.zip` backup and restore it into an empty, disconnected
+  Specular library.
 - GitHub and AI credentials are stored in Android secure storage.
 - Network access is used for GitHub sync and the optional AI/voice requests.
 
