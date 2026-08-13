@@ -921,10 +921,12 @@ class NoteDetailScreen extends ConsumerWidget {
                 onPressed: () => _generateSummary(context, ref, note),
                 icon: const Icon(Icons.auto_awesome),
               ),
-              IconButton(
+              TextButton.icon(
+                key: const ValueKey('edit-note'),
                 onPressed: () =>
                     context.push('/editor/${Uri.encodeComponent(note.id)}'),
-                icon: const Icon(Icons.edit),
+                icon: const Icon(Icons.edit_outlined),
+                label: const Text('Edit'),
               ),
               PopupMenuButton<_NoteAction>(
                 onSelected: (action) {
@@ -1129,11 +1131,27 @@ class _NotePreviewBody extends ConsumerWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(
-                'Summary',
-                style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                  color: Theme.of(context).colorScheme.primary,
-                ),
+              Row(
+                children: [
+                  Text(
+                    'Summary',
+                    style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                      color: Theme.of(context).colorScheme.primary,
+                    ),
+                  ),
+                  const Spacer(),
+                  Semantics(
+                    label: 'Read-only preview. Use Edit to change this note.',
+                    child: Tooltip(
+                      message:
+                          'Read-only preview. Use Edit to change this note.',
+                      child: Icon(
+                        Icons.visibility_outlined,
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ),
+                ],
               ),
               const SizedBox(height: 4),
               Text(
@@ -1610,6 +1628,13 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
     );
     return Scaffold(
       appBar: AppBar(
+        title: Text(
+          widget.newTodo
+              ? 'New to-do'
+              : _note == null
+              ? 'New note'
+              : 'Edit note',
+        ),
         actions: [
           IconButton(
             tooltip: 'Insert wiki link',
@@ -1634,11 +1659,16 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
                   )
                 : const Icon(Icons.mic),
           ),
-          IconButton(
+          TextButton.icon(
+            key: const ValueKey('save-note'),
             onPressed: _saving ? null : _save,
             icon: _saving
-                ? const CircularProgressIndicator()
+                ? const SizedBox.square(
+                    dimension: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
                 : const Icon(Icons.done),
+            label: const Text('Done'),
           ),
         ],
       ),
@@ -1648,6 +1678,40 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
               padding: const EdgeInsets.all(16),
               child: Column(
                 children: [
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 10,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Theme.of(context).colorScheme.primaryContainer,
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(
+                          Icons.edit_outlined,
+                          color: Theme.of(
+                            context,
+                          ).colorScheme.onPrimaryContainer,
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
+                            'Editing — changes are saved when you tap Done.',
+                            style: Theme.of(context).textTheme.bodyMedium
+                                ?.copyWith(
+                                  color: Theme.of(
+                                    context,
+                                  ).colorScheme.onPrimaryContainer,
+                                ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 12),
                   TextField(
                     controller: _title,
                     decoration: const InputDecoration(labelText: 'Title'),
