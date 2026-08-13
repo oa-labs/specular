@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:specular/src/domain/note.dart';
+import 'package:specular/src/sync/github_sync.dart';
 import 'package:specular/src/ui/screens.dart';
 
 void main() {
@@ -46,6 +47,15 @@ void main() {
         deselectedFolders: const {},
       ).map((note) => note.title),
       ['Alpha', 'Zulu', 'Newest', 'Middle'],
+    );
+  });
+
+  test('confirms a refresh when GitHub has no new changes', () {
+    expect(
+      syncRefreshMessage(
+        const SyncResult.success('Synced with GitHub', noRemoteChanges: true),
+      ),
+      'Checked GitHub — no new changes found.',
     );
   });
 

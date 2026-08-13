@@ -1,5 +1,6 @@
 import 'package:appflowy_editor/appflowy_editor.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:specular/src/data/note_repository.dart';
 import 'package:specular/src/domain/note.dart';
 import 'package:specular/src/ui/note_body_editor.dart';
 
@@ -24,6 +25,33 @@ Note _note({required String title, required String body}) => Note(
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+
+  test(
+    'inserts a staged image when the editor selection is unavailable',
+    () async {
+      final editorState = EditorState(
+        document: Document.blank(withInitialText: true),
+      );
+      addTearDown(editorState.dispose);
+
+      await NoteBodyEditorCodec.insertStagedImage(
+        editorState,
+        const StagedImage(
+          localPath: '/temporary/image.jpg',
+          attachmentPath: 'attachments/image.jpg',
+          mimeType: 'image/jpeg',
+        ),
+        'attachments/image.jpg',
+      );
+
+      expect(
+        NoteBodyEditorCodec.export(editorState),
+        '![](attachments/image.jpg)',
+      );
+      expect(editorState.selection?.start.path, [1]);
+      expect(editorState.getNodeAtPath([1])?.type, ParagraphBlockKeys.type);
+    },
+  );
 
   test('excludes the matching persisted title from the editable body', () {
     final note = _note(title: 'Project', body: '# Project\n\nBody text\n');

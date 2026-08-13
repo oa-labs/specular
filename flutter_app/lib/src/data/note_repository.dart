@@ -943,12 +943,9 @@ class NoteRepository {
         value.startsWith('file:')) {
       return null;
     }
-    final base = value.startsWith('attachments/') || value.startsWith('assets/')
-        ? ''
-        : p.dirname(notePath);
-    final resolved = p
-        .normalize(p.join(base == '.' ? '' : base, value))
-        .replaceAll('\\', '/');
+    // Reflect resolves attachment links from the repository root. Do not
+    // support note-relative paths: they do not load in Reflect.
+    final resolved = p.normalize(value).replaceAll('\\', '/');
     if (!(resolved.startsWith('attachments/') ||
             resolved.startsWith('assets/')) ||
         resolved.endsWith('.reflect.md')) {
@@ -958,11 +955,11 @@ class NoteRepository {
     return await file.exists() ? file : null;
   }
 
-  String attachmentReference(String notePath, String attachmentPath) {
-    final parent = p.dirname(notePath);
-    return p
-        .relative(attachmentPath, from: parent == '.' ? '' : parent)
-        .replaceAll('\\', '/');
+  String attachmentReference(String _, String attachmentPath) {
+    // Reflect resolves attachment links from the repository root rather than
+    // from the Markdown file's directory. Keep the reference repository-root
+    // relative so images created in nested note folders load in Reflect.
+    return attachmentPath.replaceAll('\\', '/');
   }
 
   Future<void> updateSummary(Note note, String summary) async {

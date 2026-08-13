@@ -13,6 +13,79 @@ import 'package:specular/src/ui/specular_app.dart';
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
+  testWidgets('opens a note image in a pinch-to-zoom viewer', (tester) async {
+    late Directory root;
+    late AppDatabase database;
+    late NoteRepository repository;
+    late String noteId;
+
+    await tester.runAsync(() async {
+      root = await Directory.systemTemp.createTemp('specular-image-test-');
+      database = AppDatabase.forTesting(NativeDatabase.memory());
+      repository = NoteRepository(database, Directory('${root.path}/notes'));
+      await repository.applyRemote(
+        path: 'notes/photo.md',
+        sha: 'note-sha',
+        raw: '# Photo\n\n![](attachments/photo.png)\n',
+      );
+      await repository.applyRemoteAttachment(
+        path: 'attachments/photo.png',
+        sha: 'image-sha',
+        bytes: await File(
+          'android/app/src/main/res/mipmap-mdpi/ic_launcher.png',
+        ).readAsBytes(),
+      );
+      expect(
+        await repository.resolveAttachment(
+          'notes/photo.md',
+          'attachments/photo.png',
+        ),
+        isNotNull,
+      );
+      noteId = (await repository.findByPath('notes/photo.md'))!.id;
+    });
+    addTearDown(() async {
+      await database.close();
+      await root.delete(recursive: true);
+    });
+
+    final router = GoRouter(
+      initialLocation: '/note/${Uri.encodeComponent(noteId)}',
+      routes: [
+        GoRoute(
+          path: '/note/:id',
+          builder: (_, state) =>
+              NoteDetailScreen(id: state.pathParameters['id']!),
+        ),
+      ],
+    );
+    addTearDown(router.dispose);
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [noteRepositoryProvider.overrideWithValue(repository)],
+        child: MaterialApp.router(routerConfig: router),
+      ),
+    );
+    await tester.pump();
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 10)),
+    );
+    await tester.pump();
+
+    expect(find.text('Photo'), findsOneWidget);
+    expect(find.byType(FutureBuilder<File?>), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('open-image-preview')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Image'), findsOneWidget);
+    expect(find.byType(InteractiveViewer), findsOneWidget);
+
+    // Drift schedules stream cleanup on the next event-loop turn.
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump(const Duration(milliseconds: 1));
+  });
+
   testWidgets('opens a relative Markdown link from the note preview', (
     tester,
   ) async {

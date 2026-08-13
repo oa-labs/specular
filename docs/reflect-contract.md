@@ -9,7 +9,7 @@ This is the source of truth for the Android ↔ Reflect sync. Derived from a liv
 | `*.md` at root and `notes/**/*.md` | User notes | Root notes and `notes/2026Goals.md` |
 | `daily/YYYY-MM-DD.md` | Daily notes | `daily/2026-07-28.md` |
 | `notes/how-to-use-reflect.md` | Pinned help doc, also the wikilink syntax spec | — |
-| `attachments/**` | Established image attachment store | `![](../attachments/image_1.png)` from `notes/...` |
+| `attachments/**` | Established image attachment store | `![](attachments/image_1.png)` |
 | `assets/pasted-*` | Newer image attachment store | `![](assets/pasted-1785183966286.png)` |
 | `assets/*.reflect.md` | Generated metadata sidecar for an asset — **not a note** | Image description/summary metadata |
 | `/.reflect/` | Local rebuildable index/cache — **never committed** (`.gitignore`) | — |
@@ -30,7 +30,7 @@ aliases:
 - Email: …
 - Phone: …
 
-Body markdown — may contain [[Wiki Links]] and image links such as `![](../attachments/image.png)` or `![](assets/pasted-….png)`
+Body markdown — may contain [[Wiki Links]] and image links such as `![](attachments/image.png)` or `![](assets/pasted-….png)`
 ```
 
 - `id` is ULID-like, canonical identity. Filename is a slug of title and may change — **key storage on `id`**, not filename.
@@ -38,7 +38,7 @@ Body markdown — may contain [[Wiki Links]] and image links such as `![](../att
 - Title = first `# ` line.
 - Daily stub (`daily/2026-07-28.md`) observed without frontmatter — treat path as id for dailies if no `id` present; on creation Android will write frontmatter with generated `id`.
 - Wikilink syntax: `[[Title]]` per `notes/how-to-use-reflect.md`. No `[[` found in bodies yet but spec is confirmed.
-- Image syntax: standard markdown. Resolve links relative to the note path; support both `attachments/` and `assets/`. Root-style `assets/...` links also occur in notes nested under `notes/`.
+- Image syntax: standard markdown. Reflect resolves `attachments/...` and `assets/...` from the repository root, even when the note is nested. Use repository-root paths; note-relative image paths are unsupported.
 
 ## Git Behavior
 
@@ -50,5 +50,5 @@ Body markdown — may contain [[Wiki Links]] and image links such as `![](../att
 
 - Local DB (Room) primary key = `id` (or `daily/YYYY-MM-DD` for dailies without id). Maintain `filename ↔ id` index and `lastRemoteSha` per file for ETag/sha concurrency.
 - Search index (FTS) over title + body; links are not resolved in v1 (backlinks deferred).
-- Attachments: read both `attachments/` and `assets/`; create new mobile images in `attachments/<uuid>.<ext>`, then insert a path relative to the note. Track binary SHAs separately, download referenced files through Git Data blobs, and upload them before Markdown that references them. Never index `*.reflect.md` asset sidecars as notes.
+- Attachments: read both `attachments/` and `assets/`; create new mobile images in `attachments/<uuid>.<ext>`, then insert the repository-root `attachments/<uuid>.<ext>` path. Track binary SHAs separately, download referenced files through Git Data blobs, and upload them before Markdown that references them. Never index `*.reflect.md` asset sidecars as notes.
 - Conflicts: if local dirty + remote `sha` changed, write `Name (conflict YYYY-MM-DD).md` and surface banner.

@@ -93,13 +93,59 @@ class NoteBodyEditorCodec {
     StagedImage image,
     String markdownReference,
   ) async {
-    await editorState.insertImageNode(image.localPath);
-    final inserted = editorState.document.root.children.lastWhere(
-      (node) => node.type == ImageBlockKeys.type,
+    // The image picker can clear the editor's selection while it is open.
+    // AppFlowy's insertImageNode then silently returns without inserting
+    // anything, so choose the current block when available or append to the
+    // document as a dependable fallback.
+    final selectedNode = editorState.selection == null
+        ? null
+        : editorState.getNodeAtPath(editorState.selection!.end.path);
+    final insertionNode =
+        selectedNode ??
+        (editorState.document.root.children.isEmpty
+            ? null
+            : editorState.document.root.children.last);
+    if (insertionNode == null) {
+      throw StateError('The note has no block where an image can be inserted.');
+    }
+
+    final replacesEmptyParagraph =
+        insertionNode.type == ParagraphBlockKeys.type &&
+        (insertionNode.delta?.isEmpty ?? false);
+    final insertedPath = replacesEmptyParagraph
+        ? insertionNode.path
+        : insertionNode.path.next;
+    final editablePath = insertedPath.next;
+    final transaction = editorState.transaction;
+    if (replacesEmptyParagraph) {
+      transaction
+        ..insertNode(insertedPath, imageNode(url: image.localPath))
+        ..deleteNode(insertionNode)
+        ..insertNode(editablePath, paragraphNode());
+    } else {
+      transaction
+        ..insertNode(insertedPath, imageNode(url: image.localPath))
+        ..insertNode(editablePath, paragraphNode());
+    }
+    transaction.afterSelection = Selection.collapsed(
+      Position(path: editablePath, offset: 0),
     );
-    final transaction = editorState.transaction
-      ..updateNode(inserted, {_markdownImageUrl: markdownReference});
     await editorState.apply(transaction);
+
+    final inserted = editorState.getNodeAtPath(insertedPath);
+    if (inserted == null || inserted.type != ImageBlockKeys.type) {
+      throw StateError('The image could not be inserted into the note.');
+    }
+    final editable = editorState.getNodeAtPath(editablePath);
+    if (editable == null || editable.type != ParagraphBlockKeys.type) {
+      throw StateError('The image has no editable line after it.');
+    }
+    final updateTransaction = editorState.transaction
+      ..updateNode(inserted, {_markdownImageUrl: markdownReference})
+      ..afterSelection = Selection.collapsed(
+        Position(path: editablePath, offset: 0),
+      );
+    await editorState.apply(updateTransaction);
   }
 
   static Future<Document> _resolveAttachmentPaths(

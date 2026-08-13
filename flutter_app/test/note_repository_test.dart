@@ -9,6 +9,44 @@ import 'package:specular/src/data/note_repository.dart';
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
+  test('inserts repository-root attachment references for Reflect', () async {
+    final root = await Directory.systemTemp.createTemp('specular-notes-test-');
+    final database = AppDatabase.forTesting(NativeDatabase.memory());
+    addTearDown(() async {
+      await database.close();
+      await root.delete(recursive: true);
+    });
+    final repository = NoteRepository(
+      database,
+      Directory('${root.path}/notes'),
+    );
+
+    final note = await repository.create(title: 'Example');
+    final source = File('${root.path}/image.jpg');
+    await source.writeAsBytes([0xff, 0xd8, 0xff]);
+
+    final updated = await repository.importImage(note, source);
+
+    expect(
+      updated.body,
+      matches(RegExp(r'!\[\]\(attachments/[0-9a-f-]+\.jpg\)')),
+    );
+    final attachmentPath = RegExp(
+      r'attachments/[^)]+',
+    ).firstMatch(updated.body)!.group(0)!;
+    expect(
+      await repository.resolveAttachment('notes/example.md', attachmentPath),
+      isNotNull,
+    );
+    expect(
+      await repository.resolveAttachment(
+        'notes/example.md',
+        '../$attachmentPath',
+      ),
+      isNull,
+    );
+  });
+
   test('ranks title matches ahead of newer body-only matches', () async {
     final root = await Directory.systemTemp.createTemp('specular-notes-test-');
     final database = AppDatabase.forTesting(NativeDatabase.memory());

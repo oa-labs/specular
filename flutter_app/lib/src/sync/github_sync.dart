@@ -159,13 +159,15 @@ class SyncDiagnostics {
 }
 
 class SyncResult {
-  const SyncResult._(this.message, [this.error]);
-  const SyncResult.success(String message) : this._(message);
+  const SyncResult._(this.message, [this.error, this.noRemoteChanges = false]);
+  const SyncResult.success(String message, {bool noRemoteChanges = false})
+    : this._(message, null, noRemoteChanges);
   const SyncResult.failure(String message, Object error)
     : this._(message, error);
   const SyncResult.notConfigured() : this._('GitHub sync is not configured.');
   final String message;
   final Object? error;
+  final bool noRemoteChanges;
   bool get isSuccess =>
       error == null && message != 'GitHub sync is not configured.';
 }
@@ -263,6 +265,13 @@ class _RemoteSnapshot {
   final String branch;
   final String commitSha;
   final String treeSha;
+}
+
+class _PullResult {
+  const _PullResult({required this.snapshot, required this.noRemoteChanges});
+
+  final _RemoteSnapshot snapshot;
+  final bool noRemoteChanges;
 }
 
 /// The branch head and tree from a completed sync. Keeping this outside the
@@ -375,7 +384,7 @@ class GitHubSyncEngine {
     });
     try {
       for (var attempt = 0; ; attempt++) {
-        final snapshot = await _pull(
+        final pull = await _pull(
           settings,
           onProgress: report,
           forceFullRemoteScan: forceFullRemoteScan,
@@ -383,13 +392,16 @@ class GitHubSyncEngine {
         try {
           final completedSnapshot = await _push(
             settings,
-            snapshot,
+            pull.snapshot,
             onProgress: report,
           );
           await _saveCachedSnapshot(settings, completedSnapshot);
           report(const SyncProgress(message: 'Sync complete'));
           await _flushDiagnostics();
-          return const SyncResult.success('Synced with GitHub');
+          return SyncResult.success(
+            'Synced with GitHub',
+            noRemoteChanges: pull.noRemoteChanges,
+          );
         } on _ConcurrentRefUpdate {
           if (attempt >= _maxConcurrentChangeRetries) rethrow;
           report(
@@ -607,7 +619,7 @@ class GitHubSyncEngine {
     }
   }
 
-  Future<_RemoteSnapshot> _pull(
+  Future<_PullResult> _pull(
     GitHubSettings settings, {
     SyncProgressCallback? onProgress,
     bool forceFullRemoteScan = false,
@@ -631,7 +643,7 @@ class GitHubSyncEngine {
         cached.commitSha == commitSha &&
         !forceFullRemoteScan) {
       onProgress?.call(const SyncProgress(message: 'Remote is up to date…'));
-      return cached.toSnapshot();
+      return _PullResult(snapshot: cached.toSnapshot(), noRemoteChanges: true);
     }
     final commit = await _dio.get<Map<String, dynamic>>(
       '/repos/${settings.owner}/${settings.repo}/git/commits/$commitSha',
@@ -650,7 +662,7 @@ class GitHubSyncEngine {
         treeSha: treeSha,
       );
       await _saveCachedSnapshot(settings, snapshot);
-      return snapshot;
+      return _PullResult(snapshot: snapshot, noRemoteChanges: false);
     }
     final entries = await _allTreeEntries(settings, treeSha);
     final markdownEntries = entries.where(_isMarkdownNote).toList();
@@ -723,7 +735,7 @@ class GitHubSyncEngine {
       treeSha: treeSha,
     );
     await _saveCachedSnapshot(settings, snapshot);
-    return snapshot;
+    return _PullResult(snapshot: snapshot, noRemoteChanges: false);
   }
 
   /// Uses GitHub's compare response for ordinary fast-forward updates. GitHub

@@ -313,7 +313,9 @@ void main() {
     );
 
     expect((await engine.sync()).isSuccess, isTrue);
-    expect((await engine.sync()).isSuccess, isTrue);
+    final refresh = await engine.sync();
+    expect(refresh.isSuccess, isTrue);
+    expect(refresh.noRemoteChanges, isTrue);
 
     expect(github.repositoryReads, 1);
     expect(github.refReads, 2);

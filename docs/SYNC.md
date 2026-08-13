@@ -34,7 +34,7 @@ The first sync imports remote notes and supported attachments into the app's pri
 | `assets/*.reflect.md` | Ignored metadata sidecars |
 | `.reflect/` | Ignored local Reflect cache |
 
-Specular preserves note frontmatter and uses its `id` as the stable identity. For daily notes without frontmatter, the relative daily path is the identity. New camera/gallery images are added to `attachments/` and inserted as standard relative Markdown image links.
+Specular preserves note frontmatter and uses its `id` as the stable identity. For daily notes without frontmatter, the relative daily path is the identity. New camera/gallery images are added to `attachments/` and inserted as repository-root Markdown image links such as `attachments/<uuid>.jpg`, matching Reflect's resolver.
 
 ## How synchronization stays safe
 

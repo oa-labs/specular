@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -78,6 +79,12 @@ List<Note> sortAndFilterNotes(
   });
   return visible;
 }
+
+/// A pull that found the same remote head deserves an explicit confirmation:
+/// the note list does not otherwise visibly change.
+String syncRefreshMessage(SyncResult result) => result.noRemoteChanges
+    ? 'Checked GitHub — no new changes found.'
+    : result.message;
 
 class NoteListScreen extends ConsumerStatefulWidget {
   const NoteListScreen({super.key});
@@ -211,7 +218,7 @@ class _NoteListScreenState extends ConsumerState<NoteListScreen> {
     ref.invalidate(notesProvider);
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
-      ..showSnackBar(SnackBar(content: Text(result.message)));
+      ..showSnackBar(SnackBar(content: Text(syncRefreshMessage(result))));
     unawaited(_refreshBackupStatus());
   }
 
@@ -488,7 +495,8 @@ class _NoteListScreenState extends ConsumerState<NoteListScreen> {
                               !_backupPromptDismissed
                           ? index - 1
                           : index;
-                      return _NoteTile(note: notes[noteIndex]);
+                      final note = notes[noteIndex];
+                      return _NoteTile(key: ValueKey(note.id), note: note);
                     },
                   );
                 },
@@ -684,69 +692,180 @@ class _BackupStatusCard extends StatelessWidget {
 
 enum _BackupCardAction { settings, dismiss }
 
-class _NoteTile extends StatelessWidget {
-  const _NoteTile({required this.note});
+class _NoteTile extends ConsumerStatefulWidget {
+  const _NoteTile({super.key, required this.note});
   final Note note;
 
   @override
+  ConsumerState<_NoteTile> createState() => _NoteTileState();
+}
+
+class _NoteTileState extends ConsumerState<_NoteTile>
+    with SingleTickerProviderStateMixin {
+  static const _holdDuration = Duration(milliseconds: 500);
+
+  late final AnimationController _holdProgress;
+  late bool _isPinned;
+
+  @override
+  void initState() {
+    super.initState();
+    _isPinned = widget.note.isPinned;
+    _holdProgress = AnimationController(vsync: this, duration: _holdDuration);
+  }
+
+  @override
+  void didUpdateWidget(covariant _NoteTile oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.note.id != widget.note.id ||
+        oldWidget.note.isPinned != widget.note.isPinned) {
+      _isPinned = widget.note.isPinned;
+    }
+  }
+
+  @override
+  void dispose() {
+    _holdProgress.dispose();
+    super.dispose();
+  }
+
+  void _beginHold(TapDownDetails _) {
+    _holdProgress.forward(from: 0);
+  }
+
+  void _cancelHold() {
+    _holdProgress.reverse();
+  }
+
+  Future<void> _togglePinned() async {
+    final pinned = !_isPinned;
+    _holdProgress.forward();
+    setState(() => _isPinned = pinned);
+    HapticFeedback.mediumImpact();
+    try {
+      await ref.read(noteRepositoryProvider).setPinned(widget.note, pinned);
+      ref.invalidate(notesProvider);
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+          ..hideCurrentSnackBar()
+          ..showSnackBar(
+            SnackBar(content: Text(pinned ? 'Note pinned' : 'Note unpinned')),
+          );
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() => _isPinned = !pinned);
+        ScaffoldMessenger.of(context)
+          ..hideCurrentSnackBar()
+          ..showSnackBar(const SnackBar(content: Text('Could not update pin')));
+      }
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final note = widget.note;
     final folder = noteFolderLabel(note);
     final summary = hasUsableSummary(note) ? note.summary! : '';
     final hasMetadata = folder != null || note.isConflict;
     final theme = Theme.of(context);
-    return InkWell(
-      onTap: () => context.push('/note/${Uri.encodeComponent(note.id)}'),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                if (note.isPinned)
-                  const Padding(
-                    padding: EdgeInsets.only(right: 6),
-                    child: Icon(Icons.push_pin, size: 16),
-                  ),
-                Expanded(
-                  child: Text(
-                    note.title.isEmpty ? 'Untitled' : note.title,
-                    style: theme.textTheme.titleMedium,
+    return Semantics(
+      label:
+          '${note.title.isEmpty ? 'Untitled' : note.title}, '
+          '${_isPinned ? 'pinned' : 'not pinned'}',
+      hint: 'Press and hold to ${_isPinned ? 'unpin' : 'pin'}',
+      child: AnimatedBuilder(
+        animation: _holdProgress,
+        builder: (context, child) => Transform.scale(
+          scale: 1 - (_holdProgress.value * .015),
+          child: Stack(
+            children: [
+              child!,
+              if (_holdProgress.value > 0)
+                Positioned(
+                  left: 0,
+                  right: 0,
+                  bottom: 0,
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: FractionallySizedBox(
+                      widthFactor: _holdProgress.value,
+                      child: Container(
+                        height: 2,
+                        color: theme.colorScheme.primary,
+                      ),
+                    ),
                   ),
                 ),
-              ],
-            ),
-            if (summary.isNotEmpty || hasMetadata)
-              Padding(
-                padding: const EdgeInsets.only(top: 4),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+            ],
+          ),
+        ),
+        child: InkWell(
+          onTap: () => context.push('/note/${Uri.encodeComponent(note.id)}'),
+          onTapDown: _beginHold,
+          onTapCancel: _cancelHold,
+          onTapUp: (_) => _cancelHold(),
+          onLongPress: _togglePinned,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
                   children: [
-                    if (summary.isNotEmpty)
-                      Expanded(
-                        child: Text(
-                          summary,
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          style: theme.textTheme.bodyMedium?.copyWith(
-                            color: theme.colorScheme.onSurfaceVariant,
+                    if (_isPinned)
+                      Padding(
+                        padding: const EdgeInsets.only(right: 6),
+                        child: Tooltip(
+                          message: 'Pinned',
+                          child: Icon(
+                            Icons.push_pin,
+                            size: 16,
+                            color: theme.colorScheme.primary,
                           ),
                         ),
                       ),
-                    if (summary.isNotEmpty && hasMetadata)
-                      const SizedBox(width: 8),
-                    if (note.isConflict)
-                      const Icon(
-                        Icons.warning_amber_rounded,
-                        color: Colors.orange,
+                    Expanded(
+                      child: Text(
+                        note.title.isEmpty ? 'Untitled' : note.title,
+                        style: theme.textTheme.titleMedium,
                       ),
-                    if (note.isConflict && folder != null)
-                      const SizedBox(width: 8),
-                    if (folder != null) _FolderBadge(label: folder),
+                    ),
                   ],
                 ),
-              ),
-          ],
+                if (summary.isNotEmpty || hasMetadata)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 4),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        if (summary.isNotEmpty)
+                          Expanded(
+                            child: Text(
+                              summary,
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              style: theme.textTheme.bodyMedium?.copyWith(
+                                color: theme.colorScheme.onSurfaceVariant,
+                              ),
+                            ),
+                          ),
+                        if (summary.isNotEmpty && hasMetadata)
+                          const SizedBox(width: 8),
+                        if (note.isConflict)
+                          const Icon(
+                            Icons.warning_amber_rounded,
+                            color: Colors.orange,
+                          ),
+                        if (note.isConflict && folder != null)
+                          const SizedBox(width: 8),
+                        if (folder != null) _FolderBadge(label: folder),
+                      ],
+                    ),
+                  ),
+              ],
+            ),
+          ),
         ),
       ),
     );
@@ -1100,16 +1219,39 @@ class _NotePreviewBody extends ConsumerWidget {
 
 enum _NoteAction { pin, rename, archive, delete }
 
-class _AttachmentImage extends ConsumerWidget {
+class _AttachmentImage extends ConsumerStatefulWidget {
   const _AttachmentImage({required this.notePath, required this.uri});
   final String notePath;
   final Uri uri;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) => FutureBuilder<File?>(
-    future: ref
-        .read(noteRepositoryProvider)
-        .resolveAttachment(notePath, uri.toString()),
+  ConsumerState<_AttachmentImage> createState() => _AttachmentImageState();
+}
+
+class _AttachmentImageState extends ConsumerState<_AttachmentImage> {
+  late Future<File?> _file;
+
+  @override
+  void initState() {
+    super.initState();
+    _file = _resolveFile();
+  }
+
+  @override
+  void didUpdateWidget(covariant _AttachmentImage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.notePath != widget.notePath || oldWidget.uri != widget.uri) {
+      _file = _resolveFile();
+    }
+  }
+
+  Future<File?> _resolveFile() => ref
+      .read(noteRepositoryProvider)
+      .resolveAttachment(widget.notePath, widget.uri.path);
+
+  @override
+  Widget build(BuildContext context) => FutureBuilder<File?>(
+    future: _file,
     builder: (context, snapshot) {
       final file = snapshot.data;
       if (file == null) {
@@ -1118,14 +1260,62 @@ class _AttachmentImage extends ConsumerWidget {
           child: Icon(Icons.broken_image_outlined),
         );
       }
-      return Padding(
-        padding: const EdgeInsets.symmetric(vertical: 8),
-        child: Image.file(
-          file,
-          errorBuilder: (_, _, _) => const Icon(Icons.broken_image_outlined),
+      return Semantics(
+        button: true,
+        label: 'View image full screen',
+        child: GestureDetector(
+          key: const ValueKey('open-image-preview'),
+          behavior: HitTestBehavior.opaque,
+          onTap: () => Navigator.of(context).push<void>(
+            MaterialPageRoute(
+              builder: (_) => _FullscreenImageViewer(file: file),
+              fullscreenDialog: true,
+            ),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
+              child: Image.file(
+                file,
+                errorBuilder: (_, _, _) =>
+                    const Icon(Icons.broken_image_outlined),
+              ),
+            ),
+          ),
         ),
       );
     },
+  );
+}
+
+class _FullscreenImageViewer extends StatelessWidget {
+  const _FullscreenImageViewer({required this.file});
+  final File file;
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    backgroundColor: Colors.black,
+    appBar: AppBar(
+      title: const Text('Image'),
+      backgroundColor: Colors.black,
+      foregroundColor: Colors.white,
+    ),
+    body: Center(
+      child: InteractiveViewer(
+        minScale: 0.5,
+        maxScale: 5,
+        child: Image.file(
+          file,
+          fit: BoxFit.contain,
+          errorBuilder: (_, _, _) => const Icon(
+            Icons.broken_image_outlined,
+            color: Colors.white,
+            size: 48,
+          ),
+        ),
+      ),
+    ),
   );
 }
 
@@ -1204,6 +1394,7 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
   Note? _note;
   EditorState? _editorState;
   final _stagedImages = <StagedImage>[];
+  final _editorFocus = FocusNode(debugLabel: 'note editor');
   var _loading = true;
   var _saving = false;
   var _voiceRecording = false;
@@ -1374,7 +1565,14 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
         staged,
         repository.attachmentReference(_note!.path, staged.attachmentPath),
       );
-      if (mounted) setState(() => _stagedImages.add(staged));
+      if (mounted) {
+        setState(() => _stagedImages.add(staged));
+        // Returning from the native picker leaves focus on the toolbar. Move
+        // it to the editable paragraph that follows the inserted image.
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) _editorFocus.requestFocus();
+        });
+      }
     } catch (error) {
       if (mounted) {
         ScaffoldMessenger.of(
@@ -1400,6 +1598,7 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
       ref.read(noteRepositoryProvider).discardStagedImages(_stagedImages),
     );
     _editorState?.dispose();
+    _editorFocus.dispose();
     _title.dispose();
     super.dispose();
   }
@@ -1411,11 +1610,6 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
     );
     return Scaffold(
       appBar: AppBar(
-        title: Text(
-          _note == null
-              ? (widget.newTodo ? 'New to-do' : 'New note')
-              : 'Edit note',
-        ),
         actions: [
           IconButton(
             tooltip: 'Insert wiki link',
@@ -1537,6 +1731,7 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
                       ],
                       child: AppFlowyEditor(
                         editorState: _editorState!,
+                        focusNode: _editorFocus,
                         // Do not create an initial selection in block zero:
                         // AppFlowy's mobile auto-scroll listener would then
                         // pull a manually scrolled long note back to the top.
@@ -1750,7 +1945,7 @@ class _TodoListState extends ConsumerState<_TodoList> {
     ref.invalidate(todosProvider(widget.filter));
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
-      ..showSnackBar(SnackBar(content: Text(result.message)));
+      ..showSnackBar(SnackBar(content: Text(syncRefreshMessage(result))));
   }
 
   @override
