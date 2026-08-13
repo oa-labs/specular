@@ -986,18 +986,7 @@ class _NoteTileState extends ConsumerState<_NoteTile>
               children: [
                 Row(
                   children: [
-                    if (_isPinned)
-                      Padding(
-                        padding: const EdgeInsets.only(right: 6),
-                        child: Tooltip(
-                          message: 'Pinned',
-                          child: Icon(
-                            Icons.push_pin,
-                            size: 16,
-                            color: theme.colorScheme.primary,
-                          ),
-                        ),
-                      ),
+                    _NoteKindIcons(note: note, type: type),
                     Expanded(
                       child: Text(
                         note.title.isEmpty ? 'Untitled' : note.title,
@@ -1006,7 +995,18 @@ class _NoteTileState extends ConsumerState<_NoteTile>
                         style: theme.textTheme.titleMedium,
                       ),
                     ),
-                    _NoteKindIcons(note: note, type: type),
+                    if (_isPinned)
+                      Padding(
+                        padding: const EdgeInsets.only(left: 6),
+                        child: Tooltip(
+                          message: 'Pinned',
+                          child: Icon(
+                            Icons.push_pin,
+                            size: 20,
+                            color: theme.colorScheme.primary,
+                          ),
+                        ),
+                      ),
                   ],
                 ),
                 if (secondaryText.isNotEmpty || hasMetadata)
@@ -1034,12 +1034,6 @@ class _NoteTileState extends ConsumerState<_NoteTile>
                                       child: Row(
                                         mainAxisSize: MainAxisSize.min,
                                         children: [
-                                          Icon(
-                                            Icons.mail_outline,
-                                            size: 18,
-                                            color: theme.colorScheme.primary,
-                                          ),
-                                          const SizedBox(width: 6),
                                           Flexible(
                                             child: Text(
                                               email,
@@ -1091,17 +1085,19 @@ class _NoteKindIcons extends StatelessWidget {
       if (type == NoteObjectType.meeting) (Icons.groups_outlined, 'Meeting'),
       if (type == NoteObjectType.person) (Icons.person_outline, 'Person'),
       if (note.isDaily) (Icons.calendar_today_outlined, 'Daily note'),
+      if (type == NoteObjectType.note && !note.isDaily)
+        (Icons.note_outlined, 'Note'),
     ];
     if (icons.isEmpty) return const SizedBox.shrink();
-    final color = Theme.of(context).colorScheme.primary;
+    final color = Theme.of(context).colorScheme.onSurfaceVariant;
     return Padding(
-      padding: const EdgeInsets.only(left: 8),
+      padding: const EdgeInsets.only(right: 8),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
           for (final (icon, label) in icons)
             Padding(
-              padding: const EdgeInsets.only(left: 6),
+              padding: const EdgeInsets.only(right: 6),
               child: Tooltip(
                 message: label,
                 child: Icon(icon, size: 16, color: color),
