@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/widgets.dart';
@@ -7,6 +8,7 @@ import 'package:workmanager/workmanager.dart';
 import '../data/app_database.dart';
 import '../data/note_repository.dart';
 import '../platform/legacy_bridge.dart';
+import '../platform/platform_capabilities.dart';
 import '../voice/voice_service.dart';
 import 'github_sync.dart';
 
@@ -95,14 +97,40 @@ void specularBackgroundDispatcher() {
 
 class SyncScheduler {
   static var _initialized = false;
+  static var _configuredInterval = defaultIntervalMinutes;
+  static Timer? _desktopPeriodicTimer;
+  static Timer? _desktopQueuedSync;
+  static Future<void> Function()? _foregroundSync;
   static const defaultIntervalMinutes = 15;
   static const intervalChoices = <int>[15, 30, 60, 180, 360, 720, 1440];
 
   static Future<void> initialize(FlutterSecureStorage storage) async {
     if (_initialized) return;
-    await Workmanager().initialize(specularBackgroundDispatcher);
+    if (PlatformCapabilities.current.supportsDurableBackgroundSync) {
+      await Workmanager().initialize(specularBackgroundDispatcher);
+    }
     _initialized = true;
-    await _schedulePeriodic(await intervalFromStorage(storage));
+    final interval = await intervalFromStorage(storage);
+    _configuredInterval = interval;
+    if (PlatformCapabilities.current.supportsDurableBackgroundSync) {
+      await _schedulePeriodic(interval);
+    }
+  }
+
+  /// Registers the sync function owned by the visible Flutter application.
+  /// On macOS this powers startup/resume and best-effort timer sync only while
+  /// the app is alive; it never claims to run after the process has quit.
+  static void registerForegroundSync(Future<void> Function() sync) {
+    _foregroundSync = sync;
+    if (PlatformCapabilities.current.supportsBestEffortInProcessSync &&
+        _initialized) {
+      unawaited(_scheduleDesktopPeriodic());
+    }
+  }
+
+  static Future<void> syncOnAppResume() async {
+    if (!PlatformCapabilities.current.supportsBestEffortInProcessSync) return;
+    await _runForegroundSync();
   }
 
   static Future<int> intervalFromStorage(FlutterSecureStorage storage) async {
@@ -124,7 +152,13 @@ class SyncScheduler {
       );
     }
     await storage.write(key: syncIntervalStorageKey, value: '$minutes');
-    if (_initialized) await _schedulePeriodic(minutes);
+    _configuredInterval = minutes;
+    if (!_initialized) return;
+    if (PlatformCapabilities.current.supportsDurableBackgroundSync) {
+      await _schedulePeriodic(minutes);
+    } else if (PlatformCapabilities.current.supportsBestEffortInProcessSync) {
+      await _scheduleDesktopPeriodic(interval: minutes);
+    }
   }
 
   static Future<void> _schedulePeriodic(int minutes) async {
@@ -142,6 +176,15 @@ class SyncScheduler {
 
   static Future<void> enqueue() async {
     if (!_initialized) return;
+    if (PlatformCapabilities.current.supportsBestEffortInProcessSync) {
+      _desktopQueuedSync?.cancel();
+      _desktopQueuedSync = Timer(
+        const Duration(seconds: 5),
+        () => unawaited(_runForegroundSync()),
+      );
+      return;
+    }
+    if (!PlatformCapabilities.current.supportsDurableBackgroundSync) return;
     await Workmanager().registerOneOffTask(
       _immediateName,
       _taskName,
@@ -151,5 +194,25 @@ class SyncScheduler {
       backoffPolicyDelay: const Duration(minutes: 1),
       existingWorkPolicy: ExistingWorkPolicy.replace,
     );
+  }
+
+  static Future<void> _scheduleDesktopPeriodic({int? interval}) async {
+    _desktopPeriodicTimer?.cancel();
+    final minutes = interval ?? _configuredInterval;
+    _desktopPeriodicTimer = Timer.periodic(
+      Duration(minutes: minutes),
+      (_) => unawaited(_runForegroundSync()),
+    );
+  }
+
+  static Future<void> _runForegroundSync() async {
+    final sync = _foregroundSync;
+    if (sync == null) return;
+    try {
+      await sync();
+    } catch (_) {
+      // Foreground sync presents failures through the existing sync UI. A
+      // timer must not turn a transient network error into an uncaught error.
+    }
   }
 }

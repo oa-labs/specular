@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:appflowy_editor/appflowy_editor.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/legacy.dart';
@@ -16,6 +17,8 @@ import '../sync/github_sync.dart';
 import '../sync/github_auth.dart';
 import '../voice/voice_service.dart';
 import '../platform/widget_bridge.dart';
+import '../platform/platform_capabilities.dart';
+import '../sync/sync_scheduler.dart';
 import 'screens.dart';
 
 final appDatabaseProvider = Provider<AppDatabase>(
@@ -329,6 +332,7 @@ class SpecularApp extends ConsumerStatefulWidget {
 
 class _SpecularAppState extends ConsumerState<SpecularApp> {
   late final GoRouter _router;
+  late final _lifecycleObserver = _AppLifecycleObserver(_onLifecycle);
 
   @override
   void initState() {
@@ -393,10 +397,16 @@ class _SpecularAppState extends ConsumerState<SpecularApp> {
     );
     _router.routerDelegate.addListener(_saveCurrentRoute);
     WidgetBridge.setNavigationHandler(_router.go);
+    WidgetsBinding.instance.addObserver(_lifecycleObserver);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      SyncScheduler.registerForegroundSync(_syncWhenConfigured);
+      unawaited(_syncWhenConfigured());
+    });
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(_lifecycleObserver);
     _router.routerDelegate.removeListener(_saveCurrentRoute);
     _router.dispose();
     super.dispose();
@@ -409,6 +419,20 @@ class _SpecularAppState extends ConsumerState<SpecularApp> {
           .read(secureStorageProvider)
           .write(key: lastRouteStorageKey, value: location),
     );
+  }
+
+  Future<void> _syncWhenConfigured() async {
+    if (!PlatformCapabilities.current.isDesktop) return;
+    if (await GitHubSettings.load(ref.read(secureStorageProvider)) == null) {
+      return;
+    }
+    await ref.read(syncControllerProvider).sync();
+  }
+
+  void _onLifecycle(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      unawaited(SyncScheduler.syncOnAppResume());
+    }
   }
 
   @override
@@ -441,16 +465,197 @@ class _SpecularAppState extends ConsumerState<SpecularApp> {
       ),
       themeMode: themeMode,
       routerConfig: _router,
-      builder: (context, child) => Stack(
-        children: [
-          child ?? const SizedBox.shrink(),
-          if (syncState.isSyncing && syncState.isInitialSync)
-            _InitialSyncOverlay(state: syncState),
-          if (syncState.isSyncing && !syncState.isInitialSync)
-            _SyncProgressSnackbar(state: syncState),
-        ],
+      builder: (context, child) => _DesktopAppShell(
+        router: _router,
+        child: Stack(
+          children: [
+            child ?? const SizedBox.shrink(),
+            if (syncState.isSyncing && syncState.isInitialSync)
+              _InitialSyncOverlay(state: syncState),
+            if (syncState.isSyncing && !syncState.isInitialSync)
+              _SyncProgressSnackbar(state: syncState),
+          ],
+        ),
       ),
     );
+  }
+}
+
+class _AppLifecycleObserver with WidgetsBindingObserver {
+  _AppLifecycleObserver(this.onChanged);
+
+  final ValueChanged<AppLifecycleState> onChanged;
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) => onChanged(state);
+
+  @override
+  bool operator ==(Object other) =>
+      other is _AppLifecycleObserver && other.onChanged == onChanged;
+
+  @override
+  int get hashCode => onChanged.hashCode;
+}
+
+/// A desktop shell retains navigation, gives mouse users visible destinations,
+/// and keeps the existing phone-sized pages intact below the 900px breakpoint.
+class _DesktopAppShell extends StatelessWidget {
+  const _DesktopAppShell({required this.router, required this.child});
+
+  final GoRouter router;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    if (!PlatformCapabilities.current.isDesktop) return child;
+    final desktopChild = CallbackShortcuts(
+      bindings: {
+        const SingleActivator(LogicalKeyboardKey.keyN, meta: true): () =>
+            router.go('/editor/new'),
+        const SingleActivator(LogicalKeyboardKey.keyT, meta: true): () =>
+            router.go('/editor/todo'),
+        const SingleActivator(LogicalKeyboardKey.keyF, meta: true): () =>
+            router.go('/search'),
+        const SingleActivator(LogicalKeyboardKey.keyR, meta: true): () =>
+            _sync(),
+        const SingleActivator(LogicalKeyboardKey.escape): () {
+          if (router.canPop()) router.pop();
+        },
+      },
+      child: Focus(
+        autofocus: true,
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            if (constraints.maxWidth < 900) return child;
+            return Row(
+              children: [
+                NavigationRail(
+                  extended: constraints.maxWidth >= 1160,
+                  selectedIndex: _selectedIndex(router),
+                  labelType: constraints.maxWidth >= 1160
+                      ? NavigationRailLabelType.none
+                      : NavigationRailLabelType.all,
+                  leading: Padding(
+                    padding: const EdgeInsets.only(top: 12),
+                    child: FilledButton.icon(
+                      onPressed: () => router.go('/editor/new'),
+                      icon: const Icon(Icons.add),
+                      label: const Text('New note'),
+                    ),
+                  ),
+                  destinations: const [
+                    NavigationRailDestination(
+                      icon: Icon(Icons.notes_outlined),
+                      selectedIcon: Icon(Icons.notes),
+                      label: Text('Notes'),
+                    ),
+                    NavigationRailDestination(
+                      icon: Icon(Icons.checklist_outlined),
+                      selectedIcon: Icon(Icons.checklist),
+                      label: Text('To-dos'),
+                    ),
+                    NavigationRailDestination(
+                      icon: Icon(Icons.search),
+                      label: Text('Search'),
+                    ),
+                    NavigationRailDestination(
+                      icon: Icon(Icons.settings_outlined),
+                      selectedIcon: Icon(Icons.settings),
+                      label: Text('Settings'),
+                    ),
+                  ],
+                  onDestinationSelected: (index) => router.go(switch (index) {
+                    0 => '/',
+                    1 => '/todos',
+                    2 => '/search',
+                    _ => '/settings',
+                  }),
+                ),
+                const VerticalDivider(width: 1),
+                Expanded(child: child),
+              ],
+            );
+          },
+        ),
+      ),
+    );
+    return PlatformMenuBar(
+      menus: [
+        PlatformMenu(
+          label: 'File',
+          menus: [
+            PlatformMenuItem(
+              label: 'New Note',
+              shortcut: const SingleActivator(
+                LogicalKeyboardKey.keyN,
+                meta: true,
+              ),
+              onSelected: () => router.go('/editor/new'),
+            ),
+            PlatformMenuItem(
+              label: 'New To-do',
+              shortcut: const SingleActivator(
+                LogicalKeyboardKey.keyT,
+                meta: true,
+              ),
+              onSelected: () => router.go('/editor/todo'),
+            ),
+          ],
+        ),
+        PlatformMenu(
+          label: 'Navigate',
+          menus: [
+            PlatformMenuItem(
+              label: 'Search Notes',
+              shortcut: const SingleActivator(
+                LogicalKeyboardKey.keyF,
+                meta: true,
+              ),
+              onSelected: () => router.go('/search'),
+            ),
+            PlatformMenuItem(
+              label: 'To-dos',
+              onSelected: () => router.go('/todos'),
+            ),
+            PlatformMenuItem(
+              label: 'Settings',
+              onSelected: () => router.go('/settings'),
+            ),
+          ],
+        ),
+        PlatformMenu(
+          label: 'Sync',
+          menus: [
+            PlatformMenuItem(
+              label: 'Refresh from GitHub',
+              shortcut: const SingleActivator(
+                LogicalKeyboardKey.keyR,
+                meta: true,
+              ),
+              onSelected: _sync,
+            ),
+          ],
+        ),
+      ],
+      child: desktopChild,
+    );
+  }
+
+  int _selectedIndex(GoRouter router) {
+    final path = router.routerDelegate.currentConfiguration.uri.path;
+    if (path.startsWith('/todos')) return 1;
+    if (path.startsWith('/search')) return 2;
+    if (path.startsWith('/settings')) return 3;
+    return 0;
+  }
+
+  void _sync() {
+    // The home screen retains its pull-to-refresh control. Cmd-R is provided
+    // as a desktop convenience and uses the same foreground engine.
+    final context = router.routerDelegate.navigatorKey.currentContext;
+    if (context == null) return;
+    final container = ProviderScope.containerOf(context, listen: false);
+    unawaited(container.read(syncControllerProvider).sync());
   }
 }
 

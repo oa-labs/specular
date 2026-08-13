@@ -4,8 +4,8 @@ import 'package:flutter/services.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:path_provider/path_provider.dart';
 
-/// Android upgrade boundary. Values are returned over a private in-process
-/// channel and copied into platform secure storage immediately.
+/// Android upgrade boundary. Desktop installations use their own app-support
+/// directory and Keychain entries; they do not read Android-private data.
 class LegacyBridge {
   static const _channel = MethodChannel('com.specular.android/legacy');
   static const _completeKey = 'legacy_migration_complete';

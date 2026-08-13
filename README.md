@@ -1,4 +1,4 @@
-# Specular for Android
+# Specular for Android and macOS
 
 <p align="center">
   <img src="screenshot.jpg" alt="Editing a Markdown note in Specular" width="300">
@@ -25,21 +25,25 @@ format—no custom server, Google Play Services, Firebase, or telemetry required
 - **Search and organization.** Search note titles and bodies, browse folders,
   sort notes, and use pinned notes for quick access.
 - **Markdown with links and images.** Work with common Markdown, wiki links,
-  checklists, and images added from the camera or photo library. Attachments sync
-  with the note that references them.
+  checklists, and image attachments. Android supports camera and photo-library
+  import; macOS uses the system file chooser. Attachments sync with the note
+  that references them.
 - **Voice capture (optional).** Record a thought, transcribe it with a configured
   OpenAI API key, and save it to today’s note, a to-do, or an existing note.
   Interrupted recordings can be recovered and retried.
 - **AI summaries (optional).** Generate summaries through an OpenAI-compatible
   endpoint that you configure in Settings.
-- **Android integration.** Use the home-screen to-do widget and return to the
-  last screen you were using. Dark mode is included.
+- **Platform integration.** Android includes the home-screen to-do widget;
+  macOS adds a resizable desktop window, navigation rail, native menu bar, and
+  keyboard shortcuts. Dark mode is included.
 
 ## Requirements
 
 - Android 8.0 (API 26) or later
+- macOS 11 or later for the desktop app
 - [Flutter](https://docs.flutter.dev/get-started/install) with the Android toolchain
   configured
+- CocoaPods on macOS (required by the current desktop plugins)
 - Android device or emulator for installation
 - A GitHub personal access token only if you want synchronization
 - An OpenAI API key only for voice transcription; an OpenAI-compatible endpoint
@@ -80,6 +84,20 @@ make build-debug
 
 `make build` and `make install` are short aliases for the debug targets.
 
+### Build the macOS app
+
+On a Mac with Xcode and Flutter's macOS toolchain installed, run from the
+repository root:
+
+```bash
+make build-macos-debug
+open flutter_app/build/macos/Build/Products/Debug/Specular.app
+```
+
+For a release build, use `make build-macos-release`. The app stores its own
+local notes and Keychain credentials; it does not import Android-private data.
+Connect the same GitHub repository from Settings to populate a desktop install.
+
 ### 3. Start taking notes
 
 Open Specular and create a note, a to-do, or today’s daily note. The app works
@@ -98,9 +116,10 @@ with **Contents: Read and write** access and choose an existing repository.
 Empty repositories are supported; Specular adds notes on the first sync.
 
 The first sync imports the remote notes. Thereafter, changes are pushed during
-sync and background sync runs at the cadence selected in Settings (15 minutes
-to daily) when Android permits network work. You can also pull to refresh from
-the note list.
+sync. Android requests background sync at the cadence selected in Settings (15
+minutes to daily) when Android permits network work. On macOS, sync runs at
+startup/resume and best-effort while Specular remains open; it never runs after
+the app has quit. You can also pull to refresh from the note list.
 
 For compatible repository layout and synchronization semantics, see the
 [Reflect GitHub sync contract](docs/reflect-contract.md).
@@ -157,6 +176,8 @@ Useful root-level commands:
 ```bash
 make build-debug      # Build the debug APK
 make install-debug    # Build and install it with adb
+make build-macos-debug # Build the macOS debug app
+make build-macos-release # Build the macOS release app
 make clean            # Remove Flutter build artifacts
 ```
 
@@ -166,6 +187,7 @@ Project layout:
 flutter_app/
   lib/          Flutter UI, note database, Markdown, sync, AI, and voice flows
   android/      Native Android integration, to-do widget, and voice service
+  macos/        Native macOS runner, sandbox permissions, and window setup
   test/         Flutter unit and widget tests
 docs/
   reflect-contract.md  Reflect repository format and sync behavior
@@ -190,7 +212,8 @@ app to preserve its data.
 - A local-only library is not a device-recovery backup. In **Settings** you can
   export a portable `.zip` backup and restore it into an empty, disconnected
   Specular library.
-- GitHub and AI credentials are stored in Android secure storage.
+- GitHub and AI credentials are stored in platform secure storage (Android
+  secure storage or the macOS Keychain).
 - Network access is used for GitHub sync and the optional AI/voice requests.
 
 ## Related documentation
@@ -200,3 +223,5 @@ app to preserve its data.
 - [GitHub sync guide](docs/SYNC.md) — token setup, sync behavior, and recovery
 - [Android GitHub sync implementation plan](docs/plans/2026-08-06-android-github-sync.md)
   — implementation history and technical plan
+- [macOS release guide](docs/macos-release.md) — signing, notarization, and
+  direct-distribution checklist

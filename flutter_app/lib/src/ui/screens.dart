@@ -19,10 +19,38 @@ import '../sync/github_sync.dart';
 import '../sync/sync_scheduler.dart';
 import '../voice/voice_service.dart';
 import '../platform/document_bridge.dart';
+import '../platform/platform_capabilities.dart';
 import 'note_body_editor.dart';
 import 'specular_app.dart';
 
 enum NoteListSort { lastUpdated, alphabetical }
+
+/// The small, stable set of home views. Folders remain available when creating
+/// notes, but are deliberately not promoted into the primary navigation.
+enum NoteListView { all, notes, meetings, people }
+
+enum NoteObjectType { note, meeting, person }
+
+class MeetingDateGroup {
+  const MeetingDateGroup({required this.date, required this.notes});
+
+  final DateTime date;
+  final List<Note> notes;
+}
+
+/// Image sources exposed by the editor. macOS deliberately presents only the
+/// file chooser because image_picker's camera source needs a native delegate.
+enum EditorImageAction { camera, gallery }
+
+List<EditorImageAction> editorImageActions(PlatformCapabilities capabilities) =>
+    capabilities.supportsCameraImport
+    ? const [EditorImageAction.camera, EditorImageAction.gallery]
+    : const [EditorImageAction.gallery];
+
+String syncScheduleDescription(PlatformCapabilities capabilities) =>
+    capabilities.supportsBestEffortInProcessSync
+    ? 'While Specular is open, it checks at the selected interval. macOS may delay this work and it does not run after you quit the app.'
+    : 'Sync runs at the selected cadence when Android permits network work.';
 
 /// Returns the top-level note folder displayed in the Kotlin app's home list.
 /// Files at the repository root, and internal asset folders, have no badge.
@@ -49,6 +77,71 @@ List<String> creationFolders(Iterable<Note> notes) => noteFolders(
   notes,
 ).where((folder) => folder.toLowerCase() != 'daily').toList();
 
+/// Identifies the first-class note types supported by the home views.
+///
+/// Reflect libraries commonly use a body metadata line such as
+/// `- Type: #meeting`. Earlier libraries may instead organize these notes in
+/// `meetings/` and `people/`, so both forms are accepted during the transition.
+NoteObjectType noteObjectType(Note note) {
+  final metadataType = RegExp(
+    r'^\s*[-*]\s*type\s*:\s*#?([\w-]+)\b',
+    caseSensitive: false,
+    multiLine: true,
+  ).firstMatch(note.body)?.group(1)?.toLowerCase();
+  if (metadataType == 'meeting' || metadataType == 'meetings') {
+    return NoteObjectType.meeting;
+  }
+  if (metadataType == 'person' || metadataType == 'people') {
+    return NoteObjectType.person;
+  }
+
+  switch (noteFolderLabel(note)?.toLowerCase()) {
+    case 'meeting':
+    case 'meetings':
+      return NoteObjectType.meeting;
+    case 'person':
+    case 'people':
+      return NoteObjectType.person;
+    default:
+      return NoteObjectType.note;
+  }
+}
+
+bool noteMatchesView(Note note, NoteListView view) => switch (view) {
+  NoteListView.all => true,
+  NoteListView.notes => noteObjectType(note) == NoteObjectType.note,
+  NoteListView.meetings => noteObjectType(note) == NoteObjectType.meeting,
+  NoteListView.people => noteObjectType(note) == NoteObjectType.person,
+};
+
+/// Returns the first email address recorded for a person. Prefer the Reflect
+/// metadata field, while accepting a plain address elsewhere in the note for
+/// older person notes.
+String? noteEmailAddress(Note note) {
+  const email =
+      r"[A-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?(?:\.[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?)+";
+  final fieldMatch = RegExp(
+    '^\\s*[-*]?\\s*email\\s*:\\s*($email)',
+    caseSensitive: false,
+    multiLine: true,
+  ).firstMatch(note.body);
+  if (fieldMatch != null) return fieldMatch.group(1);
+  return RegExp(email, caseSensitive: false).firstMatch(note.body)?.group(0);
+}
+
+List<MeetingDateGroup> groupMeetingsByDate(Iterable<Note> notes) {
+  final groups = <DateTime, List<Note>>{};
+  for (final note in notes) {
+    final date = DateUtils.dateOnly(note.updatedAt);
+    (groups[date] ??= []).add(note);
+  }
+  final dates = groups.keys.toList()..sort((a, b) => b.compareTo(a));
+  return [
+    for (final date in dates)
+      MeetingDateGroup(date: date, notes: groups[date]!),
+  ];
+}
+
 /// A previous release stored the normalized note body as a fallback summary.
 /// Treat those values as missing so they are not shown and the AI can replace
 /// them with an actual generated summary.
@@ -61,10 +154,15 @@ bool hasUsableSummary(Note note) {
 List<Note> sortAndFilterNotes(
   Iterable<Note> notes, {
   required NoteListSort sort,
-  required Set<String> deselectedFolders,
+  Set<String> deselectedFolders = const {},
+  NoteListView view = NoteListView.all,
 }) {
   final visible = notes
-      .where((note) => !deselectedFolders.contains(noteFolderLabel(note)))
+      .where(
+        (note) =>
+            noteMatchesView(note, view) &&
+            !deselectedFolders.contains(noteFolderLabel(note)),
+      )
       .toList();
   int compareText(Note a, Note b) {
     final byTitle = a.title.toLowerCase().compareTo(b.title.toLowerCase());
@@ -94,9 +192,8 @@ class NoteListScreen extends ConsumerStatefulWidget {
 }
 
 class _NoteListScreenState extends ConsumerState<NoteListScreen> {
-  static const _deselectedFoldersKey = 'deselected_folders';
   var _sort = NoteListSort.lastUpdated;
-  var _deselectedFolders = <String>{};
+  var _selectedView = NoteListView.all;
   var _loadedPreferences = false;
   var _createExpanded = false;
   var _openingToday = false;
@@ -112,15 +209,8 @@ class _NoteListScreenState extends ConsumerState<NoteListScreen> {
   }
 
   Future<void> _loadPreferences() async {
-    final value = await ref
-        .read(secureStorageProvider)
-        .read(key: _deselectedFoldersKey);
     if (!mounted) return;
-    setState(() {
-      _deselectedFolders =
-          value?.split('\u001f').where((it) => it.isNotEmpty).toSet() ?? {};
-      _loadedPreferences = true;
-    });
+    setState(() => _loadedPreferences = true);
     _loadFirstRunState();
     _refreshBackupStatus();
   }
@@ -161,25 +251,6 @@ class _NoteListScreenState extends ConsumerState<NoteListScreen> {
         .read(secureStorageProvider)
         .write(key: backupPromptDismissedStorageKey, value: 'true');
     if (mounted) setState(() => _backupPromptDismissed = true);
-  }
-
-  Future<void> _saveDeselectedFolders() => ref
-      .read(secureStorageProvider)
-      .write(
-        key: _deselectedFoldersKey,
-        value: _deselectedFolders.join('\u001f'),
-      );
-
-  void _toggleFolder(String folder) {
-    setState(() {
-      if (!_deselectedFolders.add(folder)) _deselectedFolders.remove(folder);
-    });
-    _saveDeselectedFolders();
-  }
-
-  void _showAllFolders() {
-    setState(() => _deselectedFolders = {});
-    _saveDeselectedFolders();
   }
 
   Future<void> _openToday() async {
@@ -273,8 +344,7 @@ class _NoteListScreenState extends ConsumerState<NoteListScreen> {
     }
   }
 
-  void _showViewOptions(List<Note> notes) {
-    final folders = noteFolders(notes);
+  void _showViewOptions() {
     showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
@@ -296,9 +366,7 @@ class _NoteListScreenState extends ConsumerState<NoteListScreen> {
                       style: Theme.of(context).textTheme.headlineSmall,
                     ),
                     const SizedBox(height: 4),
-                    const Text(
-                      'Sort and choose the folders shown on your home screen.',
-                    ),
+                    const Text('Choose how notes are ordered in each view.'),
                     const SizedBox(height: 16),
                     Text('Sort', style: Theme.of(context).textTheme.titleSmall),
                     RadioGroup<NoteListSort>(
@@ -323,38 +391,6 @@ class _NoteListScreenState extends ConsumerState<NoteListScreen> {
                         ],
                       ),
                     ),
-                    if (folders.isNotEmpty) ...[
-                      const Divider(height: 24),
-                      Row(
-                        children: [
-                          const Icon(Icons.filter_list),
-                          const SizedBox(width: 12),
-                          Text(
-                            'Folders',
-                            style: Theme.of(context).textTheme.titleSmall,
-                          ),
-                          const Spacer(),
-                          if (_deselectedFolders.isNotEmpty)
-                            TextButton(
-                              onPressed: () {
-                                _showAllFolders();
-                                setSheetState(() {});
-                              },
-                              child: const Text('Show all'),
-                            ),
-                        ],
-                      ),
-                      for (final folder in folders)
-                        CheckboxListTile(
-                          value: !_deselectedFolders.contains(folder),
-                          contentPadding: EdgeInsets.zero,
-                          title: Text(folder),
-                          onChanged: (_) {
-                            _toggleFolder(folder);
-                            setSheetState(() {});
-                          },
-                        ),
-                    ],
                   ],
                 ),
               ),
@@ -373,7 +409,7 @@ class _NoteListScreenState extends ConsumerState<NoteListScreen> {
     final notes = sortAndFilterNotes(
       allNotes,
       sort: _sort,
-      deselectedFolders: _deselectedFolders,
+      view: _selectedView,
     );
     return Scaffold(
       appBar: AppBar(
@@ -401,12 +437,23 @@ class _NoteListScreenState extends ConsumerState<NoteListScreen> {
             onPressed: () => context.push('/search'),
             icon: const Icon(Icons.search),
           ),
+          if (PlatformCapabilities.current.isDesktop)
+            PopupMenuButton<String>(
+              tooltip: 'Create',
+              icon: const Icon(Icons.add),
+              onSelected: (route) => context.push(route),
+              itemBuilder: (_) => const [
+                PopupMenuItem(value: '/editor/new', child: Text('New note')),
+                PopupMenuItem(value: '/editor/todo', child: Text('New to-do')),
+                PopupMenuItem(value: '/voice', child: Text('Voice capture')),
+              ],
+            ),
           PopupMenuButton<_HomeAction>(
             tooltip: 'More actions',
             onSelected: (action) {
               switch (action) {
                 case _HomeAction.viewOptions:
-                  _showViewOptions(allNotes);
+                  _showViewOptions();
                   break;
                 case _HomeAction.settings:
                   context.push('/settings');
@@ -438,122 +485,154 @@ class _NoteListScreenState extends ConsumerState<NoteListScreen> {
             ],
             child: Padding(
               padding: const EdgeInsets.all(12),
-              child: Badge(
-                isLabelVisible: _deselectedFolders.isNotEmpty,
-                child: const Icon(Icons.more_vert),
-              ),
+              child: const Icon(Icons.more_vert),
             ),
           ),
         ],
       ),
       body: !_loadedPreferences || notesState.isLoading
           ? const Center(child: CircularProgressIndicator())
-          : RefreshIndicator(
-              onRefresh: _refresh,
-              child: notesState.when(
-                data: (_) {
-                  if (allNotes.isEmpty && !_onboardingComplete) {
-                    return _FirstRunWelcome(
-                      onStart: () => _completeOnboarding(),
-                      onCreateBackup: () => _completeOnboarding(
-                        destination: '/settings?setup=guided',
-                      ),
-                      onConnectExisting: () => _completeOnboarding(
-                        destination: '/settings?setup=existing',
-                      ),
-                    );
-                  }
-                  if (notes.isEmpty) {
-                    return _RefreshableMessage(
-                      allNotes.isEmpty
-                          ? 'No notes yet. Tap the calendar to start today\'s note.'
-                          : 'No notes in selected folders. Open View options to change them.',
-                    );
-                  }
-                  return ListView.separated(
-                    physics: const AlwaysScrollableScrollPhysics(),
-                    padding: const EdgeInsets.only(bottom: 88),
-                    itemCount:
-                        notes.length +
-                        ((_backupStatus?.kind == BackupStatusKind.localOnly &&
-                                !_backupPromptDismissed)
-                            ? 1
-                            : 0),
-                    separatorBuilder: (_, _) => const Divider(height: 1),
-                    itemBuilder: (_, index) {
-                      if (index == 0 &&
-                          _backupStatus?.kind == BackupStatusKind.localOnly &&
-                          !_backupPromptDismissed) {
-                        return _BackupStatusCard(
-                          status: _backupStatus!,
+          : Column(
+              children: [
+                _HomeViewSelector(
+                  selectedView: _selectedView,
+                  onSelected: (view) => setState(() => _selectedView = view),
+                ),
+                Expanded(
+                  child: RefreshIndicator(
+                    onRefresh: _refresh,
+                    child: notesState.when(
+                      data: (_) {
+                        if (allNotes.isEmpty && !_onboardingComplete) {
+                          return _FirstRunWelcome(
+                            onStart: () => _completeOnboarding(),
+                            onCreateBackup: () => _completeOnboarding(
+                              destination: '/settings?setup=guided',
+                            ),
+                            onConnectExisting: () => _completeOnboarding(
+                              destination: '/settings?setup=existing',
+                            ),
+                          );
+                        }
+                        if (notes.isEmpty) {
+                          return _RefreshableMessage(
+                            allNotes.isEmpty
+                                ? 'No notes yet. Tap the calendar to start today\'s note.'
+                                : 'No ${_selectedView.name} yet.',
+                          );
+                        }
+                        return _HomeNoteList(
+                          notes: notes,
+                          selectedView: _selectedView,
+                          showBackupPrompt:
+                              _backupStatus?.kind ==
+                                  BackupStatusKind.localOnly &&
+                              !_backupPromptDismissed,
+                          backupStatus: _backupStatus,
                           onOpenSettings: () => context.push('/settings'),
-                          onDismiss: _dismissBackupPrompt,
+                          onDismissBackupPrompt: _dismissBackupPrompt,
                         );
-                      }
-                      final noteIndex =
-                          _backupStatus?.kind == BackupStatusKind.localOnly &&
-                              !_backupPromptDismissed
-                          ? index - 1
-                          : index;
-                      final note = notes[noteIndex];
-                      return _NoteTile(key: ValueKey(note.id), note: note);
+                      },
+                      error: (error, _) =>
+                          _RefreshableMessage('Unable to load notes: $error'),
+                      loading: () =>
+                          const Center(child: CircularProgressIndicator()),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+      floatingActionButton: PlatformCapabilities.current.isDesktop
+          ? null
+          : Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                if (_createExpanded) ...[
+                  FloatingActionButton.extended(
+                    heroTag: 'new-note',
+                    onPressed: () {
+                      setState(() => _createExpanded = false);
+                      context.push('/editor/new');
                     },
-                  );
-                },
-                error: (error, _) =>
-                    _RefreshableMessage('Unable to load notes: $error'),
-                loading: () => const Center(child: CircularProgressIndicator()),
-              ),
+                    icon: const Icon(Icons.add),
+                    label: const Text('New note'),
+                  ),
+                  const SizedBox(height: 12),
+                  FloatingActionButton.extended(
+                    heroTag: 'new-todo',
+                    onPressed: () {
+                      setState(() => _createExpanded = false);
+                      context.push('/editor/todo');
+                    },
+                    icon: const Icon(Icons.checklist),
+                    label: const Text('New to-do'),
+                  ),
+                  const SizedBox(height: 12),
+                  FloatingActionButton.extended(
+                    heroTag: 'voice-capture',
+                    onPressed: () {
+                      setState(() => _createExpanded = false);
+                      context.push('/voice');
+                    },
+                    icon: const Icon(Icons.mic),
+                    label: const Text('Voice capture'),
+                  ),
+                  const SizedBox(height: 12),
+                ],
+                FloatingActionButton(
+                  heroTag: 'create-menu',
+                  tooltip: _createExpanded
+                      ? 'Close create menu'
+                      : 'Create new item',
+                  onPressed: () =>
+                      setState(() => _createExpanded = !_createExpanded),
+                  child: Icon(_createExpanded ? Icons.close : Icons.add),
+                ),
+              ],
             ),
-      floatingActionButton: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.end,
-        children: [
-          if (_createExpanded) ...[
-            FloatingActionButton.extended(
-              heroTag: 'new-note',
-              onPressed: () {
-                setState(() => _createExpanded = false);
-                context.push('/editor/new');
-              },
-              icon: const Icon(Icons.add),
-              label: const Text('New note'),
-            ),
-            const SizedBox(height: 12),
-            FloatingActionButton.extended(
-              heroTag: 'new-todo',
-              onPressed: () {
-                setState(() => _createExpanded = false);
-                context.push('/editor/todo');
-              },
-              icon: const Icon(Icons.checklist),
-              label: const Text('New to-do'),
-            ),
-            const SizedBox(height: 12),
-            FloatingActionButton.extended(
-              heroTag: 'voice-capture',
-              onPressed: () {
-                setState(() => _createExpanded = false);
-                context.push('/voice');
-              },
-              icon: const Icon(Icons.mic),
-              label: const Text('Voice capture'),
-            ),
-            const SizedBox(height: 12),
-          ],
-          FloatingActionButton(
-            heroTag: 'create-menu',
-            tooltip: _createExpanded ? 'Close create menu' : 'Create new item',
-            onPressed: () => setState(() => _createExpanded = !_createExpanded),
-            child: Icon(_createExpanded ? Icons.close : Icons.add),
-          ),
-        ],
-      ),
     );
   }
 }
 
 enum _HomeAction { viewOptions, settings }
+
+class _HomeViewSelector extends StatelessWidget {
+  const _HomeViewSelector({
+    required this.selectedView,
+    required this.onSelected,
+  });
+
+  final NoteListView selectedView;
+  final ValueChanged<NoteListView> onSelected;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.fromLTRB(16, 6, 16, 4),
+    child: SegmentedButton<NoteListView>(
+      segments: const [
+        ButtonSegment(value: NoteListView.notes, label: Text('Notes')),
+        ButtonSegment(
+          value: NoteListView.meetings,
+          label: Text('Meetings', softWrap: false),
+        ),
+        ButtonSegment(value: NoteListView.people, label: Text('People')),
+        ButtonSegment(value: NoteListView.all, label: Text('All')),
+      ],
+      selected: {selectedView},
+      showSelectedIcon: false,
+      style: const ButtonStyle(
+        visualDensity: VisualDensity.compact,
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        padding: WidgetStatePropertyAll(
+          EdgeInsets.symmetric(horizontal: 8, vertical: 7),
+        ),
+        textStyle: WidgetStatePropertyAll(TextStyle(fontSize: 13)),
+      ),
+      onSelectionChanged: (selection) => onSelected(selection.first),
+    ),
+  );
+}
 
 class _RefreshableMessage extends StatelessWidget {
   const _RefreshableMessage(this.message);
@@ -692,9 +771,89 @@ class _BackupStatusCard extends StatelessWidget {
 
 enum _BackupCardAction { settings, dismiss }
 
+class _HomeNoteList extends StatelessWidget {
+  const _HomeNoteList({
+    required this.notes,
+    required this.selectedView,
+    required this.showBackupPrompt,
+    required this.backupStatus,
+    required this.onOpenSettings,
+    required this.onDismissBackupPrompt,
+  });
+
+  final List<Note> notes;
+  final NoteListView selectedView;
+  final bool showBackupPrompt;
+  final BackupStatus? backupStatus;
+  final VoidCallback onOpenSettings;
+  final VoidCallback onDismissBackupPrompt;
+
+  @override
+  Widget build(BuildContext context) {
+    final children = <Widget>[
+      if (showBackupPrompt)
+        _BackupStatusCard(
+          status: backupStatus!,
+          onOpenSettings: onOpenSettings,
+          onDismiss: onDismissBackupPrompt,
+        ),
+    ];
+    if (selectedView == NoteListView.meetings) {
+      for (final group in groupMeetingsByDate(notes)) {
+        children.add(_MeetingDateHeader(date: group.date));
+        for (final note in group.notes) {
+          children
+            ..add(_NoteTile(key: ValueKey(note.id), note: note))
+            ..add(const Divider(height: 1));
+        }
+      }
+    } else {
+      for (final note in notes) {
+        children
+          ..add(
+            _NoteTile(
+              key: ValueKey(note.id),
+              note: note,
+              showPersonEmail: selectedView == NoteListView.people,
+            ),
+          )
+          ..add(const Divider(height: 1));
+      }
+    }
+    if (children.last is Divider) children.removeLast();
+    return ListView(
+      physics: const AlwaysScrollableScrollPhysics(),
+      padding: const EdgeInsets.only(bottom: 88),
+      children: children,
+    );
+  }
+}
+
+class _MeetingDateHeader extends StatelessWidget {
+  const _MeetingDateHeader({required this.date});
+
+  final DateTime date;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.fromLTRB(16, 20, 16, 6),
+    child: Text(
+      MaterialLocalizations.of(context).formatMediumDate(date),
+      style: Theme.of(context).textTheme.labelLarge?.copyWith(
+        color: Theme.of(context).colorScheme.primary,
+      ),
+    ),
+  );
+}
+
 class _NoteTile extends ConsumerStatefulWidget {
-  const _NoteTile({super.key, required this.note});
+  const _NoteTile({
+    super.key,
+    required this.note,
+    this.showPersonEmail = false,
+  });
   final Note note;
+  final bool showPersonEmail;
 
   @override
   ConsumerState<_NoteTile> createState() => _NoteTileState();
@@ -762,12 +921,26 @@ class _NoteTileState extends ConsumerState<_NoteTile>
     }
   }
 
+  Future<void> _openEmail(String email) async {
+    final opened = await launchUrl(
+      Uri(scheme: 'mailto', path: email),
+      mode: LaunchMode.externalApplication,
+    );
+    if (!opened && mounted) {
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(const SnackBar(content: Text('Unable to open email')));
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final note = widget.note;
-    final folder = noteFolderLabel(note);
+    final type = noteObjectType(note);
     final summary = hasUsableSummary(note) ? note.summary! : '';
-    final hasMetadata = folder != null || note.isConflict;
+    final email = widget.showPersonEmail ? noteEmailAddress(note) : null;
+    final secondaryText = widget.showPersonEmail ? email ?? '' : summary;
+    final hasMetadata = note.isConflict || email != null;
     final theme = Theme.of(context);
     return Semantics(
       label:
@@ -828,38 +1001,72 @@ class _NoteTileState extends ConsumerState<_NoteTile>
                     Expanded(
                       child: Text(
                         note.title.isEmpty ? 'Untitled' : note.title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
                         style: theme.textTheme.titleMedium,
                       ),
                     ),
+                    _NoteKindIcons(note: note, type: type),
                   ],
                 ),
-                if (summary.isNotEmpty || hasMetadata)
+                if (secondaryText.isNotEmpty || hasMetadata)
                   Padding(
                     padding: const EdgeInsets.only(top: 4),
                     child: Row(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        if (summary.isNotEmpty)
+                        if (secondaryText.isNotEmpty)
                           Expanded(
-                            child: Text(
-                              summary,
-                              maxLines: 2,
-                              overflow: TextOverflow.ellipsis,
-                              style: theme.textTheme.bodyMedium?.copyWith(
-                                color: theme.colorScheme.onSurfaceVariant,
-                              ),
-                            ),
+                            child: email == null
+                                ? Text(
+                                    secondaryText,
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: theme.textTheme.bodyMedium?.copyWith(
+                                      color: theme.colorScheme.onSurfaceVariant,
+                                    ),
+                                  )
+                                : Semantics(
+                                    link: true,
+                                    label: 'Email $email',
+                                    child: GestureDetector(
+                                      onTap: () => _openEmail(email),
+                                      child: Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          Icon(
+                                            Icons.mail_outline,
+                                            size: 18,
+                                            color: theme.colorScheme.primary,
+                                          ),
+                                          const SizedBox(width: 6),
+                                          Flexible(
+                                            child: Text(
+                                              email,
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
+                                              style: theme.textTheme.bodyMedium
+                                                  ?.copyWith(
+                                                    color: theme
+                                                        .colorScheme
+                                                        .primary,
+                                                    decoration: TextDecoration
+                                                        .underline,
+                                                  ),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
                           ),
-                        if (summary.isNotEmpty && hasMetadata)
+                        if (secondaryText.isNotEmpty && note.isConflict)
                           const SizedBox(width: 8),
                         if (note.isConflict)
                           const Icon(
                             Icons.warning_amber_rounded,
                             color: Colors.orange,
                           ),
-                        if (note.isConflict && folder != null)
-                          const SizedBox(width: 8),
-                        if (folder != null) _FolderBadge(label: folder),
                       ],
                     ),
                   ),
@@ -872,25 +1079,38 @@ class _NoteTileState extends ConsumerState<_NoteTile>
   }
 }
 
-class _FolderBadge extends StatelessWidget {
-  const _FolderBadge({required this.label});
-  final String label;
+class _NoteKindIcons extends StatelessWidget {
+  const _NoteKindIcons({required this.note, required this.type});
+
+  final Note note;
+  final NoteObjectType type;
 
   @override
-  Widget build(BuildContext context) => Container(
-    margin: const EdgeInsets.only(top: 2),
-    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-    decoration: BoxDecoration(
-      color: Theme.of(context).colorScheme.primary.withValues(alpha: .12),
-      borderRadius: BorderRadius.circular(8),
-    ),
-    child: Text(
-      label,
-      style: Theme.of(context).textTheme.labelMedium?.copyWith(
-        color: Theme.of(context).colorScheme.primary,
+  Widget build(BuildContext context) {
+    final icons = <(IconData, String)>[
+      if (type == NoteObjectType.meeting) (Icons.groups_outlined, 'Meeting'),
+      if (type == NoteObjectType.person) (Icons.person_outline, 'Person'),
+      if (note.isDaily) (Icons.calendar_today_outlined, 'Daily note'),
+    ];
+    if (icons.isEmpty) return const SizedBox.shrink();
+    final color = Theme.of(context).colorScheme.primary;
+    return Padding(
+      padding: const EdgeInsets.only(left: 8),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          for (final (icon, label) in icons)
+            Padding(
+              padding: const EdgeInsets.only(left: 6),
+              child: Tooltip(
+                message: label,
+                child: Icon(icon, size: 16, color: color),
+              ),
+            ),
+        ],
       ),
-    ),
-  );
+    );
+  }
 }
 
 class NoteDetailScreen extends ConsumerWidget {
@@ -1626,198 +1846,220 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
     final folders = creationFolders(
       ref.watch(notesProvider).asData?.value ?? const <Note>[],
     );
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(
-          widget.newTodo
-              ? 'New to-do'
-              : _note == null
-              ? 'New note'
-              : 'Edit note',
-        ),
-        actions: [
-          IconButton(
-            tooltip: 'Insert wiki link',
-            onPressed: _saving || _loading ? null : _insertWikiLink,
-            icon: const Icon(Icons.link),
+    return CallbackShortcuts(
+      bindings: {
+        const SingleActivator(LogicalKeyboardKey.keyS, meta: true): () =>
+            unawaited(_save()),
+      },
+      child: Scaffold(
+        appBar: AppBar(
+          title: Text(
+            widget.newTodo
+                ? 'New to-do'
+                : _note == null
+                ? 'New note'
+                : 'Edit note',
           ),
-          IconButton(
-            onPressed: _saving ? null : () => _addImage(ImageSource.camera),
-            icon: const Icon(Icons.photo_camera),
-          ),
-          IconButton(
-            onPressed: _saving ? null : () => _addImage(ImageSource.gallery),
-            icon: const Icon(Icons.photo_library),
-          ),
-          IconButton(
-            tooltip: 'Record into note',
-            onPressed: _saving || _voiceRecording ? null : _recordVoice,
-            icon: _voiceRecording
-                ? const SizedBox.square(
-                    dimension: 18,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : const Icon(Icons.mic),
-          ),
-          TextButton.icon(
-            key: const ValueKey('save-note'),
-            onPressed: _saving ? null : _save,
-            icon: _saving
-                ? const SizedBox.square(
-                    dimension: 18,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : const Icon(Icons.done),
-            label: const Text('Done'),
-          ),
-        ],
-      ),
-      body: _loading
-          ? const Center(child: CircularProgressIndicator())
-          : Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                children: [
-                  Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 12,
-                      vertical: 10,
-                    ),
-                    decoration: BoxDecoration(
-                      color: Theme.of(context).colorScheme.primaryContainer,
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: Row(
-                      children: [
-                        Icon(
-                          Icons.edit_outlined,
-                          color: Theme.of(
-                            context,
-                          ).colorScheme.onPrimaryContainer,
-                        ),
-                        const SizedBox(width: 10),
-                        Expanded(
-                          child: Text(
-                            'Editing — changes are saved when you tap Done.',
-                            style: Theme.of(context).textTheme.bodyMedium
-                                ?.copyWith(
-                                  color: Theme.of(
-                                    context,
-                                  ).colorScheme.onPrimaryContainer,
-                                ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  TextField(
-                    controller: _title,
-                    decoration: const InputDecoration(labelText: 'Title'),
-                  ),
-                  if (_note == null && !widget.newTodo)
-                    Align(
-                      alignment: Alignment.centerLeft,
-                      child: PopupMenuButton<String>(
-                        tooltip: 'Choose note folder',
-                        initialValue: _selectedFolder ?? _inboxFolderOption,
-                        onSelected: (folder) => setState(
-                          () => _selectedFolder = folder == _inboxFolderOption
-                              ? null
-                              : folder,
-                        ),
-                        itemBuilder: (_) => [
-                          const PopupMenuItem<String>(
-                            value: _inboxFolderOption,
-                            child: Text('Inbox'),
-                          ),
-                          for (final folder in folders)
-                            PopupMenuItem<String>(
-                              value: folder,
-                              child: Text(folder),
-                            ),
-                        ],
-                        child: Padding(
-                          padding: const EdgeInsets.only(top: 6),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              const Icon(Icons.folder_outlined),
-                              const SizedBox(width: 8),
-                              Text('Save to: ${_selectedFolder ?? 'Inbox'}'),
-                              const Icon(Icons.arrow_drop_down),
-                            ],
-                          ),
-                        ),
+          actions: [
+            IconButton(
+              tooltip: 'Insert wiki link',
+              onPressed: _saving || _loading ? null : _insertWikiLink,
+              icon: const Icon(Icons.link),
+            ),
+            for (final action in editorImageActions(
+              PlatformCapabilities.current,
+            ))
+              IconButton(
+                tooltip: action == EditorImageAction.camera
+                    ? 'Take photo'
+                    : PlatformCapabilities.current.isDesktop
+                    ? 'Choose image…'
+                    : 'Choose from gallery',
+                onPressed: _saving
+                    ? null
+                    : () => _addImage(
+                        action == EditorImageAction.camera
+                            ? ImageSource.camera
+                            : ImageSource.gallery,
                       ),
-                    ),
-                  if (_willRewriteUnsupportedMarkdown) ...[
-                    const SizedBox(height: 12),
+                icon: Icon(
+                  action == EditorImageAction.camera
+                      ? Icons.photo_camera
+                      : Icons.photo_library,
+                ),
+              ),
+            IconButton(
+              tooltip: 'Record into note',
+              onPressed: _saving || _voiceRecording ? null : _recordVoice,
+              icon: _voiceRecording
+                  ? const SizedBox.square(
+                      dimension: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.mic),
+            ),
+            TextButton.icon(
+              key: const ValueKey('save-note'),
+              onPressed: _saving ? null : _save,
+              icon: _saving
+                  ? const SizedBox.square(
+                      dimension: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.done),
+              label: const Text('Done'),
+            ),
+          ],
+        ),
+        body: _loading
+            ? const Center(child: CircularProgressIndicator())
+            : Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  children: [
                     Container(
                       width: double.infinity,
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        color: Theme.of(context).colorScheme.errorContainer,
-                        borderRadius: BorderRadius.circular(8),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 10,
                       ),
-                      child: Text(
-                        'Saving this note will rewrite unsupported Markdown.',
-                        style: TextStyle(
-                          color: Theme.of(context).colorScheme.onErrorContainer,
+                      decoration: BoxDecoration(
+                        color: Theme.of(context).colorScheme.primaryContainer,
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(
+                            Icons.edit_outlined,
+                            color: Theme.of(
+                              context,
+                            ).colorScheme.onPrimaryContainer,
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Text(
+                              'Editing — changes are saved when you tap Done.',
+                              style: Theme.of(context).textTheme.bodyMedium
+                                  ?.copyWith(
+                                    color: Theme.of(
+                                      context,
+                                    ).colorScheme.onPrimaryContainer,
+                                  ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: _title,
+                      decoration: const InputDecoration(labelText: 'Title'),
+                    ),
+                    if (_note == null && !widget.newTodo)
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: PopupMenuButton<String>(
+                          tooltip: 'Choose note folder',
+                          initialValue: _selectedFolder ?? _inboxFolderOption,
+                          onSelected: (folder) => setState(
+                            () => _selectedFolder = folder == _inboxFolderOption
+                                ? null
+                                : folder,
+                          ),
+                          itemBuilder: (_) => [
+                            const PopupMenuItem<String>(
+                              value: _inboxFolderOption,
+                              child: Text('Inbox'),
+                            ),
+                            for (final folder in folders)
+                              PopupMenuItem<String>(
+                                value: folder,
+                                child: Text(folder),
+                              ),
+                          ],
+                          child: Padding(
+                            padding: const EdgeInsets.only(top: 6),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                const Icon(Icons.folder_outlined),
+                                const SizedBox(width: 8),
+                                Text('Save to: ${_selectedFolder ?? 'Inbox'}'),
+                                const Icon(Icons.arrow_drop_down),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    if (_willRewriteUnsupportedMarkdown) ...[
+                      const SizedBox(height: 12),
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: Theme.of(context).colorScheme.errorContainer,
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Text(
+                          'Saving this note will rewrite unsupported Markdown.',
+                          style: TextStyle(
+                            color: Theme.of(
+                              context,
+                            ).colorScheme.onErrorContainer,
+                          ),
+                        ),
+                      ),
+                    ],
+                    const SizedBox(height: 12),
+                    Expanded(
+                      // MobileToolbar reserves a keyboard-height spacer inside
+                      // this flex layout. On Android that repeatedly relayouts
+                      // the editor while IME insets animate, and can starve the
+                      // UI thread on a sufficiently large document. The V2
+                      // toolbar is AppFlowy's supported mobile integration: it
+                      // renders in an overlay and only reserves its fixed height
+                      // in the editor layout.
+                      child: MobileToolbarV2(
+                        editorState: _editorState!,
+                        toolbarItems: [
+                          headingMobileToolbarItem,
+                          textDecorationMobileToolbarItemV2,
+                          codeMobileToolbarItem,
+                          linkMobileToolbarItem,
+                          listMobileToolbarItem,
+                          _globalTaskMobileToolbarItem,
+                          // A note-local checkbox is deliberately distinct from
+                          // the global `+ [ ]` task action above.
+                          _localCheckboxMobileToolbarItem,
+                          quoteMobileToolbarItem,
+                          dividerMobileToolbarItem,
+                        ],
+                        child: AppFlowyEditor(
+                          editorState: _editorState!,
+                          focusNode: _editorFocus,
+                          // Do not create an initial selection in block zero:
+                          // AppFlowy's mobile auto-scroll listener would then
+                          // pull a manually scrolled long note back to the top.
+                          autoFocus: false,
+                          // Keep the scroll service because it maps touch
+                          // coordinates to virtualized blocks for selection. A
+                          // zero edge stops its buggy automatic edge-scrolling
+                          // loop; regular finger scrolling remains unchanged.
+                          autoScrollEdgeOffset: 0,
+                          editorStyle: EditorStyle.mobile(
+                            padding: const EdgeInsets.symmetric(horizontal: 4),
+                            cursorColor: Theme.of(context).colorScheme.primary,
+                            textStyleConfiguration: TextStyleConfiguration(
+                              text: Theme.of(context).textTheme.bodyLarge!,
+                            ),
+                          ),
                         ),
                       ),
                     ),
                   ],
-                  const SizedBox(height: 12),
-                  Expanded(
-                    // MobileToolbar reserves a keyboard-height spacer inside
-                    // this flex layout. On Android that repeatedly relayouts
-                    // the editor while IME insets animate, and can starve the
-                    // UI thread on a sufficiently large document. The V2
-                    // toolbar is AppFlowy's supported mobile integration: it
-                    // renders in an overlay and only reserves its fixed height
-                    // in the editor layout.
-                    child: MobileToolbarV2(
-                      editorState: _editorState!,
-                      toolbarItems: [
-                        headingMobileToolbarItem,
-                        textDecorationMobileToolbarItemV2,
-                        codeMobileToolbarItem,
-                        linkMobileToolbarItem,
-                        listMobileToolbarItem,
-                        _globalTaskMobileToolbarItem,
-                        // A note-local checkbox is deliberately distinct from
-                        // the global `+ [ ]` task action above.
-                        _localCheckboxMobileToolbarItem,
-                        quoteMobileToolbarItem,
-                        dividerMobileToolbarItem,
-                      ],
-                      child: AppFlowyEditor(
-                        editorState: _editorState!,
-                        focusNode: _editorFocus,
-                        // Do not create an initial selection in block zero:
-                        // AppFlowy's mobile auto-scroll listener would then
-                        // pull a manually scrolled long note back to the top.
-                        autoFocus: false,
-                        // Keep the scroll service because it maps touch
-                        // coordinates to virtualized blocks for selection. A
-                        // zero edge stops its buggy automatic edge-scrolling
-                        // loop; regular finger scrolling remains unchanged.
-                        autoScrollEdgeOffset: 0,
-                        editorStyle: EditorStyle.mobile(
-                          padding: const EdgeInsets.symmetric(horizontal: 4),
-                          cursorColor: Theme.of(context).colorScheme.primary,
-                          textStyleConfiguration: TextStyleConfiguration(
-                            text: Theme.of(context).textTheme.bodyLarge!,
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                ],
+                ),
               ),
-            ),
+      ),
     );
   }
 }
@@ -1924,18 +2166,7 @@ class TodoScreen extends ConsumerWidget {
     length: TodoFilter.values.length,
     child: Scaffold(
       appBar: AppBar(
-        title: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            SpecularWordmark(
-              isSyncing: ref.watch(syncControllerProvider).state.isSyncing,
-            ),
-            const Padding(
-              padding: EdgeInsets.only(left: 10),
-              child: Text('To-dos'),
-            ),
-          ],
-        ),
+        title: Text('To-dos'),
         bottom: const TabBar(
           tabs: [
             Tab(text: 'Open'),
@@ -3083,12 +3314,14 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 label: const Text('Disconnect GitHub'),
               ),
             const SizedBox(height: 8),
-            OutlinedButton.icon(
-              onPressed: _saving ? null : _exportPortableBackup,
-              icon: const Icon(Icons.save_alt_outlined),
-              label: const Text('Export portable backup'),
-            ),
-            if (_configuredOwner.isEmpty)
+            if (PlatformCapabilities.current.supportsPortableBackupDocuments)
+              OutlinedButton.icon(
+                onPressed: _saving ? null : _exportPortableBackup,
+                icon: const Icon(Icons.save_alt_outlined),
+                label: const Text('Export portable backup'),
+              ),
+            if (PlatformCapabilities.current.supportsPortableBackupDocuments &&
+                _configuredOwner.isEmpty)
               OutlinedButton.icon(
                 onPressed: _saving ? null : _restorePortableBackup,
                 icon: const Icon(Icons.restore),
@@ -3146,7 +3379,15 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             DropdownButtonFormField<int>(
               key: ValueKey(_syncIntervalMinutes),
               initialValue: _syncIntervalMinutes,
-              decoration: const InputDecoration(labelText: 'Background sync'),
+              decoration: InputDecoration(
+                labelText:
+                    PlatformCapabilities.current.supportsBestEffortInProcessSync
+                    ? 'Best-effort sync while open'
+                    : 'Background sync',
+                helperText: syncScheduleDescription(
+                  PlatformCapabilities.current,
+                ),
+              ),
               items: [
                 for (final minutes in SyncScheduler.intervalChoices)
                   DropdownMenuItem(

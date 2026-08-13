@@ -1,12 +1,14 @@
 import 'package:flutter/services.dart';
 
-/// Best-effort notification for the Android home-screen widget. The widget
-/// reads the same legacy SQLite index, so no Flutter process needs to remain
-/// alive for it to render or complete a task.
+import 'platform_capabilities.dart';
+
+/// Best-effort notification for the Android home-screen widget. Desktop has
+/// no equivalent in this release, so these calls are deliberate no-ops there.
 class WidgetBridge {
   static const _channel = MethodChannel('com.specular.android/widget');
 
   static void setNavigationHandler(void Function(String route) handler) {
+    if (!PlatformCapabilities.current.supportsHomeWidget) return;
     _channel.setMethodCallHandler((call) async {
       if (call.method == 'navigate') {
         final arguments = Map<Object?, Object?>.from(
@@ -19,6 +21,7 @@ class WidgetBridge {
   }
 
   static Future<void> refresh() async {
+    if (!PlatformCapabilities.current.supportsHomeWidget) return;
     try {
       await _channel.invokeMethod<void>('refreshTodoWidget');
     } on MissingPluginException {

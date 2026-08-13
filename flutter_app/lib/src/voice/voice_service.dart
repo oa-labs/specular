@@ -11,6 +11,8 @@ import 'package:record/record.dart';
 import 'package:uuid/uuid.dart';
 import 'package:workmanager/workmanager.dart';
 
+import '../platform/platform_capabilities.dart';
+
 /// A recording is durable before any network operation begins.  The manifest
 /// makes an interrupted upload/restart recoverable instead of treating audio as
 /// an ephemeral UI detail.
@@ -305,6 +307,7 @@ class VoiceService {
   }
 
   Future<void> _checkForegroundStop() async {
+    if (!PlatformCapabilities.current.supportsForegroundRecording) return;
     try {
       final requested =
           await _platform.invokeMethod<bool>('foregroundStopRequested') ??
@@ -629,6 +632,7 @@ class VoiceService {
     final directory = _sessionDirectory;
     final session = _session;
     if (directory == null || session == null) return;
+    if (!PlatformCapabilities.current.supportsDurableBackgroundSync) return;
     await Workmanager().registerOneOffTask(
       'voice_retry_${session.id}',
       retryTask,
@@ -641,6 +645,7 @@ class VoiceService {
   }
 
   Future<int?> _availableBytes() async {
+    if (!PlatformCapabilities.current.supportsForegroundRecording) return null;
     try {
       return await _platform.invokeMethod<int>('availableBytes');
     } on MissingPluginException {
@@ -649,6 +654,7 @@ class VoiceService {
   }
 
   Future<void> _startForegroundService(String id) async {
+    if (!PlatformCapabilities.current.supportsForegroundRecording) return;
     try {
       await _platform.invokeMethod<void>('startForegroundRecording', {
         'sessionId': id,
@@ -660,6 +666,7 @@ class VoiceService {
   }
 
   Future<void> _stopForegroundService() async {
+    if (!PlatformCapabilities.current.supportsForegroundRecording) return;
     try {
       await _platform.invokeMethod<void>('stopForegroundRecording');
     } on MissingPluginException {

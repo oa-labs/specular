@@ -4,25 +4,30 @@ import 'package:specular/src/sync/github_sync.dart';
 import 'package:specular/src/ui/screens.dart';
 
 void main() {
-  Note note(String title, int updatedAt, {String? path, bool pinned = false}) =>
-      Note(
-        id: title,
-        title: title,
-        path: path ?? '$title.md',
-        rawMarkdown: '',
-        body: '',
-        summary: null,
-        aliases: const [],
-        isDaily: false,
-        isPinned: pinned,
-        lastRemoteSha: null,
-        isDirty: false,
-        isPendingDeletion: false,
-        pendingRenameFromPath: null,
-        pendingRenameFromSha: null,
-        isConflict: false,
-        updatedAt: DateTime.fromMillisecondsSinceEpoch(updatedAt),
-      );
+  Note note(
+    String title,
+    int updatedAt, {
+    String? path,
+    bool pinned = false,
+    String body = '',
+  }) => Note(
+    id: title,
+    title: title,
+    path: path ?? '$title.md',
+    rawMarkdown: '',
+    body: body,
+    summary: null,
+    aliases: const [],
+    isDaily: false,
+    isPinned: pinned,
+    lastRemoteSha: null,
+    isDirty: false,
+    isPendingDeletion: false,
+    pendingRenameFromPath: null,
+    pendingRenameFromSha: null,
+    isConflict: false,
+    updatedAt: DateTime.fromMillisecondsSinceEpoch(updatedAt),
+  );
 
   test('sorts within pinned notes by the selected order', () {
     final notes = [
@@ -78,6 +83,72 @@ void main() {
       ).map((note) => note.title),
       ['Inbox', 'Plan'],
     );
+  });
+
+  test(
+    'separates note types using Reflect metadata or established folders',
+    () {
+      final regular = note('Plan', 1, path: 'notes/plan.md');
+      final typedMeeting = note(
+        'Review',
+        2,
+        path: 'notes/review.md',
+        body: '- Type: #meeting',
+      );
+      final folderPerson = note('Avery', 3, path: 'people/avery.md');
+
+      expect(noteObjectType(regular), NoteObjectType.note);
+      expect(noteObjectType(typedMeeting), NoteObjectType.meeting);
+      expect(noteObjectType(folderPerson), NoteObjectType.person);
+      expect(
+        sortAndFilterNotes(
+          [regular, typedMeeting, folderPerson],
+          sort: NoteListSort.lastUpdated,
+          view: NoteListView.meetings,
+        ).map((note) => note.title),
+        ['Review'],
+      );
+    },
+  );
+
+  test('prefers a person email field and finds legacy email addresses', () {
+    final person = note(
+      'Avery',
+      1,
+      body: '''
+- Type: #person
+- Email: avery@example.com
+
+Backup: other@example.com
+''',
+    );
+    final legacyPerson = note('Robin', 2, body: 'Contact robin@example.org');
+
+    expect(noteEmailAddress(person), 'avery@example.com');
+    expect(noteEmailAddress(legacyPerson), 'robin@example.org');
+  });
+
+  test('groups meetings by the day they were last updated', () {
+    final older = note('Older', 0, path: 'meetings/older.md');
+    final firstToday = note(
+      'First today',
+      DateTime(2026, 8, 13, 8).millisecondsSinceEpoch,
+      path: 'meetings/first-today.md',
+    );
+    final secondToday = note(
+      'Second today',
+      DateTime(2026, 8, 13, 16).millisecondsSinceEpoch,
+      path: 'meetings/second-today.md',
+    );
+
+    final groups = groupMeetingsByDate([older, firstToday, secondToday]);
+
+    expect(groups, hasLength(2));
+    expect(groups.first.date, DateTime(2026, 8, 13));
+    expect(groups.first.notes.map((note) => note.title), [
+      'First today',
+      'Second today',
+    ]);
   });
 
   test('keeps existing to-dos in place when their note is updated', () {
