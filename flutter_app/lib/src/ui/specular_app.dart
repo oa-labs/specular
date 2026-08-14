@@ -21,6 +21,18 @@ import '../platform/platform_capabilities.dart';
 import '../sync/sync_scheduler.dart';
 import 'screens.dart';
 
+/// Material's compact/medium boundary. At this width a navigation rail leaves
+/// enough room for the primary note content without turning a phone UI into a
+/// stretched single column.
+const tabletLayoutBreakpoint = 600.0;
+
+/// Use labels in the app rail once there is room for both navigation and a
+/// comfortably constrained reading column.
+const expandedNavigationBreakpoint = 840.0;
+
+bool usesWideLayout(BuildContext context) =>
+    MediaQuery.sizeOf(context).width >= tabletLayoutBreakpoint;
+
 final appDatabaseProvider = Provider<AppDatabase>(
   (_) => throw UnimplementedError(),
 );
@@ -55,6 +67,9 @@ final aiSummaryServiceProvider = Provider<AiSummaryService>(
 final themeModeControllerProvider = ChangeNotifierProvider<ThemeModeController>(
   (_) => ThemeModeController(ThemeMode.light),
 );
+final textScaleControllerProvider = ChangeNotifierProvider<TextScaleController>(
+  (_) => TextScaleController(defaultTextScale),
+);
 final notesProvider = StreamProvider<List<Note>>(
   (ref) => ref.watch(noteRepositoryProvider).watchNotes(),
 );
@@ -74,6 +89,8 @@ final todosProvider = StreamProvider.family<List<TodoItem>, TodoFilter>(
 
 const lastRouteStorageKey = 'last_route';
 const themeModeStorageKey = 'theme_mode';
+const textScaleStorageKey = 'text_scale';
+const defaultTextScale = 1.0;
 const onboardingCompletedStorageKey = 'onboarding_completed';
 const backupPromptDismissedStorageKey = 'backup_prompt_dismissed';
 
@@ -295,6 +312,11 @@ ThemeMode themeModeFromStorage(String? value) =>
 String themeModeStorageValue(ThemeMode mode) =>
     mode == ThemeMode.dark ? 'dark' : 'light';
 
+double textScaleFromStorage(String? value) {
+  final scale = double.tryParse(value ?? '');
+  return scale == null ? defaultTextScale : scale.clamp(0.9, 1.4);
+}
+
 class ThemeModeController extends ChangeNotifier {
   ThemeModeController(this._themeMode);
 
@@ -305,6 +327,21 @@ class ThemeModeController extends ChangeNotifier {
   void setThemeMode(ThemeMode mode) {
     if (_themeMode == mode) return;
     _themeMode = mode;
+    notifyListeners();
+  }
+}
+
+class TextScaleController extends ChangeNotifier {
+  TextScaleController(this._textScale);
+
+  double _textScale;
+
+  double get textScale => _textScale;
+
+  void setTextScale(double scale) {
+    final next = scale.clamp(0.9, 1.4);
+    if (_textScale == next) return;
+    _textScale = next;
     notifyListeners();
   }
 }
@@ -439,6 +476,7 @@ class _SpecularAppState extends ConsumerState<SpecularApp> {
   Widget build(BuildContext context) {
     const amber = Color(0xffd97706);
     final themeMode = ref.watch(themeModeControllerProvider).themeMode;
+    final textScale = ref.watch(textScaleControllerProvider).textScale;
     final syncState = ref.watch(syncControllerProvider).state;
     return MaterialApp.router(
       title: 'Specular',
@@ -465,16 +503,21 @@ class _SpecularAppState extends ConsumerState<SpecularApp> {
       ),
       themeMode: themeMode,
       routerConfig: _router,
-      builder: (context, child) => _DesktopAppShell(
-        router: _router,
-        child: Stack(
-          children: [
-            child ?? const SizedBox.shrink(),
-            if (syncState.isSyncing && syncState.isInitialSync)
-              _InitialSyncOverlay(state: syncState),
-            if (syncState.isSyncing && !syncState.isInitialSync)
-              _SyncProgressSnackbar(state: syncState),
-          ],
+      builder: (context, child) => MediaQuery(
+        data: MediaQuery.of(
+          context,
+        ).copyWith(textScaler: TextScaler.linear(textScale)),
+        child: _AdaptiveAppShell(
+          router: _router,
+          child: Stack(
+            children: [
+              child ?? const SizedBox.shrink(),
+              if (syncState.isSyncing && syncState.isInitialSync)
+                _InitialSyncOverlay(state: syncState),
+              if (syncState.isSyncing && !syncState.isInitialSync)
+                _SyncProgressSnackbar(state: syncState),
+            ],
+          ),
         ),
       ),
     );
@@ -497,17 +540,72 @@ class _AppLifecycleObserver with WidgetsBindingObserver {
   int get hashCode => onChanged.hashCode;
 }
 
-/// A desktop shell retains navigation, gives mouse users visible destinations,
-/// and keeps the existing phone-sized pages intact below the 900px breakpoint.
-class _DesktopAppShell extends StatelessWidget {
-  const _DesktopAppShell({required this.router, required this.child});
+/// Keeps the compact phone UI below 600dp and provides persistent navigation
+/// for tablets and desktops. Desktop-only menu and shortcut integrations stay
+/// desktop-only; Android tablets receive the same adaptive visual structure.
+class _AdaptiveAppShell extends StatelessWidget {
+  const _AdaptiveAppShell({required this.router, required this.child});
 
   final GoRouter router;
   final Widget child;
 
   @override
   Widget build(BuildContext context) {
-    if (!PlatformCapabilities.current.isDesktop) return child;
+    final adaptiveChild = LayoutBuilder(
+      builder: (context, constraints) {
+        if (constraints.maxWidth < tabletLayoutBreakpoint) return child;
+        final extended = constraints.maxWidth >= expandedNavigationBreakpoint;
+        return Row(
+          children: [
+            NavigationRail(
+              extended: extended,
+              selectedIndex: _selectedIndex(router),
+              labelType: extended
+                  ? NavigationRailLabelType.none
+                  : NavigationRailLabelType.all,
+              leading: Padding(
+                padding: const EdgeInsets.only(top: 12),
+                child: FilledButton.icon(
+                  onPressed: () => router.go('/editor/new'),
+                  icon: const Icon(Icons.add),
+                  label: const Text('New note'),
+                ),
+              ),
+              destinations: const [
+                NavigationRailDestination(
+                  icon: Icon(Icons.notes_outlined),
+                  selectedIcon: Icon(Icons.notes),
+                  label: Text('Notes'),
+                ),
+                NavigationRailDestination(
+                  icon: Icon(Icons.checklist_outlined),
+                  selectedIcon: Icon(Icons.checklist),
+                  label: Text('To-dos'),
+                ),
+                NavigationRailDestination(
+                  icon: Icon(Icons.search),
+                  label: Text('Search'),
+                ),
+                NavigationRailDestination(
+                  icon: Icon(Icons.settings_outlined),
+                  selectedIcon: Icon(Icons.settings),
+                  label: Text('Settings'),
+                ),
+              ],
+              onDestinationSelected: (index) => router.go(switch (index) {
+                0 => '/',
+                1 => '/todos',
+                2 => '/search',
+                _ => '/settings',
+              }),
+            ),
+            const VerticalDivider(width: 1),
+            Expanded(child: child),
+          ],
+        );
+      },
+    );
+    if (!PlatformCapabilities.current.isDesktop) return adaptiveChild;
     final desktopChild = CallbackShortcuts(
       bindings: {
         const SingleActivator(LogicalKeyboardKey.keyN, meta: true): () =>
@@ -522,65 +620,18 @@ class _DesktopAppShell extends StatelessWidget {
           if (router.canPop()) router.pop();
         },
       },
-      child: Focus(
-        autofocus: true,
-        child: LayoutBuilder(
-          builder: (context, constraints) {
-            if (constraints.maxWidth < 900) return child;
-            return Row(
-              children: [
-                NavigationRail(
-                  extended: constraints.maxWidth >= 1160,
-                  selectedIndex: _selectedIndex(router),
-                  labelType: constraints.maxWidth >= 1160
-                      ? NavigationRailLabelType.none
-                      : NavigationRailLabelType.all,
-                  leading: Padding(
-                    padding: const EdgeInsets.only(top: 12),
-                    child: FilledButton.icon(
-                      onPressed: () => router.go('/editor/new'),
-                      icon: const Icon(Icons.add),
-                      label: const Text('New note'),
-                    ),
-                  ),
-                  destinations: const [
-                    NavigationRailDestination(
-                      icon: Icon(Icons.notes_outlined),
-                      selectedIcon: Icon(Icons.notes),
-                      label: Text('Notes'),
-                    ),
-                    NavigationRailDestination(
-                      icon: Icon(Icons.checklist_outlined),
-                      selectedIcon: Icon(Icons.checklist),
-                      label: Text('To-dos'),
-                    ),
-                    NavigationRailDestination(
-                      icon: Icon(Icons.search),
-                      label: Text('Search'),
-                    ),
-                    NavigationRailDestination(
-                      icon: Icon(Icons.settings_outlined),
-                      selectedIcon: Icon(Icons.settings),
-                      label: Text('Settings'),
-                    ),
-                  ],
-                  onDestinationSelected: (index) => router.go(switch (index) {
-                    0 => '/',
-                    1 => '/todos',
-                    2 => '/search',
-                    _ => '/settings',
-                  }),
-                ),
-                const VerticalDivider(width: 1),
-                Expanded(child: child),
-              ],
-            );
-          },
-        ),
-      ),
+      child: Focus(autofocus: true, child: adaptiveChild),
     );
     return PlatformMenuBar(
       menus: [
+        if (PlatformProvidedMenuItem.hasMenu(PlatformProvidedMenuItemType.quit))
+          PlatformMenu(
+            label: 'Specular',
+            menus: const [
+              // Lets macOS provide its standard Quit Specular (⌘Q) command.
+              PlatformProvidedMenuItem(type: .quit),
+            ],
+          ),
         PlatformMenu(
           label: 'File',
           menus: [

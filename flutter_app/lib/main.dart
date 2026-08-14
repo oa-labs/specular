@@ -24,6 +24,9 @@ Future<void> main() async {
   final themeMode = themeModeFromStorage(
     await secureStorage.read(key: themeModeStorageKey),
   );
+  final textScale = textScaleFromStorage(
+    await secureStorage.read(key: textScaleStorageKey),
+  );
   await SyncScheduler.initialize(secureStorage);
   final database = AppDatabase.openLegacy(state);
   final repository = NoteRepository(
@@ -39,6 +42,9 @@ Future<void> main() async {
         secureStorageProvider.overrideWithValue(secureStorage),
         themeModeControllerProvider.overrideWith(
           (_) => ThemeModeController(themeMode),
+        ),
+        textScaleControllerProvider.overrideWith(
+          (_) => TextScaleController(textScale),
         ),
       ],
       child: SpecularApp(initialLocation: initialLocation),

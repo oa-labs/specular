@@ -8,7 +8,7 @@
 PRODUCT_NAME = Specular
 
 // The application's bundle identifier
-PRODUCT_BUNDLE_IDENTIFIER = com.specular.app
+PRODUCT_BUNDLE_IDENTIFIER = com.openarc.labs.specular
 
 // Flutter 3.44 and the desktop plugins used by Specular support macOS 11+.
 MACOSX_DEPLOYMENT_TARGET = 11.0

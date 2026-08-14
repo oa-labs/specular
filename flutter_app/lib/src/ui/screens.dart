@@ -437,7 +437,7 @@ class _NoteListScreenState extends ConsumerState<NoteListScreen> {
             onPressed: () => context.push('/search'),
             icon: const Icon(Icons.search),
           ),
-          if (PlatformCapabilities.current.isDesktop)
+          if (usesWideLayout(context))
             PopupMenuButton<String>(
               tooltip: 'Create',
               icon: const Icon(Icons.add),
@@ -542,7 +542,7 @@ class _NoteListScreenState extends ConsumerState<NoteListScreen> {
                 ),
               ],
             ),
-      floatingActionButton: PlatformCapabilities.current.isDesktop
+      floatingActionButton: usesWideLayout(context)
           ? null
           : Column(
               mainAxisSize: MainAxisSize.min,
@@ -1355,18 +1355,6 @@ class _NotePreviewBody extends ConsumerWidget {
                       color: Theme.of(context).colorScheme.primary,
                     ),
                   ),
-                  const Spacer(),
-                  Semantics(
-                    label: 'Read-only preview. Use Edit to change this note.',
-                    child: Tooltip(
-                      message:
-                          'Read-only preview. Use Edit to change this note.',
-                      child: Icon(
-                        Icons.visibility_outlined,
-                        color: Theme.of(context).colorScheme.onSurfaceVariant,
-                      ),
-                    ),
-                  ),
                 ],
               ),
               const SizedBox(height: 4),
@@ -1575,58 +1563,118 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
   static final _globalTaskMobileToolbarItem = MobileToolbarItem.action(
     itemIconBuilder: (context, _, _) =>
         Icon(Icons.task_alt, color: MobileToolbarTheme.of(context).iconColor),
-    actionHandler: (_, editorState) async {
-      final selection = editorState.selection;
-      if (selection == null) return;
-      final node = editorState.getNodeAtPath(selection.start.path);
-      if (node == null) return;
-      final isGlobalTask =
-          node.type == TodoListBlockKeys.type &&
-          node.attributes[NoteBodyEditorCodec.globalTaskAttribute] == true;
-      await editorState.formatNode(
-        selection,
-        (node) => node.copyWith(
-          type: isGlobalTask ? ParagraphBlockKeys.type : TodoListBlockKeys.type,
-          attributes: {
-            TodoListBlockKeys.checked: false,
-            ParagraphBlockKeys.delta: (node.delta ?? Delta()).toJson(),
-            if (!isGlobalTask) NoteBodyEditorCodec.globalTaskAttribute: true,
-          },
-        ),
-      );
-    },
+    actionHandler: (_, editorState) => _toggleGlobalTask(editorState),
   );
   static final _localCheckboxMobileToolbarItem = MobileToolbarItem.action(
     itemIconBuilder: (context, _, _) => Icon(
       Icons.check_box_outline_blank,
       color: MobileToolbarTheme.of(context).iconColor,
     ),
-    actionHandler: (_, editorState) async {
-      final selection = editorState.selection;
-      if (selection == null) return;
-      final node = editorState.getNodeAtPath(selection.start.path);
-      if (node == null) return;
-      final isLocalCheckbox =
-          node.type == TodoListBlockKeys.type &&
-          node.attributes[NoteBodyEditorCodec.globalTaskAttribute] != true;
-      await editorState.formatNode(
-        selection,
-        (node) => node.copyWith(
-          type: isLocalCheckbox
-              ? ParagraphBlockKeys.type
-              : TodoListBlockKeys.type,
-          attributes: {
-            TodoListBlockKeys.checked: false,
-            ParagraphBlockKeys.delta: (node.delta ?? Delta()).toJson(),
-          },
-        ),
+    actionHandler: (_, editorState) => _toggleLocalCheckbox(editorState),
+  );
+
+  static final _globalTaskToolbarItem = ToolbarItem(
+    id: 'specular.global_task',
+    group: 3,
+    isActive: onlyShowInTextType,
+    builder: (context, editorState, _, iconColor, tooltipBuilder) {
+      final child = _desktopToolbarButton(
+        icon: Icons.task_alt,
+        color: iconColor,
+        onPressed: () => unawaited(_toggleGlobalTask(editorState)),
       );
+      return tooltipBuilder?.call(
+            context,
+            'specular.global_task',
+            'Global task',
+            child,
+          ) ??
+          child;
     },
   );
+  static final _localCheckboxToolbarItem = ToolbarItem(
+    id: 'specular.local_checkbox',
+    group: 3,
+    isActive: onlyShowInTextType,
+    builder: (context, editorState, _, iconColor, tooltipBuilder) {
+      final child = _desktopToolbarButton(
+        icon: Icons.check_box_outline_blank,
+        color: iconColor,
+        onPressed: () => unawaited(_toggleLocalCheckbox(editorState)),
+      );
+      return tooltipBuilder?.call(
+            context,
+            'specular.local_checkbox',
+            'Note checkbox',
+            child,
+          ) ??
+          child;
+    },
+  );
+
+  static Widget _desktopToolbarButton({
+    required IconData icon,
+    required Color? color,
+    required VoidCallback onPressed,
+  }) => SizedBox.square(
+    dimension: 32,
+    child: IconButton(
+      padding: EdgeInsets.zero,
+      visualDensity: VisualDensity.compact,
+      tooltip: null,
+      color: color,
+      icon: Icon(icon, size: 18),
+      onPressed: onPressed,
+    ),
+  );
+
+  static Future<void> _toggleGlobalTask(EditorState editorState) async {
+    final selection = editorState.selection;
+    if (selection == null) return;
+    final node = editorState.getNodeAtPath(selection.start.path);
+    if (node == null) return;
+    final isGlobalTask =
+        node.type == TodoListBlockKeys.type &&
+        node.attributes[NoteBodyEditorCodec.globalTaskAttribute] == true;
+    await editorState.formatNode(
+      selection,
+      (node) => node.copyWith(
+        type: isGlobalTask ? ParagraphBlockKeys.type : TodoListBlockKeys.type,
+        attributes: {
+          TodoListBlockKeys.checked: false,
+          ParagraphBlockKeys.delta: (node.delta ?? Delta()).toJson(),
+          if (!isGlobalTask) NoteBodyEditorCodec.globalTaskAttribute: true,
+        },
+      ),
+    );
+  }
+
+  static Future<void> _toggleLocalCheckbox(EditorState editorState) async {
+    final selection = editorState.selection;
+    if (selection == null) return;
+    final node = editorState.getNodeAtPath(selection.start.path);
+    if (node == null) return;
+    final isLocalCheckbox =
+        node.type == TodoListBlockKeys.type &&
+        node.attributes[NoteBodyEditorCodec.globalTaskAttribute] != true;
+    await editorState.formatNode(
+      selection,
+      (node) => node.copyWith(
+        type: isLocalCheckbox
+            ? ParagraphBlockKeys.type
+            : TodoListBlockKeys.type,
+        attributes: {
+          TodoListBlockKeys.checked: false,
+          ParagraphBlockKeys.delta: (node.delta ?? Delta()).toJson(),
+        },
+      ),
+    );
+  }
 
   final _title = TextEditingController();
   Note? _note;
   EditorState? _editorState;
+  EditorScrollController? _wideEditorScrollController;
   final _stagedImages = <StagedImage>[];
   final _editorFocus = FocusNode(debugLabel: 'note editor');
   var _loading = true;
@@ -1664,6 +1712,10 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
         document: NoteBodyEditorCodec.documentFromMarkdown('+ [ ] '),
       );
     }
+    _wideEditorScrollController = EditorScrollController(
+      editorState: _editorState!,
+      shrinkWrap: false,
+    );
     if (mounted) {
       setState(() => _loading = false);
       if (widget.startVoice) unawaited(_recordVoice());
@@ -1826,11 +1878,83 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
     await _editorState!.insertTextAtCurrentSelection('[[${selected.title}]]');
   }
 
+  Widget _buildEditor(BuildContext context, {required bool wideLayout}) {
+    final editor = AppFlowyEditor(
+      editorState: _editorState!,
+      focusNode: _editorFocus,
+      autoFocus: false,
+      editorScrollController: wideLayout ? _wideEditorScrollController : null,
+      // A wide layout gets desktop selection behavior and a readable maximum
+      // line length, even when it is running on an Android tablet.
+      editorStyle: wideLayout
+          ? EditorStyle.desktop(
+              maxWidth: 760,
+              padding: const EdgeInsets.symmetric(horizontal: 32),
+              cursorColor: Theme.of(context).colorScheme.primary,
+              textStyleConfiguration: TextStyleConfiguration(
+                text: Theme.of(context).textTheme.bodyLarge!,
+              ),
+            )
+          : EditorStyle.mobile(
+              padding: const EdgeInsets.symmetric(horizontal: 4),
+              cursorColor: Theme.of(context).colorScheme.primary,
+              textStyleConfiguration: TextStyleConfiguration(
+                text: Theme.of(context).textTheme.bodyLarge!,
+              ),
+            ),
+      // A zero edge avoids AppFlowy's automatic edge-scroll loop on long
+      // notes while retaining ordinary touch and trackpad scrolling.
+      autoScrollEdgeOffset: 0,
+    );
+    if (!wideLayout) {
+      return MobileToolbarV2(
+        editorState: _editorState!,
+        toolbarItems: [
+          headingMobileToolbarItem,
+          textDecorationMobileToolbarItemV2,
+          codeMobileToolbarItem,
+          linkMobileToolbarItem,
+          listMobileToolbarItem,
+          _globalTaskMobileToolbarItem,
+          _localCheckboxMobileToolbarItem,
+          quoteMobileToolbarItem,
+          dividerMobileToolbarItem,
+        ],
+        child: editor,
+      );
+    }
+    return FloatingToolbar(
+      editorState: _editorState!,
+      editorScrollController: _wideEditorScrollController!,
+      textDirection: Directionality.of(context),
+      style: FloatingToolbarStyle(
+        backgroundColor: Theme.of(context).colorScheme.inverseSurface,
+        toolbarActiveColor: Theme.of(context).colorScheme.primary,
+        toolbarIconColor: Theme.of(context).colorScheme.onInverseSurface,
+      ),
+      tooltipBuilder: (context, _, message, child) =>
+          Tooltip(message: message, preferBelow: false, child: child),
+      items: [
+        paragraphItem,
+        ...headingItems,
+        ...markdownFormatItems,
+        quoteItem,
+        bulletedListItem,
+        numberedListItem,
+        _globalTaskToolbarItem,
+        _localCheckboxToolbarItem,
+        linkItem,
+      ],
+      child: editor,
+    );
+  }
+
   @override
   void dispose() {
     unawaited(
       ref.read(noteRepositoryProvider).discardStagedImages(_stagedImages),
     );
+    _wideEditorScrollController?.dispose();
     _editorState?.dispose();
     _editorFocus.dispose();
     _title.dispose();
@@ -2008,48 +2132,9 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
                     ],
                     const SizedBox(height: 12),
                     Expanded(
-                      // MobileToolbar reserves a keyboard-height spacer inside
-                      // this flex layout. On Android that repeatedly relayouts
-                      // the editor while IME insets animate, and can starve the
-                      // UI thread on a sufficiently large document. The V2
-                      // toolbar is AppFlowy's supported mobile integration: it
-                      // renders in an overlay and only reserves its fixed height
-                      // in the editor layout.
-                      child: MobileToolbarV2(
-                        editorState: _editorState!,
-                        toolbarItems: [
-                          headingMobileToolbarItem,
-                          textDecorationMobileToolbarItemV2,
-                          codeMobileToolbarItem,
-                          linkMobileToolbarItem,
-                          listMobileToolbarItem,
-                          _globalTaskMobileToolbarItem,
-                          // A note-local checkbox is deliberately distinct from
-                          // the global `+ [ ]` task action above.
-                          _localCheckboxMobileToolbarItem,
-                          quoteMobileToolbarItem,
-                          dividerMobileToolbarItem,
-                        ],
-                        child: AppFlowyEditor(
-                          editorState: _editorState!,
-                          focusNode: _editorFocus,
-                          // Do not create an initial selection in block zero:
-                          // AppFlowy's mobile auto-scroll listener would then
-                          // pull a manually scrolled long note back to the top.
-                          autoFocus: false,
-                          // Keep the scroll service because it maps touch
-                          // coordinates to virtualized blocks for selection. A
-                          // zero edge stops its buggy automatic edge-scrolling
-                          // loop; regular finger scrolling remains unchanged.
-                          autoScrollEdgeOffset: 0,
-                          editorStyle: EditorStyle.mobile(
-                            padding: const EdgeInsets.symmetric(horizontal: 4),
-                            cursorColor: Theme.of(context).colorScheme.primary,
-                            textStyleConfiguration: TextStyleConfiguration(
-                              text: Theme.of(context).textTheme.bodyLarge!,
-                            ),
-                          ),
-                        ),
+                      child: _buildEditor(
+                        context,
+                        wideLayout: usesWideLayout(context),
                       ),
                     ),
                   ],
@@ -2554,6 +2639,8 @@ class _VoiceCaptureScreenState extends ConsumerState<VoiceCaptureScreen> {
   );
 }
 
+enum _SettingsSection { appearance, backup, ai, voice }
+
 class SettingsScreen extends ConsumerStatefulWidget {
   const SettingsScreen({super.key});
   @override
@@ -2586,6 +2673,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   var _selectingRepository = false;
   var _syncIntervalMinutes = SyncScheduler.defaultIntervalMinutes;
   var _syncDiagnosticsEnabled = false;
+  var _section = _SettingsSection.appearance;
   var _configuredOwner = '';
   var _configuredRepo = '';
   String? _repositoryError;
@@ -2968,6 +3056,13 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         .write(key: themeModeStorageKey, value: themeModeStorageValue(mode));
   }
 
+  Future<void> _setTextScale(double scale) async {
+    ref.read(textScaleControllerProvider).setTextScale(scale);
+    await ref
+        .read(secureStorageProvider)
+        .write(key: textScaleStorageKey, value: scale.toString());
+  }
+
   Future<void> _setSyncDiagnostics(bool value) async {
     setState(() => _syncDiagnosticsEnabled = value);
     try {
@@ -3267,262 +3362,457 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       appBar: AppBar(title: const Text('Settings')),
       body: Padding(
         padding: const EdgeInsets.all(16),
-        child: ListView(
-          children: [
-            SwitchListTile(
-              value:
-                  ref.watch(themeModeControllerProvider).themeMode ==
-                  ThemeMode.dark,
-              onChanged: _setDarkMode,
-              secondary: const Icon(Icons.dark_mode),
-              title: const Text('Dark mode'),
-              subtitle: const Text('Turn off for light mode.'),
-            ),
-            const Divider(),
-            if (_backupStatus != null)
-              ListTile(
-                leading: Icon(switch (_backupStatus!.kind) {
-                  BackupStatusKind.localOnly => Icons.cloud_off_outlined,
-                  BackupStatusKind.pending => Icons.cloud_upload_outlined,
-                  BackupStatusKind.backedUp => Icons.cloud_done_outlined,
-                }),
-                title: Text(switch (_backupStatus!.kind) {
-                  BackupStatusKind.localOnly => 'Not backed up',
-                  BackupStatusKind.pending => 'Backup pending',
-                  BackupStatusKind.backedUp => 'Backed up',
-                }),
-                subtitle: Text(
-                  _backupStatus!.kind == BackupStatusKind.localOnly
-                      ? 'Notes are currently stored only on this device.'
-                      : _backupStatus!.repository ?? '',
-                ),
-              ),
-            if (_configuredOwner.isEmpty)
-              FilledButton.icon(
-                onPressed: _saving ? null : _createPrivateBackup,
-                icon: const Icon(Icons.cloud_upload_outlined),
-                label: const Text('Create a private GitHub backup'),
-              ),
-            if (_configuredOwner.isNotEmpty)
-              OutlinedButton.icon(
-                onPressed: _saving ? null : _disconnectGitHub,
-                icon: const Icon(Icons.link_off),
-                label: const Text('Disconnect GitHub'),
-              ),
-            const SizedBox(height: 8),
-            if (PlatformCapabilities.current.supportsPortableBackupDocuments)
-              OutlinedButton.icon(
-                onPressed: _saving ? null : _exportPortableBackup,
-                icon: const Icon(Icons.save_alt_outlined),
-                label: const Text('Export portable backup'),
-              ),
-            if (PlatformCapabilities.current.supportsPortableBackupDocuments &&
-                _configuredOwner.isEmpty)
-              OutlinedButton.icon(
-                onPressed: _saving ? null : _restorePortableBackup,
-                icon: const Icon(Icons.restore),
-                label: const Text('Restore portable backup'),
-              ),
-            const SizedBox(height: 12),
-            Text(
-              'Advanced: use a personal access token',
-              style: Theme.of(context).textTheme.titleSmall,
-            ),
-            const SizedBox(height: 8),
-            TextField(
-              controller: _token,
-              obscureText: true,
-              decoration: const InputDecoration(
-                labelText: 'GitHub personal access token',
-              ),
-            ),
-            const SizedBox(height: 8),
-            OutlinedButton.icon(
-              onPressed: _loadingRepositories || _selectingRepository
-                  ? null
-                  : _chooseRepository,
-              icon: _loadingRepositories || _selectingRepository
-                  ? const SizedBox.square(
-                      dimension: 18,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Icon(Icons.folder_open),
-              label: Text(
-                _selectingRepository
-                    ? 'Validating repository…'
-                    : (_loadingRepositories
-                          ? 'Loading repositories…'
-                          : 'Choose repository'),
-              ),
-            ),
-            if (_repositoryError != null)
-              Padding(
-                padding: const EdgeInsets.only(top: 8),
-                child: Text(
-                  _repositoryError!,
-                  style: TextStyle(color: Theme.of(context).colorScheme.error),
-                ),
-              ),
-            TextField(
-              controller: _owner,
-              decoration: const InputDecoration(labelText: 'Repository owner'),
-            ),
-            TextField(
-              controller: _repo,
-              decoration: const InputDecoration(labelText: 'Repository name'),
-            ),
-            const SizedBox(height: 8),
-            DropdownButtonFormField<int>(
-              key: ValueKey(_syncIntervalMinutes),
-              initialValue: _syncIntervalMinutes,
-              decoration: InputDecoration(
-                labelText:
-                    PlatformCapabilities.current.supportsBestEffortInProcessSync
-                    ? 'Best-effort sync while open'
-                    : 'Background sync',
-                helperText: syncScheduleDescription(
-                  PlatformCapabilities.current,
-                ),
-              ),
-              items: [
-                for (final minutes in SyncScheduler.intervalChoices)
-                  DropdownMenuItem(
-                    value: minutes,
-                    child: Text(_syncIntervalLabel(minutes)),
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final isDesktopSettings =
+                PlatformCapabilities.current.isDesktop &&
+                constraints.maxWidth >= 780;
+            final content = _sectionContent(context);
+            if (!isDesktopSettings) {
+              return Column(
+                children: [
+                  SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: SegmentedButton<_SettingsSection>(
+                      segments: _SettingsSection.values
+                          .map(
+                            (section) => ButtonSegment(
+                              value: section,
+                              icon: Icon(_sectionIcon(section)),
+                              label: Text(_sectionTitle(section)),
+                            ),
+                          )
+                          .toList(),
+                      selected: {_section},
+                      onSelectionChanged: (selected) =>
+                          setState(() => _section = selected.first),
+                    ),
                   ),
-              ],
-              onChanged: _saving
-                  ? null
-                  : (minutes) {
-                      if (minutes != null) {
-                        setState(() => _syncIntervalMinutes = minutes);
-                      }
-                    },
-            ),
-            ExpansionTile(
-              leading: const Icon(Icons.bug_report_outlined),
-              title: const Text('Sync diagnostics'),
-              subtitle: const Text(
-                'Show detailed sync stages and keep a troubleshooting log.',
-              ),
+                  const SizedBox(height: 16),
+                  Expanded(child: content),
+                ],
+              );
+            }
+            return Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                SwitchListTile(
-                  value: _syncDiagnosticsEnabled,
-                  onChanged: _setSyncDiagnostics,
-                  title: const Text('Show detailed sync stages'),
+                NavigationRail(
+                  extended: true,
+                  minExtendedWidth: 196,
+                  selectedIndex: _section.index,
+                  labelType: NavigationRailLabelType.none,
+                  destinations: [
+                    for (final section in _SettingsSection.values)
+                      NavigationRailDestination(
+                        icon: Icon(_sectionIcon(section)),
+                        selectedIcon: Icon(_sectionIcon(section)),
+                        label: Text(_sectionTitle(section)),
+                      ),
+                  ],
+                  onDestinationSelected: (index) =>
+                      setState(() => _section = _SettingsSection.values[index]),
                 ),
-                ListTile(
-                  leading: const Icon(Icons.receipt_long_outlined),
-                  title: const Text('View sync log'),
-                  subtitle: const Text(
-                    'The most recent 30 phase and error messages.',
+                const VerticalDivider(width: 32),
+                Expanded(
+                  child: Align(
+                    alignment: Alignment.topCenter,
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 760),
+                      child: content,
+                    ),
                   ),
-                  onTap: _showSyncLog,
-                ),
-                ListTile(
-                  leading: const Icon(Icons.manage_search_outlined),
-                  title: const Text('Full GitHub sync'),
-                  subtitle: const Text(
-                    'Check every remote note and apply remote deletions.',
-                  ),
-                  enabled: !_saving,
-                  onTap: _saving ? null : _runFullGitHubSync,
                 ),
               ],
-            ),
-            if (_isChangingRepository) ...[
-              const SizedBox(height: 8),
-              OutlinedButton.icon(
-                onPressed: _saving ? null : _switchRepository,
-                icon: const Icon(Icons.swap_horiz),
-                label: const Text('Switch repository'),
-              ),
-              const Text(
-                'Switching clears this device’s local mirror before importing '
-                'the selected repository.',
-              ),
-            ],
-            if (_configuredOwner.isNotEmpty) ...[
-              const SizedBox(height: 8),
-              OutlinedButton.icon(
-                onPressed: _saving || _isChangingRepository
-                    ? null
-                    : () => _clearLocalCache(switching: false),
-                icon: const Icon(Icons.delete_sweep_outlined),
-                label: const Text('Clear local sync cache'),
-              ),
-            ],
-            ExpansionTile(
-              title: const Text('AI summary provider'),
-              children: [
-                TextField(
-                  controller: _aiUrl,
-                  decoration: const InputDecoration(
-                    labelText: 'OpenAI-compatible endpoint',
-                  ),
-                ),
-                TextField(
-                  controller: _aiKey,
-                  obscureText: true,
-                  decoration: const InputDecoration(labelText: 'API key'),
-                ),
-                TextField(
-                  controller: _aiModel,
-                  decoration: const InputDecoration(labelText: 'Model'),
-                ),
-              ],
-            ),
-            ExpansionTile(
-              title: const Text('Voice transcription and cleanup'),
-              children: [
-                const Padding(
-                  padding: EdgeInsets.fromLTRB(12, 0, 12, 8),
-                  child: Text(
-                    'Live transcription, recovery uploads, and light cleanup use your OpenAI API key directly.',
-                  ),
-                ),
-                TextField(
-                  controller: _voiceOpenAiKey,
-                  obscureText: true,
-                  decoration: const InputDecoration(
-                    labelText: 'OpenAI voice API key',
-                  ),
-                ),
-                TextField(
-                  controller: _voiceModel,
-                  decoration: const InputDecoration(
-                    labelText: 'Live transcription model',
-                  ),
-                ),
-                TextField(
-                  controller: _voiceFileModel,
-                  decoration: const InputDecoration(
-                    labelText: 'Recovery transcription model',
-                  ),
-                ),
-                TextField(
-                  controller: _voiceCleanupModel,
-                  decoration: const InputDecoration(labelText: 'Cleanup model'),
-                ),
-              ],
-            ),
-            const SizedBox(height: 16),
-            FilledButton.icon(
-              onPressed: _saving ? null : _save,
-              icon: _saving
-                  ? const SizedBox(
-                      height: 18,
-                      width: 18,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Icon(Icons.cloud_sync),
-              label: Text(_saving ? 'Saving and syncing…' : 'Save and sync'),
-            ),
-          ],
+            );
+          },
         ),
       ),
     );
   }
+
+  IconData _sectionIcon(_SettingsSection section) => switch (section) {
+    _SettingsSection.appearance => Icons.tune,
+    _SettingsSection.backup => Icons.cloud_sync_outlined,
+    _SettingsSection.ai => Icons.auto_awesome_outlined,
+    _SettingsSection.voice => Icons.mic_none_outlined,
+  };
+
+  String _sectionTitle(_SettingsSection section) => switch (section) {
+    _SettingsSection.appearance => 'Appearance',
+    _SettingsSection.backup => 'Backup & sync',
+    _SettingsSection.ai => 'AI summaries',
+    _SettingsSection.voice => 'Voice',
+  };
+
+  Widget _sectionContent(BuildContext context) => switch (_section) {
+    _SettingsSection.appearance => _appearanceSection(context),
+    _SettingsSection.backup => _backupSection(context),
+    _SettingsSection.ai => _aiSection(context),
+    _SettingsSection.voice => _voiceSection(context),
+  };
+
+  Widget _appearanceSection(BuildContext context) => ListView(
+    children: [
+      const _SettingsSectionHeader(
+        title: 'Appearance',
+        description: 'Choose how Specular looks and how large its text feels.',
+      ),
+      _SettingsGroup(
+        children: [
+          SwitchListTile(
+            value:
+                ref.watch(themeModeControllerProvider).themeMode ==
+                ThemeMode.dark,
+            onChanged: _setDarkMode,
+            secondary: const Icon(Icons.dark_mode_outlined),
+            title: const Text('Dark mode'),
+            subtitle: const Text('Turn off for light mode.'),
+          ),
+          const Divider(height: 1),
+          ListTile(
+            leading: const Icon(Icons.format_size),
+            title: const Text('Font size'),
+            subtitle: const Text('Applies to the interface and your notes.'),
+            trailing: DropdownButton<double>(
+              value: ref.watch(textScaleControllerProvider).textScale,
+              onChanged: (scale) {
+                if (scale != null) _setTextScale(scale);
+              },
+              items: const [
+                DropdownMenuItem(value: 0.9, child: Text('Small')),
+                DropdownMenuItem(value: 1.0, child: Text('Default')),
+                DropdownMenuItem(value: 1.1, child: Text('Large')),
+                DropdownMenuItem(value: 1.25, child: Text('Larger')),
+                DropdownMenuItem(value: 1.4, child: Text('Extra large')),
+              ],
+            ),
+          ),
+        ],
+      ),
+    ],
+  );
+
+  Widget _backupSection(BuildContext context) => ListView(
+    children: [
+      const _SettingsSectionHeader(
+        title: 'Backup & sync',
+        description:
+            'Connect GitHub, set its schedule, and manage local backups.',
+      ),
+      _SettingsGroup(
+        children: [
+          if (_backupStatus != null)
+            ListTile(
+              leading: Icon(switch (_backupStatus!.kind) {
+                BackupStatusKind.localOnly => Icons.cloud_off_outlined,
+                BackupStatusKind.pending => Icons.cloud_upload_outlined,
+                BackupStatusKind.backedUp => Icons.cloud_done_outlined,
+              }),
+              title: Text(switch (_backupStatus!.kind) {
+                BackupStatusKind.localOnly => 'Not backed up',
+                BackupStatusKind.pending => 'Backup pending',
+                BackupStatusKind.backedUp => 'Backed up',
+              }),
+              subtitle: Text(
+                _backupStatus!.kind == BackupStatusKind.localOnly
+                    ? 'Notes are currently stored only on this device.'
+                    : _backupStatus!.repository ?? '',
+              ),
+            ),
+          if (_configuredOwner.isEmpty)
+            FilledButton.icon(
+              onPressed: _saving ? null : _createPrivateBackup,
+              icon: const Icon(Icons.cloud_upload_outlined),
+              label: const Text('Create a private GitHub backup'),
+            ),
+          if (_configuredOwner.isNotEmpty)
+            OutlinedButton.icon(
+              onPressed: _saving ? null : _disconnectGitHub,
+              icon: const Icon(Icons.link_off),
+              label: const Text('Disconnect GitHub'),
+            ),
+          if (PlatformCapabilities.current.supportsPortableBackupDocuments)
+            OutlinedButton.icon(
+              onPressed: _saving ? null : _exportPortableBackup,
+              icon: const Icon(Icons.save_alt_outlined),
+              label: const Text('Export portable backup'),
+            ),
+          if (PlatformCapabilities.current.supportsPortableBackupDocuments &&
+              _configuredOwner.isEmpty)
+            OutlinedButton.icon(
+              onPressed: _saving ? null : _restorePortableBackup,
+              icon: const Icon(Icons.restore),
+              label: const Text('Restore portable backup'),
+            ),
+        ],
+      ),
+      const SizedBox(height: 16),
+      const _SettingsGroupLabel('GitHub connection'),
+      _SettingsGroup(
+        children: [
+          TextField(
+            controller: _token,
+            obscureText: true,
+            decoration: const InputDecoration(
+              labelText: 'GitHub personal access token',
+            ),
+          ),
+          OutlinedButton.icon(
+            onPressed: _loadingRepositories || _selectingRepository
+                ? null
+                : _chooseRepository,
+            icon: _loadingRepositories || _selectingRepository
+                ? const SizedBox.square(
+                    dimension: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.folder_open),
+            label: Text(
+              _selectingRepository
+                  ? 'Validating repository…'
+                  : (_loadingRepositories
+                        ? 'Loading repositories…'
+                        : 'Choose repository'),
+            ),
+          ),
+          if (_repositoryError != null)
+            Text(
+              _repositoryError!,
+              style: TextStyle(color: Theme.of(context).colorScheme.error),
+            ),
+          TextField(
+            controller: _owner,
+            decoration: const InputDecoration(labelText: 'Repository owner'),
+          ),
+          TextField(
+            controller: _repo,
+            decoration: const InputDecoration(labelText: 'Repository name'),
+          ),
+          DropdownButtonFormField<int>(
+            key: ValueKey(_syncIntervalMinutes),
+            initialValue: _syncIntervalMinutes,
+            decoration: InputDecoration(
+              labelText:
+                  PlatformCapabilities.current.supportsBestEffortInProcessSync
+                  ? 'Best-effort sync while open'
+                  : 'Background sync',
+              helperText: syncScheduleDescription(PlatformCapabilities.current),
+            ),
+            items: [
+              for (final minutes in SyncScheduler.intervalChoices)
+                DropdownMenuItem(
+                  value: minutes,
+                  child: Text(_syncIntervalLabel(minutes)),
+                ),
+            ],
+            onChanged: _saving
+                ? null
+                : (minutes) {
+                    if (minutes != null) {
+                      setState(() => _syncIntervalMinutes = minutes);
+                    }
+                  },
+          ),
+          if (_isChangingRepository) ...[
+            OutlinedButton.icon(
+              onPressed: _saving ? null : _switchRepository,
+              icon: const Icon(Icons.swap_horiz),
+              label: const Text('Switch repository'),
+            ),
+            const Text(
+              'Switching clears this device’s local mirror before importing '
+              'the selected repository.',
+            ),
+          ],
+        ],
+      ),
+      const SizedBox(height: 16),
+      const _SettingsGroupLabel('Troubleshooting'),
+      _SettingsGroup(
+        children: [
+          SwitchListTile(
+            value: _syncDiagnosticsEnabled,
+            onChanged: _setSyncDiagnostics,
+            secondary: const Icon(Icons.bug_report_outlined),
+            title: const Text('Sync diagnostics'),
+            subtitle: const Text('Show detailed stages and keep a sync log.'),
+          ),
+          ListTile(
+            leading: const Icon(Icons.receipt_long_outlined),
+            title: const Text('View sync log'),
+            subtitle: const Text(
+              'The most recent 30 phase and error messages.',
+            ),
+            onTap: _showSyncLog,
+          ),
+          ListTile(
+            leading: const Icon(Icons.manage_search_outlined),
+            title: const Text('Full GitHub sync'),
+            subtitle: const Text(
+              'Check every remote note and apply deletions.',
+            ),
+            enabled: !_saving,
+            onTap: _saving ? null : _runFullGitHubSync,
+          ),
+          if (_configuredOwner.isNotEmpty)
+            OutlinedButton.icon(
+              onPressed: _saving || _isChangingRepository
+                  ? null
+                  : () => _clearLocalCache(switching: false),
+              icon: const Icon(Icons.delete_sweep_outlined),
+              label: const Text('Clear local sync cache'),
+            ),
+        ],
+      ),
+      _saveButton(),
+    ],
+  );
+
+  Widget _aiSection(BuildContext context) => ListView(
+    children: [
+      const _SettingsSectionHeader(
+        title: 'AI summaries',
+        description:
+            'Configure the OpenAI-compatible service used to summarize notes.',
+      ),
+      _SettingsGroup(
+        children: [
+          TextField(
+            controller: _aiUrl,
+            decoration: const InputDecoration(
+              labelText: 'OpenAI-compatible endpoint',
+            ),
+          ),
+          TextField(
+            controller: _aiKey,
+            obscureText: true,
+            decoration: const InputDecoration(labelText: 'API key'),
+          ),
+          TextField(
+            controller: _aiModel,
+            decoration: const InputDecoration(labelText: 'Model'),
+          ),
+        ],
+      ),
+      _saveButton(),
+    ],
+  );
+
+  Widget _voiceSection(BuildContext context) => ListView(
+    children: [
+      const _SettingsSectionHeader(
+        title: 'Voice',
+        description:
+            'Set the OpenAI models and credentials used for transcription.',
+      ),
+      _SettingsGroup(
+        children: [
+          const Text(
+            'Live transcription, recovery uploads, and light cleanup use your OpenAI API key directly.',
+          ),
+          TextField(
+            controller: _voiceOpenAiKey,
+            obscureText: true,
+            decoration: const InputDecoration(
+              labelText: 'OpenAI voice API key',
+            ),
+          ),
+          TextField(
+            controller: _voiceModel,
+            decoration: const InputDecoration(
+              labelText: 'Live transcription model',
+            ),
+          ),
+          TextField(
+            controller: _voiceFileModel,
+            decoration: const InputDecoration(
+              labelText: 'Recovery transcription model',
+            ),
+          ),
+          TextField(
+            controller: _voiceCleanupModel,
+            decoration: const InputDecoration(labelText: 'Cleanup model'),
+          ),
+        ],
+      ),
+      _saveButton(),
+    ],
+  );
+
+  Widget _saveButton() => Padding(
+    padding: const EdgeInsets.symmetric(vertical: 24),
+    child: FilledButton.icon(
+      onPressed: _saving ? null : _save,
+      icon: _saving
+          ? const SizedBox(
+              height: 18,
+              width: 18,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            )
+          : const Icon(Icons.cloud_sync),
+      label: Text(_saving ? 'Saving and syncing…' : 'Save and sync'),
+    ),
+  );
+}
+
+class _SettingsSectionHeader extends StatelessWidget {
+  const _SettingsSectionHeader({
+    required this.title,
+    required this.description,
+  });
+
+  final String title;
+  final String description;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.fromLTRB(4, 4, 4, 20),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(title, style: Theme.of(context).textTheme.headlineSmall),
+        const SizedBox(height: 6),
+        Text(description, style: Theme.of(context).textTheme.bodyMedium),
+      ],
+    ),
+  );
+}
+
+class _SettingsGroupLabel extends StatelessWidget {
+  const _SettingsGroupLabel(this.label);
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+    child: Text(label, style: Theme.of(context).textTheme.titleSmall),
+  );
+}
+
+class _SettingsGroup extends StatelessWidget {
+  const _SettingsGroup({required this.children});
+
+  final List<Widget> children;
+
+  @override
+  Widget build(BuildContext context) => Card(
+    clipBehavior: Clip.antiAlias,
+    child: Padding(
+      padding: const EdgeInsets.all(12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: children
+            .map(
+              (child) => Padding(
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                child: child,
+              ),
+            )
+            .toList(),
+      ),
+    ),
+  );
 }
 
 String _syncIntervalLabel(int minutes) {
