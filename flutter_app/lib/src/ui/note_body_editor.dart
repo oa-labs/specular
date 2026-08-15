@@ -148,6 +148,72 @@ class NoteBodyEditorCodec {
     await editorState.apply(updateTransaction);
   }
 
+  /// Inserts text at the editor cursor retained before a modal flow, or at the
+  /// end of the last editable block when that flow cleared the selection.
+  ///
+  /// AppFlowy's [EditorState.insertTextAtCurrentSelection] intentionally does
+  /// nothing without a collapsed selection. That is common after a native
+  /// picker or a modal bottom sheet has focused one of its own text fields.
+  static Future<void> insertTextAtSelectionOrEnd(
+    EditorState editorState,
+    String text, {
+    Selection? retainedSelection,
+  }) async {
+    final selection =
+        _validCollapsedSelection(editorState, retainedSelection) ??
+        _validCollapsedSelection(editorState, editorState.selection);
+    var node = selection == null
+        ? _lastEditableRootNode(editorState)
+        : editorState.getNodeAtPath(selection.start.path);
+    if (node == null || node.delta == null) {
+      // A note imported with only an image has no text block. Add one rather
+      // than making the link action fail after the picker closes.
+      final path = editorState.document.root.children.isEmpty
+          ? <int>[0]
+          : editorState.document.root.children.last.path.next;
+      await editorState.apply(
+        editorState.transaction
+          ..insertNode(path, paragraphNode())
+          ..afterSelection = Selection.collapsed(
+            Position(path: path, offset: 0),
+          ),
+      );
+      node = editorState.getNodeAtPath(path);
+      if (node == null || node.delta == null) {
+        throw StateError(
+          'The note has no editable line where text can be inserted.',
+        );
+      }
+    }
+
+    final offset = selection == null
+        ? node.delta!.length
+        : selection.start.offset.clamp(0, node.delta!.length).toInt();
+    final transaction = editorState.transaction
+      ..insertText(node, offset, text)
+      ..afterSelection = Selection.collapsed(
+        Position(path: node.path, offset: offset + text.length),
+      );
+    await editorState.apply(transaction);
+  }
+
+  static Selection? _validCollapsedSelection(
+    EditorState editorState,
+    Selection? selection,
+  ) {
+    if (selection == null || !selection.isCollapsed) return null;
+    return editorState.getNodeAtPath(selection.start.path)?.delta == null
+        ? null
+        : selection;
+  }
+
+  static Node? _lastEditableRootNode(EditorState editorState) {
+    for (final node in editorState.document.root.children.reversed) {
+      if (node.delta != null) return node;
+    }
+    return null;
+  }
+
   static Future<Document> _resolveAttachmentPaths(
     Document document,
     Note note,

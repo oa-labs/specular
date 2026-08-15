@@ -140,27 +140,45 @@ Backup: other@example.com
     expect(noteEmailAddress(legacyPerson), 'robin@example.org');
   });
 
-  test('groups meetings by the day they were last updated', () {
-    final older = note('Older', 0, path: 'meetings/older.md');
-    final firstToday = note(
-      'First today',
-      DateTime(2026, 8, 13, 8).millisecondsSinceEpoch,
-      path: 'meetings/first-today.md',
-    );
-    final secondToday = note(
-      'Second today',
-      DateTime(2026, 8, 13, 16).millisecondsSinceEpoch,
-      path: 'meetings/second-today.md',
-    );
+  test(
+    'groups meetings by their title date before their last updated date',
+    () {
+      final older = note('Older', 0, path: 'meetings/older.md');
+      final firstToday = note(
+        'First today — July 15, 2026',
+        DateTime(2026, 8, 13, 8).millisecondsSinceEpoch,
+        path: 'meetings/first-today.md',
+      );
+      final secondToday = note(
+        'Second today July15,2026',
+        DateTime(2026, 8, 13, 16).millisecondsSinceEpoch,
+        path: 'meetings/second-today.md',
+      );
 
-    final groups = groupMeetingsByDate([older, firstToday, secondToday]);
+      final groups = groupMeetingsByDate([older, firstToday, secondToday]);
 
-    expect(groups, hasLength(2));
-    expect(groups.first.date, DateTime(2026, 8, 13));
-    expect(groups.first.notes.map((note) => note.title), [
-      'First today',
-      'Second today',
-    ]);
+      expect(groups, hasLength(2));
+      expect(groups.first.date, DateTime(2026, 7, 15));
+      expect(groups.first.notes.map((note) => note.title), [
+        'First today — July 15, 2026',
+        'Second today July15,2026',
+      ]);
+    },
+  );
+
+  test('recognizes supported title-date conventions without guessing', () {
+    expect(
+      meetingDateFromTitle('Planning — 2026-08-13'),
+      DateTime(2026, 8, 13),
+    );
+    expect(meetingDateFromTitle('Planning 8/13/2026'), DateTime(2026, 8, 13));
+    expect(
+      meetingDateFromTitle('Planning 13 August 2026'),
+      DateTime(2026, 8, 13),
+    );
+    expect(meetingDateFromTitle('JoelTaylorJune4-2026'), DateTime(2026, 6, 4));
+    expect(meetingDateFromTitle('Planning August 32, 2026'), isNull);
+    expect(meetingDateFromTitle('Planning August 2026'), isNull);
   });
 
   test('keeps existing to-dos in place when their note is updated', () {

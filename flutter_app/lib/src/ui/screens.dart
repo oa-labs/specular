@@ -129,10 +129,116 @@ String? noteEmailAddress(Note note) {
   return RegExp(email, caseSensitive: false).firstMatch(note.body)?.group(0);
 }
 
+/// Returns the date encoded in a meeting title when it is unambiguous.
+///
+/// Imported Markdown notes do not retain their original filesystem timestamp,
+/// so [Note.updatedAt] often represents the import date. Meeting titles are a
+/// more durable source when they include a complete date. We accept the common
+/// ISO, US numeric, and written-month forms, including compact filenames such
+/// as `DesignReviewJuly15,2026`. Incomplete or invalid dates return null rather
+/// than guessing.
+DateTime? meetingDateFromTitle(String title) {
+  final normalized = title.trim();
+  if (normalized.isEmpty) return null;
+
+  DateTime? dateFromParts(String year, String month, String day) {
+    final parsedYear = int.tryParse(year);
+    final parsedMonth = int.tryParse(month);
+    final parsedDay = int.tryParse(day);
+    if (parsedYear == null || parsedMonth == null || parsedDay == null) {
+      return null;
+    }
+    final date = DateTime(parsedYear, parsedMonth, parsedDay);
+    return date.year == parsedYear &&
+            date.month == parsedMonth &&
+            date.day == parsedDay
+        ? date
+        : null;
+  }
+
+  final iso = RegExp(
+    r'(?<!\d)(\d{4})[./-](\d{1,2})[./-](\d{1,2})(?!\d)',
+  ).firstMatch(normalized);
+  if (iso != null) {
+    return dateFromParts(iso.group(1)!, iso.group(2)!, iso.group(3)!);
+  }
+
+  // Numeric month/day/year titles are intentionally interpreted as US format,
+  // matching the product's existing written-date conventions.
+  final numeric = RegExp(
+    r'(?<!\d)(\d{1,2})[./-](\d{1,2})[./-](\d{4})(?!\d)',
+  ).firstMatch(normalized);
+  if (numeric != null) {
+    return dateFromParts(
+      numeric.group(3)!,
+      numeric.group(1)!,
+      numeric.group(2)!,
+    );
+  }
+
+  const months = <String, int>{
+    'jan': 1,
+    'january': 1,
+    'feb': 2,
+    'february': 2,
+    'mar': 3,
+    'march': 3,
+    'apr': 4,
+    'april': 4,
+    'may': 5,
+    'jun': 6,
+    'june': 6,
+    'jul': 7,
+    'july': 7,
+    'aug': 8,
+    'august': 8,
+    'sep': 9,
+    'sept': 9,
+    'september': 9,
+    'oct': 10,
+    'october': 10,
+    'nov': 11,
+    'november': 11,
+    'dec': 12,
+    'december': 12,
+  };
+  final monthNames = months.keys.join('|');
+  final writtenMonthFirst = RegExp(
+    '($monthNames)\\.?[\\s,_-]*(\\d{1,2})[\\s,_-]+(\\d{4})(?!\\d)',
+    caseSensitive: false,
+  ).firstMatch(normalized);
+  if (writtenMonthFirst != null) {
+    return dateFromParts(
+      writtenMonthFirst.group(3)!,
+      months[writtenMonthFirst.group(1)!.toLowerCase()]!.toString(),
+      writtenMonthFirst.group(2)!,
+    );
+  }
+
+  final writtenDayFirst = RegExp(
+    r'(?<!\d)(\d{1,2})[\s,_-]+(' + monthNames + r')\.?[\s,_-]+(\d{4})(?!\d)',
+    caseSensitive: false,
+  ).firstMatch(normalized);
+  if (writtenDayFirst != null) {
+    return dateFromParts(
+      writtenDayFirst.group(3)!,
+      months[writtenDayFirst.group(2)!.toLowerCase()]!.toString(),
+      writtenDayFirst.group(1)!,
+    );
+  }
+
+  return null;
+}
+
+/// Prefers the date recorded in the meeting title, falling back to the local
+/// update timestamp for older notes that do not use the title-date convention.
+DateTime meetingDate(Note note) =>
+    meetingDateFromTitle(note.title) ?? DateUtils.dateOnly(note.updatedAt);
+
 List<MeetingDateGroup> groupMeetingsByDate(Iterable<Note> notes) {
   final groups = <DateTime, List<Note>>{};
   for (final note in notes) {
-    final date = DateUtils.dateOnly(note.updatedAt);
+    final date = meetingDate(note);
     (groups[date] ??= []).add(note);
   }
   final dates = groups.keys.toList()..sort((a, b) => b.compareTo(a));
@@ -1856,13 +1962,27 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
   }
 
   Future<void> _insertWikiLink() async {
+    // The picker's search field takes focus, which can clear AppFlowy's
+    // selection before the sheet returns. Keep the cursor so the link lands
+    // where the user invoked this action.
+    final retainedSelection = _editorState?.selection;
     final selected = await showModalBottomSheet<Note>(
       context: context,
       isScrollControlled: true,
       builder: (sheetContext) => _WikiLinkPicker(excludingId: _note?.id),
     );
-    if (selected == null || _editorState == null) return;
-    await _editorState!.insertTextAtCurrentSelection('[[${selected.title}]]');
+    final editorState = _editorState;
+    if (selected == null || editorState == null || !mounted) return;
+    await NoteBodyEditorCodec.insertTextAtSelectionOrEnd(
+      editorState,
+      '[[${selected.title}]]',
+      retainedSelection: retainedSelection,
+    );
+    if (mounted) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _editorFocus.requestFocus();
+      });
+    }
   }
 
   Widget _buildEditor(BuildContext context, {required bool wideLayout}) {
@@ -1953,6 +2073,20 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
     final folders = creationFolders(
       ref.watch(notesProvider).asData?.value ?? const <Note>[],
     );
+    final isNewRegularNote =
+        widget.id == null && !widget.newTodo && widget.dailyDate == null;
+    // On compact phone layouts, the New note label crowds the editor actions
+    // and is truncated. The title field below already conveys the note's
+    // identity, so reserve the app bar space for controls instead.
+    final appBarTitle = isNewRegularNote && !usesWideLayout(context)
+        ? null
+        : Text(
+            widget.newTodo
+                ? 'New to-do'
+                : _note == null
+                ? 'New note'
+                : 'Edit note',
+          );
     return CallbackShortcuts(
       bindings: {
         const SingleActivator(LogicalKeyboardKey.keyS, meta: true): () =>
@@ -1960,13 +2094,7 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
       },
       child: Scaffold(
         appBar: AppBar(
-          title: Text(
-            widget.newTodo
-                ? 'New to-do'
-                : _note == null
-                ? 'New note'
-                : 'Edit note',
-          ),
+          title: appBarTitle,
           actions: [
             IconButton(
               tooltip: 'Insert wiki link',

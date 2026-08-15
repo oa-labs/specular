@@ -581,11 +581,27 @@ class _AdaptiveAppShell extends StatelessWidget {
                   : NavigationRailLabelType.all,
               leading: Padding(
                 padding: const EdgeInsets.only(top: 12),
-                child: FilledButton.icon(
-                  onPressed: () => router.go('/editor/new'),
-                  icon: const Icon(Icons.add),
-                  label: const Text('New note'),
-                ),
+                child: extended
+                    ? FilledButton.icon(
+                        onPressed: () => router.go('/editor/new'),
+                        icon: const Icon(Icons.add),
+                        label: const Text('New note'),
+                      )
+                    : Semantics(
+                        button: true,
+                        label: 'New note',
+                        child: SizedBox.square(
+                          dimension: 48,
+                          child: FilledButton(
+                            onPressed: () => router.go('/editor/new'),
+                            style: FilledButton.styleFrom(
+                              padding: EdgeInsets.zero,
+                              shape: const CircleBorder(),
+                            ),
+                            child: const Center(child: Icon(Icons.add)),
+                          ),
+                        ),
+                      ),
               ),
               destinations: const [
                 NavigationRailDestination(

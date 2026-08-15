@@ -53,6 +53,71 @@ void main() {
     },
   );
 
+  test(
+    'inserts text at a retained cursor after a modal clears selection',
+    () async {
+      final editorState = EditorState(
+        document: Document(
+          root: Node(
+            type: 'page',
+            children: [paragraphNode(text: 'Before')],
+          ),
+        ),
+      );
+      addTearDown(editorState.dispose);
+      final retainedSelection = Selection.collapsed(
+        Position(path: [0], offset: 2),
+      );
+      editorState.selection = null;
+
+      await NoteBodyEditorCodec.insertTextAtSelectionOrEnd(
+        editorState,
+        '[[Project]]',
+        retainedSelection: retainedSelection,
+      );
+
+      expect(
+        editorState.getNodeAtPath([0])?.delta?.toPlainText(),
+        'Be[[Project]]fore',
+      );
+      expect(editorState.selection?.start, Position(path: [0], offset: 13));
+    },
+  );
+
+  test('appends text when the editor selection is unavailable', () async {
+    final editorState = EditorState(
+      document: Document.blank(withInitialText: true),
+    );
+    addTearDown(editorState.dispose);
+
+    await NoteBodyEditorCodec.insertTextAtSelectionOrEnd(
+      editorState,
+      '[[Project]]',
+    );
+
+    expect(NoteBodyEditorCodec.export(editorState), '[[Project]]');
+    expect(editorState.selection?.start, Position(path: [0], offset: 11));
+  });
+
+  test('adds an editable line when a note contains only an image', () async {
+    final editorState = EditorState(
+      document: Document(
+        root: Node(
+          type: 'page',
+          children: [imageNode(url: '/temporary/image.jpg')],
+        ),
+      ),
+    );
+    addTearDown(editorState.dispose);
+
+    await NoteBodyEditorCodec.insertTextAtSelectionOrEnd(
+      editorState,
+      '[[Project]]',
+    );
+
+    expect(editorState.getNodeAtPath([1])?.delta?.toPlainText(), '[[Project]]');
+  });
+
   test('excludes the matching persisted title from the editable body', () {
     final note = _note(title: 'Project', body: '# Project\n\nBody text\n');
 
