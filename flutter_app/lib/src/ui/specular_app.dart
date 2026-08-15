@@ -74,6 +74,12 @@ final notesProvider = StreamProvider<List<Note>>(
   (ref) => ref.watch(noteRepositoryProvider).watchNotes(),
 );
 
+/// Keeps the home tab selected while a route that replaces the home route is
+/// open, such as saving an edited note and returning through its preview.
+final homeSelectedViewProvider = StateProvider<NoteListView>(
+  (_) => NoteListView.all,
+);
+
 enum TodoFilter { open, done, all }
 
 final todosProvider = StreamProvider.family<List<TodoItem>, TodoFilter>(
@@ -135,6 +141,16 @@ Future<BackupStatus> readBackupStatus(
     lastSuccessfulSync: DateTime.tryParse(saved),
   );
 }
+
+/// The current backup state is shared by home and settings so a completed
+/// connection or sync updates both screens without waiting for a manual pull
+/// to refresh home.
+final backupStatusProvider = FutureProvider<BackupStatus>(
+  (ref) => readBackupStatus(
+    ref.watch(secureStorageProvider),
+    ref.watch(noteRepositoryProvider),
+  ),
+);
 
 class SyncUiState {
   const SyncUiState({

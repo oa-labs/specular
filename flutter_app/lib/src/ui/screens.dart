@@ -193,13 +193,11 @@ class NoteListScreen extends ConsumerStatefulWidget {
 
 class _NoteListScreenState extends ConsumerState<NoteListScreen> {
   var _sort = NoteListSort.lastUpdated;
-  var _selectedView = NoteListView.all;
   var _loadedPreferences = false;
   var _createExpanded = false;
   var _openingToday = false;
   var _onboardingComplete = false;
   var _backupPromptDismissed = false;
-  BackupStatus? _backupStatus;
   final _summaryJobs = <String>{};
 
   @override
@@ -212,7 +210,6 @@ class _NoteListScreenState extends ConsumerState<NoteListScreen> {
     if (!mounted) return;
     setState(() => _loadedPreferences = true);
     _loadFirstRunState();
-    _refreshBackupStatus();
   }
 
   Future<void> _loadFirstRunState() async {
@@ -226,15 +223,6 @@ class _NoteListScreenState extends ConsumerState<NoteListScreen> {
       _onboardingComplete = values[0] == 'true';
       _backupPromptDismissed = values[1] == 'true';
     });
-  }
-
-  Future<void> _refreshBackupStatus() async {
-    final status = await readBackupStatus(
-      ref.read(secureStorageProvider),
-      ref.read(noteRepositoryProvider),
-    );
-    if (!mounted) return;
-    setState(() => _backupStatus = status);
   }
 
   Future<void> _completeOnboarding({String? destination}) async {
@@ -290,7 +278,7 @@ class _NoteListScreenState extends ConsumerState<NoteListScreen> {
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
       ..showSnackBar(SnackBar(content: Text(syncRefreshMessage(result))));
-    unawaited(_refreshBackupStatus());
+    ref.invalidate(backupStatusProvider);
   }
 
   Future<void> _generateMissingSummaries(List<Note> notes) async {
@@ -403,14 +391,12 @@ class _NoteListScreenState extends ConsumerState<NoteListScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final selectedView = ref.watch(homeSelectedViewProvider);
+    final backupStatus = ref.watch(backupStatusProvider).asData?.value;
     final notesState = ref.watch(notesProvider);
     final allNotes = notesState.asData?.value ?? const <Note>[];
     if (notesState.hasValue) unawaited(_generateMissingSummaries(allNotes));
-    final notes = sortAndFilterNotes(
-      allNotes,
-      sort: _sort,
-      view: _selectedView,
-    );
+    final notes = sortAndFilterNotes(allNotes, sort: _sort, view: selectedView);
     return Scaffold(
       appBar: AppBar(
         title: SpecularWordmark(
@@ -495,8 +481,9 @@ class _NoteListScreenState extends ConsumerState<NoteListScreen> {
           : Column(
               children: [
                 _HomeViewSelector(
-                  selectedView: _selectedView,
-                  onSelected: (view) => setState(() => _selectedView = view),
+                  selectedView: selectedView,
+                  onSelected: (view) =>
+                      ref.read(homeSelectedViewProvider.notifier).state = view,
                 ),
                 Expanded(
                   child: RefreshIndicator(
@@ -518,17 +505,17 @@ class _NoteListScreenState extends ConsumerState<NoteListScreen> {
                           return _RefreshableMessage(
                             allNotes.isEmpty
                                 ? 'No notes yet. Tap the calendar to start today\'s note.'
-                                : 'No ${_selectedView.name} yet.',
+                                : 'No ${selectedView.name} yet.',
                           );
                         }
                         return _HomeNoteList(
                           notes: notes,
-                          selectedView: _selectedView,
+                          selectedView: selectedView,
                           showBackupPrompt:
-                              _backupStatus?.kind ==
+                              backupStatus?.kind ==
                                   BackupStatusKind.localOnly &&
                               !_backupPromptDismissed,
-                          backupStatus: _backupStatus,
+                          backupStatus: backupStatus,
                           onOpenSettings: () => context.push('/settings'),
                           onDismissBackupPrompt: _dismissBackupPrompt,
                         );
@@ -2737,6 +2724,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           ref.read(secureStorageProvider),
           ref.read(noteRepositoryProvider),
         );
+        ref.invalidate(backupStatusProvider);
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Settings saved. ${sync.message}')),
@@ -2824,6 +2812,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       _configuredOwner = '';
       _configuredRepo = '';
       _backupStatus = const BackupStatus(kind: BackupStatusKind.localOnly);
+      ref.invalidate(backupStatusProvider);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
@@ -3322,6 +3311,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         ref.read(secureStorageProvider),
         ref.read(noteRepositoryProvider),
       );
+      ref.invalidate(backupStatusProvider);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Private backup created. ${result.message}')),

@@ -1,6 +1,8 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:specular/src/domain/note.dart';
 import 'package:specular/src/sync/github_sync.dart';
+import 'package:specular/src/ui/specular_app.dart';
 import 'package:specular/src/ui/screens.dart';
 
 void main() {
@@ -28,6 +30,16 @@ void main() {
     isConflict: false,
     updatedAt: DateTime.fromMillisecondsSinceEpoch(updatedAt),
   );
+
+  test('retains the selected home view outside the home screen', () {
+    final container = ProviderContainer();
+    addTearDown(container.dispose);
+
+    container.read(homeSelectedViewProvider.notifier).state =
+        NoteListView.notes;
+
+    expect(container.read(homeSelectedViewProvider), NoteListView.notes);
+  });
 
   test('sorts within pinned notes by the selected order', () {
     final notes = [
