@@ -206,10 +206,25 @@ void main() {
     );
   });
 
+  test('round trips portable wiki links as editor hyperlinks', () {
+    final editorState = EditorState(
+      document: NoteBodyEditorCodec.documentFromMarkdown(
+        'Review [[Project plan]].',
+      ),
+    );
+    addTearDown(editorState.dispose);
+
+    expect(
+      editorState.getNodeAtPath([0])?.delta?.toPlainText(),
+      'Review Project plan.',
+    );
+    expect(NoteBodyEditorCodec.export(editorState), 'Review [[Project plan]].');
+  });
+
   test('warns for Markdown outside the supported rich-text subset', () {
     expect(
       MarkdownCompatibility.requiresRewriteWarning('[[Project plan]]'),
-      isTrue,
+      isFalse,
     );
     expect(
       MarkdownCompatibility.requiresRewriteWarning('```dart\nprint(1);\n```'),

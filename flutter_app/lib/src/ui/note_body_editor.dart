@@ -1,6 +1,7 @@
 import 'package:appflowy_editor/appflowy_editor.dart';
 
 import '../data/note_repository.dart';
+import '../domain/markdown.dart';
 import '../domain/note.dart';
 
 /// Keeps the editor's document model at the UI boundary. Markdown remains the
@@ -28,13 +29,15 @@ class NoteBodyEditorCodec {
   }
 
   static String export(EditorState editorState) => normalizeTaskListSpacing(
-    documentToMarkdown(
-      editorState.document,
-      customParsers: const [
-        _SpecularImageNodeParser(),
-        _SpecularTodoNodeParser(),
-      ],
-      lineBreak: '\n\n',
+    MarkdownContract.restoreWikiLinks(
+      documentToMarkdown(
+        editorState.document,
+        customParsers: const [
+          _SpecularImageNodeParser(),
+          _SpecularTodoNodeParser(),
+        ],
+        lineBreak: '\n\n',
+      ),
     ),
   ).trim();
 
@@ -52,7 +55,9 @@ class NoteBodyEditorCodec {
   );
 
   static Document documentFromMarkdown(String markdown) {
-    final normalized = normalizeTaskListSpacing(markdown);
+    final normalized = normalizeTaskListSpacing(
+      MarkdownContract.renderWikiLinks(markdown),
+    );
     return _restoreGlobalTaskKinds(markdownToDocument(normalized), normalized);
   }
 
@@ -158,6 +163,7 @@ class NoteBodyEditorCodec {
     EditorState editorState,
     String text, {
     Selection? retainedSelection,
+    Attributes? attributes,
   }) async {
     final selection =
         _validCollapsedSelection(editorState, retainedSelection) ??
@@ -190,7 +196,7 @@ class NoteBodyEditorCodec {
         ? node.delta!.length
         : selection.start.offset.clamp(0, node.delta!.length).toInt();
     final transaction = editorState.transaction
-      ..insertText(node, offset, text)
+      ..insertText(node, offset, text, attributes: attributes)
       ..afterSelection = Selection.collapsed(
         Position(path: node.path, offset: offset + text.length),
       );
@@ -247,7 +253,6 @@ class NoteBodyEditorCodec {
 /// claiming a source feature can survive a rich-text round trip.
 class MarkdownCompatibility {
   static final _unsupported = <RegExp>[
-    RegExp(r'\[\[[^\]]+\]\]'), // Reflect wiki links.
     RegExp(r'^\s*```', multiLine: true),
     RegExp(r'^\s*\[[^\]]+\]:\s*\S+', multiLine: true),
     RegExp(r'^\s*\|.*\|\s*$', multiLine: true),

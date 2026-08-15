@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
@@ -1463,12 +1464,16 @@ class _NotePreviewBody extends ConsumerWidget {
         ),
         Expanded(
           child: Markdown(
-            data: NoteBodyEditorCodec.normalizeTaskListSpacing(note.body),
+            data: NoteBodyEditorCodec.normalizeTaskListSpacing(
+              MarkdownContract.renderWikiLinks(note.body),
+            ),
             padding: const EdgeInsets.all(16),
-            // Task text and its interactive checkbox must share the same top edge,
-            // including when the task spans multiple lines.
+            styleSheet: MarkdownStyleSheet.fromTheme(
+              Theme.of(context),
+            ).copyWith(p: Theme.of(context).textTheme.bodyLarge),
+            // Match the editor: align the checkbox to the task text baseline.
             listItemCrossAxisAlignment:
-                MarkdownListItemCrossAxisAlignment.start,
+                MarkdownListItemCrossAxisAlignment.baseline,
             onTapLink: (_, href, _) => _openLink(context, ref, href),
             imageBuilder: (uri, title, alt) =>
                 _AttachmentImage(notePath: note.path, uri: uri),
@@ -1504,6 +1509,23 @@ class _NotePreviewBody extends ConsumerWidget {
     WidgetRef ref,
     String? href,
   ) async {
+    final wikiTitle = MarkdownContract.wikiLinkTitle(href ?? '');
+    if (wikiTitle != null) {
+      final target = await ref
+          .read(noteRepositoryProvider)
+          .findByTitleOrAlias(wikiTitle);
+      if (target != null && context.mounted) {
+        context.push('/note/${Uri.encodeComponent(target.id)}');
+      } else if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Linked note is not available locally: $wikiTitle'),
+          ),
+        );
+      }
+      return;
+    }
+
     final targetPath = MarkdownContract.resolveNoteLink(note.path, href ?? '');
     if (targetPath != null) {
       final target = await ref
@@ -1975,8 +1997,13 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
     if (selected == null || editorState == null || !mounted) return;
     await NoteBodyEditorCodec.insertTextAtSelectionOrEnd(
       editorState,
-      '[[${selected.title}]]',
+      selected.title,
       retainedSelection: retainedSelection,
+      attributes: {
+        AppFlowyRichTextKeys.href: MarkdownContract.wikiLinkHref(
+          selected.title,
+        ),
+      },
     );
     if (mounted) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -2001,6 +2028,7 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
               textStyleConfiguration: TextStyleConfiguration(
                 text: Theme.of(context).textTheme.bodyLarge!,
               ),
+              textSpanDecorator: _linkTextSpanDecorator(wideLayout: wideLayout),
             )
           : EditorStyle.mobile(
               padding: const EdgeInsets.symmetric(horizontal: 4),
@@ -2008,6 +2036,7 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
               textStyleConfiguration: TextStyleConfiguration(
                 text: Theme.of(context).textTheme.bodyLarge!,
               ),
+              textSpanDecorator: _linkTextSpanDecorator(wideLayout: wideLayout),
             ),
       // A zero edge avoids AppFlowy's automatic edge-scroll loop on long
       // notes while retaining ordinary touch and trackpad scrolling.
@@ -2054,6 +2083,57 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
       ],
       child: editor,
     );
+  }
+
+  TextSpanDecoratorForAttribute _linkTextSpanDecorator({
+    required bool wideLayout,
+  }) => (context, node, index, text, before, after) {
+    final wikiTitle = MarkdownContract.wikiLinkTitle(
+      text.attributes?[AppFlowyRichTextKeys.href] as String? ?? '',
+    );
+    if (wikiTitle == null) {
+      return wideLayout
+          ? defaultTextSpanDecoratorForAttribute(
+              context,
+              node,
+              index,
+              text,
+              before,
+              after,
+            )
+          : mobileTextSpanDecoratorForAttribute(
+              context,
+              node,
+              index,
+              text,
+              before,
+              after,
+            );
+    }
+    return TextSpan(
+      style: before.style?.copyWith(
+        color: Theme.of(context).colorScheme.primary,
+        decoration: TextDecoration.underline,
+      ),
+      text: text.text,
+      mouseCursor: SystemMouseCursors.click,
+      recognizer: TapGestureRecognizer()
+        ..onTap = () => unawaited(_openWikiLink(wikiTitle)),
+    );
+  };
+
+  Future<void> _openWikiLink(String title) async {
+    final target = await ref
+        .read(noteRepositoryProvider)
+        .findByTitleOrAlias(title);
+    if (!mounted) return;
+    if (target == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Linked note is not available locally: $title')),
+      );
+      return;
+    }
+    context.push('/note/${Uri.encodeComponent(target.id)}');
   }
 
   @override

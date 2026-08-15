@@ -69,6 +69,26 @@ summary: "**Project** [plan](https://example.com)"
       );
     });
 
+    test('renders and restores portable wiki links', () {
+      const source = 'See [[Project plan]] and [[  Meeting notes  ]].';
+
+      final rendered = MarkdownContract.renderWikiLinks(source);
+
+      expect(
+        rendered,
+        'See [Project plan](specular-wiki:?title=Project+plan) and '
+        '[Meeting notes](specular-wiki:?title=Meeting+notes).',
+      );
+      expect(
+        MarkdownContract.wikiLinkTitle('specular-wiki:?title=Project+plan'),
+        'Project plan',
+      );
+      expect(
+        MarkdownContract.restoreWikiLinks(rendered),
+        'See [[Project plan]] and [[Meeting notes]].',
+      );
+    });
+
     test('resolves Markdown links relative to their source note', () {
       expect(
         MarkdownContract.resolveNoteLink(

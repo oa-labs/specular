@@ -234,6 +234,39 @@ class NoteRepository {
     return row == null ? null : _toNote(row);
   }
 
+  /// Finds the note a Reflect `[[wikilink]]` refers to. Exact titles take
+  /// precedence over aliases; case-insensitive matches preserve links from
+  /// libraries that normalize title casing differently.
+  Future<Note?> findByTitleOrAlias(String title) async {
+    final target = title.trim();
+    if (target.isEmpty) return null;
+    final notes =
+        (await (_db.select(
+              _db.noteRows,
+            )..where((note) => note.isPendingDeletion.equals(false))).get())
+            .map(_toNote)
+            .toList();
+    final normalizedTarget = target.toLowerCase();
+
+    for (final note in notes) {
+      if (note.title.trim() == target) return note;
+    }
+    for (final note in notes) {
+      if (note.title.trim().toLowerCase() == normalizedTarget) return note;
+    }
+    for (final note in notes) {
+      if (note.aliases.any((alias) => alias.trim() == target)) return note;
+    }
+    for (final note in notes) {
+      if (note.aliases.any(
+        (alias) => alias.trim().toLowerCase() == normalizedTarget,
+      )) {
+        return note;
+      }
+    }
+    return null;
+  }
+
   Future<List<Note>> dirtyNotes() async =>
       (await (_db.select(_db.noteRows)
                 ..where((note) => note.isDirty.equals(true))

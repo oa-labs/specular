@@ -21,9 +21,46 @@ class ParsedMarkdown {
 /// Small, deliberately conservative parser matching the established Reflect
 /// contract. Unknown frontmatter is preserved verbatim on note updates.
 class MarkdownContract {
+  static const _wikiLinkScheme = 'specular-wiki';
+
   static final _inlineLinkDestination = RegExp(
     r'(!?\[[^\]\n]*\]\()(<[^>\n]*>|[^\s)\n]+)',
   );
+  static final _wikiLink = RegExp(r'\[\[([^\]\r\n]+)\]\]');
+  static final _renderedWikiLink = RegExp(
+    r'\[([^\]\r\n]+)\]\((specular-wiki:\?title=[^\s)\r\n]+)\)',
+  );
+
+  /// Turns Reflect's portable `[[wikilink]]` form into ordinary Markdown that
+  /// the app's renderer and rich-text editor can display as an interactive
+  /// link. The original form is restored before saving.
+  static String renderWikiLinks(String markdown) =>
+      markdown.replaceAllMapped(_wikiLink, (match) {
+        final title = match.group(1)!.trim();
+        if (title.isEmpty) return match.group(0)!;
+        return '[$title](${wikiLinkHref(title)})';
+      });
+
+  /// Restores internal wiki links after the rich-text editor serializes them
+  /// as ordinary Markdown links.
+  static String restoreWikiLinks(String markdown) =>
+      markdown.replaceAllMapped(_renderedWikiLink, (match) {
+        final title = wikiLinkTitle(match.group(2)!);
+        return title == null ? match.group(0)! : '[[$title]]';
+      });
+
+  static String wikiLinkHref(String title) => Uri(
+    scheme: _wikiLinkScheme,
+    queryParameters: {'title': title},
+  ).toString();
+
+  /// Returns the note title targeted by an internal wiki-link URL.
+  static String? wikiLinkTitle(String href) {
+    final uri = Uri.tryParse(href);
+    if (uri == null || uri.scheme != _wikiLinkScheme) return null;
+    final title = uri.queryParameters['title']?.trim();
+    return title?.isEmpty ?? true ? null : title;
+  }
 
   /// Resolves a Markdown note link against the note containing it.
   ///
