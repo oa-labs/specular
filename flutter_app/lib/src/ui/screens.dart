@@ -16,6 +16,7 @@ import '../backup/backup_archive.dart';
 import '../data/note_repository.dart';
 import '../domain/markdown.dart';
 import '../domain/note.dart';
+import '../domain/note_search.dart';
 import '../sync/github_sync.dart';
 import '../sync/sync_scheduler.dart';
 import '../voice/voice_service.dart';
@@ -135,9 +136,9 @@ String? noteEmailAddress(Note note) {
 /// Imported Markdown notes do not retain their original filesystem timestamp,
 /// so [Note.updatedAt] often represents the import date. Meeting titles are a
 /// more durable source when they include a complete date. We accept the common
-/// ISO, US numeric, and written-month forms, including compact filenames such
-/// as `DesignReviewJuly15,2026`. Incomplete or invalid dates return null rather
-/// than guessing.
+/// ISO, US numeric, and written-month forms, including ordinal days and compact
+/// names such as `DesignReviewJuly15,2026`. Incomplete or invalid dates return
+/// null rather than guessing.
 DateTime? meetingDateFromTitle(String title) {
   final normalized = title.trim();
   if (normalized.isEmpty) return null;
@@ -205,7 +206,7 @@ DateTime? meetingDateFromTitle(String title) {
   };
   final monthNames = months.keys.join('|');
   final writtenMonthFirst = RegExp(
-    '($monthNames)\\.?[\\s,_-]*(\\d{1,2})[\\s,_-]+(\\d{4})(?!\\d)',
+    '($monthNames)\\.?[\\s,_-]*(\\d{1,2})(?:st|nd|rd|th)?[\\s,_-]+(\\d{4})(?!\\d)',
     caseSensitive: false,
   ).firstMatch(normalized);
   if (writtenMonthFirst != null) {
@@ -217,7 +218,9 @@ DateTime? meetingDateFromTitle(String title) {
   }
 
   final writtenDayFirst = RegExp(
-    r'(?<!\d)(\d{1,2})[\s,_-]+(' + monthNames + r')\.?[\s,_-]+(\d{4})(?!\d)',
+    r'(?<!\d)(\d{1,2})(?:st|nd|rd|th)?[\s,_-]+(' +
+        monthNames +
+        r')\.?[\s,_-]+(\d{4})(?!\d)',
     caseSensitive: false,
   ).firstMatch(normalized);
   if (writtenDayFirst != null) {
@@ -945,9 +948,13 @@ class _NoteTile extends ConsumerStatefulWidget {
     super.key,
     required this.note,
     this.showPersonEmail = false,
+    this.searchQuery,
+    this.searchExcerpt,
   });
   final Note note;
   final bool showPersonEmail;
+  final NoteSearchQuery? searchQuery;
+  final String? searchExcerpt;
 
   @override
   ConsumerState<_NoteTile> createState() => _NoteTileState();
@@ -1032,8 +1039,12 @@ class _NoteTileState extends ConsumerState<_NoteTile>
     final note = widget.note;
     final type = noteObjectType(note);
     final summary = hasUsableSummary(note) ? note.summary! : '';
-    final email = widget.showPersonEmail ? noteEmailAddress(note) : null;
-    final secondaryText = widget.showPersonEmail ? email ?? '' : summary;
+    final email = widget.searchExcerpt == null && widget.showPersonEmail
+        ? noteEmailAddress(note)
+        : null;
+    final secondaryText =
+        widget.searchExcerpt ??
+        (widget.showPersonEmail ? email ?? '' : summary);
     final hasMetadata = note.isConflict || email != null;
     final theme = Theme.of(context);
     return Semantics(
@@ -1082,8 +1093,9 @@ class _NoteTileState extends ConsumerState<_NoteTile>
                   children: [
                     _NoteKindIcons(note: note, type: type),
                     Expanded(
-                      child: Text(
-                        note.title.isEmpty ? 'Untitled' : note.title,
+                      child: _HighlightedText(
+                        text: note.title.isEmpty ? 'Untitled' : note.title,
+                        query: widget.searchQuery,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: theme.textTheme.titleMedium,
@@ -1112,8 +1124,9 @@ class _NoteTileState extends ConsumerState<_NoteTile>
                         if (secondaryText.isNotEmpty)
                           Expanded(
                             child: email == null
-                                ? Text(
-                                    secondaryText,
+                                ? _HighlightedText(
+                                    text: secondaryText,
+                                    query: widget.searchQuery,
                                     maxLines: 2,
                                     overflow: TextOverflow.ellipsis,
                                     style: theme.textTheme.bodyMedium?.copyWith(
@@ -1163,6 +1176,59 @@ class _NoteTileState extends ConsumerState<_NoteTile>
           ),
         ),
       ),
+    );
+  }
+}
+
+class _HighlightedText extends StatelessWidget {
+  const _HighlightedText({
+    required this.text,
+    required this.query,
+    required this.style,
+    required this.maxLines,
+    required this.overflow,
+  });
+
+  final String text;
+  final NoteSearchQuery? query;
+  final TextStyle? style;
+  final int maxLines;
+  final TextOverflow overflow;
+
+  @override
+  Widget build(BuildContext context) {
+    final search = query;
+    if (search == null || search.isEmpty) {
+      return Text(text, maxLines: maxLines, overflow: overflow, style: style);
+    }
+    final ranges = searchHighlightRanges(text, search);
+    if (ranges.isEmpty) {
+      return Text(text, maxLines: maxLines, overflow: overflow, style: style);
+    }
+    final highlightStyle = style?.copyWith(
+      backgroundColor: Theme.of(context).colorScheme.tertiaryContainer,
+      color: Theme.of(context).colorScheme.onTertiaryContainer,
+      fontWeight: FontWeight.w700,
+    );
+    final spans = <InlineSpan>[];
+    var cursor = 0;
+    for (final range in ranges) {
+      if (cursor < range.$1) {
+        spans.add(TextSpan(text: text.substring(cursor, range.$1)));
+      }
+      spans.add(
+        TextSpan(
+          text: text.substring(range.$1, range.$2),
+          style: highlightStyle,
+        ),
+      );
+      cursor = range.$2;
+    }
+    if (cursor < text.length) spans.add(TextSpan(text: text.substring(cursor)));
+    return Text.rich(
+      TextSpan(style: style, children: spans),
+      maxLines: maxLines,
+      overflow: overflow,
     );
   }
 }
@@ -2414,6 +2480,10 @@ class SearchScreen extends ConsumerStatefulWidget {
 
 class _SearchScreenState extends ConsumerState<SearchScreen> {
   var _query = '';
+  var _scope = NoteSearchScope.all;
+
+  NoteSearchQuery get _search => NoteSearchQuery(_query, scope: _scope);
+
   @override
   Widget build(BuildContext context) => Scaffold(
     appBar: AppBar(
@@ -2422,15 +2492,47 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
         onChanged: (value) => setState(() => _query = value),
         decoration: const InputDecoration(hintText: 'Search notes'),
       ),
-    ),
-    body: StreamBuilder<List<Note>>(
-      stream: ref.read(noteRepositoryProvider).search(_query),
-      builder: (_, snapshot) => ListView(
-        children: [
-          for (final note in snapshot.data ?? const <Note>[])
-            _NoteTile(note: note),
-        ],
+      bottom: PreferredSize(
+        preferredSize: const Size.fromHeight(52),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+          child: SegmentedButton<NoteSearchScope>(
+            segments: const [
+              ButtonSegment(value: NoteSearchScope.all, label: Text('All')),
+              ButtonSegment(
+                value: NoteSearchScope.title,
+                label: Text('Titles'),
+              ),
+              ButtonSegment(value: NoteSearchScope.body, label: Text('Body')),
+            ],
+            selected: {_scope},
+            onSelectionChanged: (selection) =>
+                setState(() => _scope = selection.single),
+          ),
+        ),
       ),
+    ),
+    body: StreamBuilder<List<NoteSearchResult>>(
+      stream: ref.read(noteRepositoryProvider).searchResults(_search),
+      builder: (_, snapshot) {
+        final results = snapshot.data ?? const <NoteSearchResult>[];
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Center(child: CircularProgressIndicator());
+        }
+        if (results.isEmpty && !_search.isEmpty) {
+          return const Center(child: Text('No matching notes'));
+        }
+        return ListView(
+          children: [
+            for (final result in results)
+              _NoteTile(
+                note: result.note,
+                searchQuery: _search,
+                searchExcerpt: result.excerpt,
+              ),
+          ],
+        );
+      },
     ),
   );
 }

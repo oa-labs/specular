@@ -166,6 +166,21 @@ Backup: other@example.com
     },
   );
 
+  test(
+    'uses an ordinal date in the visible title over filename-like numbers',
+    () {
+      final noteWithConflictingPath = note(
+        'Joel / Mark 1:1 - July 16th, 2026',
+        DateTime(2026, 8, 11, 9).millisecondsSinceEpoch,
+        path: 'meeting/joel-mark-11-july-16th-2026.md',
+      );
+
+      final groups = groupMeetingsByDate([noteWithConflictingPath]);
+
+      expect(groups.single.date, DateTime(2026, 7, 16));
+    },
+  );
+
   test('recognizes supported title-date conventions without guessing', () {
     expect(
       meetingDateFromTitle('Planning — 2026-08-13'),
@@ -177,6 +192,10 @@ Backup: other@example.com
       DateTime(2026, 8, 13),
     );
     expect(meetingDateFromTitle('JoelTaylorJune4-2026'), DateTime(2026, 6, 4));
+    expect(
+      meetingDateFromTitle('Joel / Mark 1:1 - July 16th, 2026'),
+      DateTime(2026, 7, 16),
+    );
     expect(meetingDateFromTitle('Planning August 32, 2026'), isNull);
     expect(meetingDateFromTitle('Planning August 2026'), isNull);
   });

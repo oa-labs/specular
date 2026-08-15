@@ -28,9 +28,9 @@ The local-first MVP and bidirectional GitHub sync are implemented. The source of
 | Conflict preservation | Complete | Local content is retained as a dated conflict note. |
 | Background and foreground sync | Complete | Manual/on-resume sync plus Android WorkManager periodic work. |
 | Sync settings and recovery UX | Complete | Configurable 15-minute to daily cadence, explicit cache clear/repository switch, wiki-link picker, and rate-limit reset messages. |
-| GitHub OAuth App with PKCE | Not started | PAT remains the supported authentication method. |
-| Large-repo performance verification | Not started | No measured 2k-note cold-start or sync benchmark yet. |
-| Release automation | Not started | No CI workflow, signed release artifact, or device-test pipeline yet. |
+| GitHub OAuth App with PKCE | Planned | Tracked in the [product roadmap](../roadmap.md#foundation--harden-sync-and-ship-reliably); PAT remains the supported authentication method. |
+| Large-repo performance verification | Planned | Tracked in the [product roadmap](../roadmap.md#foundation--harden-sync-and-ship-reliably); no measured 2k-note cold-start or sync benchmark yet. |
+| Release automation | Planned | Tracked in the [product roadmap](../roadmap.md#foundation--harden-sync-and-ship-reliably); no CI workflow, signed release artifact, or device-test pipeline yet. |
 
 ## Implemented Architecture
 
@@ -49,7 +49,7 @@ Flutter Material 3 UI
 | Concern | Implemented choice | Rationale |
 |---|---|---|
 | App and UI | Dart, Flutter, Material 3, `go_router`, Riverpod | One portable UI while retaining Android-native integrations where needed. |
-| Local index | Drift / SQLite | Stores notes, tasks, attachment state, dirty state, a durable sync journal, and inter-isolate leases. Search currently uses SQLite `LIKE` queries, not FTS. |
+| Local index | Drift / SQLite | Stores notes, tasks, attachment state, dirty state, a durable sync journal, and inter-isolate leases. Search uses a shared Dart ranked full-text matcher, avoiding an optional SQLite FTS dependency. |
 | Local files | App-private files directory | Canonical Markdown and attachment bytes are retained locally for offline editing and sync. |
 | Markdown | AppFlowy Editor and `flutter_markdown_plus` | Structured mobile editing, Markdown rendering, relative links, and image previews. |
 | GitHub sync | GitHub Git Data REST API via Dio | Supports atomic multi-file commits without JGit, the NDK, or a bundled git implementation. |
@@ -77,24 +77,13 @@ Supported files follow the documented Reflect contract:
 
 See [SYNC.md](../SYNC.md) for setup, operational behavior, and recovery guidance.
 
-## Remaining Work
+## Follow-on Work
 
-### Authentication and synchronization hardening
-
-- Register a GitHub OAuth App and implement authorization-code flow with PKCE; keep PAT entry as a fallback for development and unsupported environments.
-- Surface scheduled retry timing/status in the app after WorkManager applies the existing exponential-backoff policy.
-
-### Performance and product polish
-
-- Benchmark cold start and incremental sync against a representative 2,000-note repository; retain the targets of under 2 seconds to an interactive list and under 5 seconds for Wi-Fi incremental sync.
-- Add large-file guards and evaluate pagination/lazy download if full tree traversal is too slow for large repositories.
-
-### Verification and release
-
-- Add Flutter integration tests on an Android emulator/device for onboarding, editor, conflict recovery, and attachment sync. Keep the existing unit/widget tests for parser, repository, and mocked GitHub API paths.
-- Manually test a private repo with desktop/mobile concurrent edits and an airplane-mode edit/reconnect sequence; record the results.
-- Add GitHub Actions for `flutter analyze`, `flutter test`, and debug APK builds. Add a signed release workflow only after signing-key custody is established.
-- Produce a signed GMS-free APK for GitHub Releases, publish an install/update guide, and decide whether an optional Play track is wanted later.
+The remaining authentication, sync-hardening, performance, verification, and
+release work is now owned by the
+[product roadmap](../roadmap.md#foundation--harden-sync-and-ship-reliably).
+Keeping it there lets the sync plan document the implemented architecture while
+the roadmap prioritizes cross-cutting delivery work with future product phases.
 
 ## Validation Commands
 

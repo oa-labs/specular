@@ -7,6 +7,7 @@ import 'package:uuid/uuid.dart';
 
 import '../domain/markdown.dart';
 import '../domain/note.dart';
+import '../domain/note_search.dart';
 import '../platform/widget_bridge.dart';
 import 'app_database.dart';
 
@@ -171,23 +172,20 @@ class NoteRepository {
   }
 
   Stream<List<Note>> search(String input) {
+    return searchResults(
+      NoteSearchQuery(input),
+    ).map((results) => results.map((result) => result.note).toList());
+  }
+
+  /// Searches the complete local library with shared Android/macOS ranking.
+  ///
+  /// This uses the normal notes watch so updates are immediately reflected in
+  /// results, while [rankNotes] supplies token, phrase, and scope semantics.
+  Stream<List<NoteSearchResult>> searchResults(NoteSearchQuery search) {
     final query = _db.select(_db.noteRows)
       ..where((row) => row.isPendingDeletion.equals(false));
-    final term = input.trim();
-    if (term.isNotEmpty) {
-      final pattern = '%${term.replaceAll('%', '\\%').replaceAll('_', '\\_')}%';
-      query.where((row) => row.title.like(pattern) | row.body.like(pattern));
-      // A title hit is more likely to identify the intended note than a hit
-      // somewhere in its content. Keep recently updated notes first within
-      // each match group.
-      query.orderBy([
-        (row) => OrderingTerm.desc(row.title.like(pattern)),
-        (row) => OrderingTerm.desc(row.updatedAt),
-      ]);
-    } else {
-      query.orderBy([(row) => OrderingTerm.desc(row.updatedAt)]);
-    }
-    return query.watch().map((rows) => rows.map(_toNote).toList());
+    query.orderBy([(row) => OrderingTerm.desc(row.updatedAt)]);
+    return query.watch().map((rows) => rankNotes(rows.map(_toNote), search));
   }
 
   Stream<List<TodoItem>> watchTodos({bool includeCompleted = false}) {
