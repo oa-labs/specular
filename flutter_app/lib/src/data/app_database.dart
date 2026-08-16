@@ -63,6 +63,21 @@ class TodoIndexStates extends Table {
   Set<Column<Object>> get primaryKey => {id};
 }
 
+/// Durable, rebuildable incoming-link index. Targets are stable note ids;
+/// source Markdown remains canonical and can always regenerate this table.
+class LinkEntries extends Table {
+  @override
+  String get tableName => 'link_index';
+
+  TextColumn get sourceNoteId => text().named('sourceNoteId')();
+  IntColumn get linkIndex => integer().named('linkIndex')();
+  TextColumn get targetNoteId => text().named('targetNoteId')();
+  TextColumn get kind => text()();
+  TextColumn get label => text()();
+  @override
+  Set<Column<Object>> get primaryKey => {sourceNoteId, linkIndex};
+}
+
 class Attachments extends Table {
   @override
   String get tableName => 'attachments';
@@ -104,6 +119,7 @@ class SyncLeases extends Table {
     NoteRows,
     TodoEntries,
     TodoIndexStates,
+    LinkEntries,
     Attachments,
     SyncOperations,
     SyncLeases,
@@ -127,7 +143,7 @@ class AppDatabase extends _$AppDatabase {
   );
 
   @override
-  int get schemaVersion => 10;
+  int get schemaVersion => 11;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -147,6 +163,7 @@ class AppDatabase extends _$AppDatabase {
         await m.createTable(syncOperations);
         await m.createTable(syncLeases);
       }
+      if (from < 11) await m.createTable(linkEntries);
     },
   );
 

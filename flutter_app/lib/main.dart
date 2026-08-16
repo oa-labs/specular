@@ -55,4 +55,5 @@ Future<void> main() async {
   // database, after the list screen has rendered.
   unawaited(repository.importExistingFilesIfNeeded());
   unawaited(repository.migrateGlobalTaskIndex());
+  unawaited(repository.rebuildLinkIndex());
 }

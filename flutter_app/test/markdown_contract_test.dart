@@ -174,6 +174,23 @@ summary: "**Project** [plan](https://example.com)"
 [External](https://example.com/project-plan.md)''',
       );
     });
+
+    test('extracts portable wiki and relative Markdown note links', () {
+      final links = MarkdownContract.extractNoteLinks(
+        'daily/2026-08-09.md',
+        '''[[Project Plan]]
+[Plan file](../notes/project-plan.md)
+![](attachments/image.png)
+[Website](https://example.com)''',
+      );
+
+      expect(links, hasLength(2));
+      expect(links[0].kind, 'wiki');
+      expect(links[0].target, 'Project Plan');
+      expect(links[1].kind, 'markdown');
+      expect(links[1].target, 'notes/project-plan.md');
+      expect(links[1].label, 'Plan file');
+    });
   });
 
   group('TodoMarkdown', () {
@@ -203,6 +220,39 @@ summary: "**Project** [plan](https://example.com)"
       expect(
         TodoMarkdown.toggleGlobalAt(source, tasks.single.index),
         '+ [ ]\n+ [x] Actual task\n+ [x]   ',
+      );
+    });
+
+    test('schedules a global task with one valid trailing daily wikilink', () {
+      const source =
+          '+ [ ] **Joel:** Refine estimates [[2026-08-17]] [[Project]]\n'
+          '+ [ ] Leave alone';
+
+      final scheduled = TodoMarkdown.scheduleGlobalAt(source, 0, '2026-08-18');
+
+      expect(
+        scheduled,
+        '+ [ ] **Joel:** Refine estimates [[Project]] [[2026-08-18]]\n'
+        '+ [ ] Leave alone',
+      );
+      final tasks = TodoMarkdown.extractScheduled(scheduled);
+      expect(tasks, hasLength(1));
+      expect(tasks.single.index, 0);
+      expect(tasks.single.date, '2026-08-18');
+      expect(TodoMarkdown.isDailyDate('2026-02-29'), isFalse);
+      expect(TodoMarkdown.isDailyDate('2028-02-29'), isTrue);
+    });
+
+    test('updates task text without changing its schedule', () {
+      const source = '+ [x] Old wording [[2026-08-18]]';
+
+      expect(
+        TodoMarkdown.updateGlobalTextAt(source, 0, 'New wording'),
+        '+ [x] New wording [[2026-08-18]]',
+      );
+      expect(
+        TodoMarkdown.editableText('New wording [[2026-08-18]]'),
+        'New wording',
       );
     });
   });

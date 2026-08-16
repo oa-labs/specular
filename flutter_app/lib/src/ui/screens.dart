@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/gestures.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
@@ -78,6 +79,9 @@ List<String> noteFolders(Iterable<Note> notes) {
 List<String> creationFolders(Iterable<Note> notes) => noteFolders(
   notes,
 ).where((folder) => folder.toLowerCase() != 'daily').toList();
+
+String formatDailyDate(DateTime date) =>
+    '${date.year.toString().padLeft(4, '0')}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
 
 /// Identifies the first-class note types supported by the home views.
 ///
@@ -1528,6 +1532,8 @@ class _NotePreviewBody extends ConsumerWidget {
             ],
           ),
         ),
+        _NoteBacklinks(note: note),
+        if (note.isDaily) _DailyTaskBacklinks(daily: note),
         Expanded(
           child: Markdown(
             data: NoteBodyEditorCodec.normalizeTaskListSpacing(
@@ -1579,7 +1585,7 @@ class _NotePreviewBody extends ConsumerWidget {
     if (wikiTitle != null) {
       final target = await ref
           .read(noteRepositoryProvider)
-          .findByTitleOrAlias(wikiTitle);
+          .findByWikiLinkTitle(wikiTitle);
       if (target != null && context.mounted) {
         context.push('/note/${Uri.encodeComponent(target.id)}');
       } else if (context.mounted) {
@@ -1616,6 +1622,204 @@ class _NotePreviewBody extends ConsumerWidget {
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(const SnackBar(content: Text('Unable to open link.')));
+    }
+  }
+}
+
+/// Incoming note links backed by the durable local link index. Daily task
+/// schedule links render in their dedicated task panel instead.
+class _NoteBacklinks extends ConsumerWidget {
+  const _NoteBacklinks({required this.note});
+
+  final Note note;
+
+  @override
+  Widget build(
+    BuildContext context,
+    WidgetRef ref,
+  ) => StreamBuilder<List<NoteBacklink>>(
+    stream: ref.read(noteRepositoryProvider).watchBacklinks(note),
+    builder: (context, snapshot) {
+      final backlinks = (snapshot.data ?? const <NoteBacklink>[])
+          .where(
+            (backlink) =>
+                !note.isDaily || !TodoMarkdown.isDailyDate(backlink.label),
+          )
+          .toList();
+      if (backlinks.isEmpty) return const SizedBox.shrink();
+      return Container(
+        width: double.infinity,
+        margin: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: Theme.of(context).colorScheme.surfaceContainerHighest,
+          borderRadius: BorderRadius.circular(16),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Backlinks',
+              style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                color: Theme.of(context).colorScheme.primary,
+              ),
+            ),
+            const SizedBox(height: 6),
+            for (final backlink in backlinks)
+              InkWell(
+                onTap: () => context.push(
+                  '/note/${Uri.encodeComponent(backlink.sourceNoteId)}',
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 5),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        backlink.sourceNoteTitle,
+                        style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                          color: Theme.of(context).colorScheme.primary,
+                          decoration: TextDecoration.underline,
+                        ),
+                      ),
+                      Text(
+                        backlink.label,
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: Theme.of(context).colorScheme.onSurfaceVariant,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+          ],
+        ),
+      );
+    },
+  );
+}
+
+/// Reflect-style incoming task links for a daily note. The actual checkbox
+/// state lives in the source note, so this view always toggles that task
+/// rather than copying it into the daily note.
+class _DailyTaskBacklinks extends ConsumerWidget {
+  const _DailyTaskBacklinks({required this.daily});
+
+  final Note daily;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) =>
+      StreamBuilder<List<ScheduledTaskBacklink>>(
+        stream: ref
+            .read(noteRepositoryProvider)
+            .watchScheduledTaskBacklinks(daily),
+        builder: (context, snapshot) {
+          final backlinks = snapshot.data ?? const <ScheduledTaskBacklink>[];
+          if (backlinks.isEmpty) return const SizedBox.shrink();
+          final groups = <String, List<ScheduledTaskBacklink>>{};
+          for (final backlink in backlinks) {
+            groups.putIfAbsent(backlink.sourceNoteId, () => []).add(backlink);
+          }
+          return Container(
+            width: double.infinity,
+            margin: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: Theme.of(context).colorScheme.surfaceContainerHighest,
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Backlinks',
+                  style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                    color: Theme.of(context).colorScheme.primary,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                for (final group in groups.values) ...[
+                  InkWell(
+                    onTap: () => context.push(
+                      '/note/${Uri.encodeComponent(group.first.sourceNoteId)}',
+                    ),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 4),
+                      child: Text(
+                        group.first.sourceNoteTitle,
+                        style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                          color: Theme.of(context).colorScheme.primary,
+                          decoration: TextDecoration.underline,
+                        ),
+                      ),
+                    ),
+                  ),
+                  for (final backlink in group)
+                    _ScheduledBacklinkTask(backlink: backlink),
+                ],
+              ],
+            ),
+          );
+        },
+      );
+}
+
+class _ScheduledBacklinkTask extends ConsumerWidget {
+  const _ScheduledBacklinkTask({required this.backlink});
+
+  final ScheduledTaskBacklink backlink;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) => Padding(
+    padding: const EdgeInsets.only(left: 4, bottom: 4),
+    child: Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Checkbox(
+          value: backlink.isCompleted,
+          semanticLabel: 'Mark ${backlink.text} complete',
+          materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          visualDensity: VisualDensity.compact,
+          onChanged: (_) => ref
+              .read(noteRepositoryProvider)
+              .toggleTodo(
+                TodoItem(
+                  noteId: backlink.sourceNoteId,
+                  taskIndex: backlink.taskIndex,
+                  text: backlink.text,
+                  isCompleted: backlink.isCompleted,
+                  noteTitle: backlink.sourceNoteTitle,
+                ),
+              ),
+        ),
+        Expanded(
+          child: Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: MarkdownBody(
+              data: MarkdownContract.renderWikiLinks(backlink.text),
+              styleSheet: MarkdownStyleSheet.fromTheme(
+                Theme.of(context),
+              ).copyWith(p: Theme.of(context).textTheme.bodyLarge),
+              onTapLink: (_, href, _) => _openLink(context, ref, href),
+            ),
+          ),
+        ),
+      ],
+    ),
+  );
+
+  Future<void> _openLink(
+    BuildContext context,
+    WidgetRef ref,
+    String? href,
+  ) async {
+    final title = MarkdownContract.wikiLinkTitle(href ?? '');
+    if (title == null) return;
+    final target = await ref
+        .read(noteRepositoryProvider)
+        .findByWikiLinkTitle(title);
+    if (target != null && context.mounted) {
+      context.push('/note/${Uri.encodeComponent(target.id)}');
     }
   }
 }
@@ -1741,12 +1945,20 @@ class EditorScreen extends ConsumerStatefulWidget {
 
 class _EditorScreenState extends ConsumerState<EditorScreen> {
   static const _inboxFolderOption = '__specular_inbox__';
-  static final _globalTaskMobileToolbarItem = MobileToolbarItem.action(
+  late final _globalTaskMobileToolbarItem = MobileToolbarItem.action(
     itemIconBuilder: (context, _, _) =>
         Icon(Icons.task_alt, color: MobileToolbarTheme.of(context).iconColor),
     actionHandler: (_, editorState) => _toggleGlobalTask(editorState),
   );
-  static final _localCheckboxMobileToolbarItem = MobileToolbarItem.action(
+  late final _scheduleTaskMobileToolbarItem = MobileToolbarItem.action(
+    itemIconBuilder: (context, _, _) => Icon(
+      Icons.calendar_month,
+      color: MobileToolbarTheme.of(context).iconColor,
+    ),
+    actionHandler: (_, editorState) =>
+        unawaited(_scheduleSelectedTask(editorState)),
+  );
+  late final _localCheckboxMobileToolbarItem = MobileToolbarItem.action(
     itemIconBuilder: (context, _, _) => Icon(
       Icons.check_box_outline_blank,
       color: MobileToolbarTheme.of(context).iconColor,
@@ -1754,7 +1966,7 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
     actionHandler: (_, editorState) => _toggleLocalCheckbox(editorState),
   );
 
-  static final _globalTaskToolbarItem = ToolbarItem(
+  late final _globalTaskToolbarItem = ToolbarItem(
     id: 'specular.global_task',
     group: 3,
     isActive: onlyShowInTextType,
@@ -1773,7 +1985,26 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
           child;
     },
   );
-  static final _localCheckboxToolbarItem = ToolbarItem(
+  late final _scheduleTaskToolbarItem = ToolbarItem(
+    id: 'specular.schedule_task',
+    group: 3,
+    isActive: onlyShowInTextType,
+    builder: (context, editorState, _, iconColor, tooltipBuilder) {
+      final child = _desktopToolbarButton(
+        icon: Icons.calendar_month,
+        color: iconColor,
+        onPressed: () => unawaited(_scheduleSelectedTask(editorState)),
+      );
+      return tooltipBuilder?.call(
+            context,
+            'specular.schedule_task',
+            'Schedule task',
+            child,
+          ) ??
+          child;
+    },
+  );
+  late final _localCheckboxToolbarItem = ToolbarItem(
     id: 'specular.local_checkbox',
     group: 3,
     isActive: onlyShowInTextType,
@@ -1862,6 +2093,7 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
   var _saving = false;
   var _voiceRecording = false;
   var _willRewriteUnsupportedMarkdown = false;
+  DateTime? _scheduledFor;
   String? _selectedFolder;
   final _images = ImagePicker();
 
@@ -1965,7 +2197,7 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
       await repo.commitStagedImages(_stagedImages);
       _stagedImages.clear();
       final saved = widget.newTodo
-          ? await repo.appendToToday(body)
+          ? await repo.appendToToday(body, scheduledFor: _scheduledFor)
           : widget.dailyDate != null
           ? await repo.createDaily(
               'daily/${widget.dailyDate}.md',
@@ -2078,6 +2310,99 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
     }
   }
 
+  Future<void> _chooseNewTodoSchedule() async {
+    final selected = await showDatePicker(
+      context: context,
+      initialDate: _scheduledFor ?? DateTime.now(),
+      firstDate: DateTime(2000),
+      lastDate: DateTime(2100),
+    );
+    if (selected != null && mounted) setState(() => _scheduledFor = selected);
+  }
+
+  int? _selectedGlobalTaskIndex(EditorState editorState) {
+    final selection = editorState.selection;
+    if (selection == null) return null;
+    final selected = editorState.getNodeAtPath(selection.start.path);
+    if (selected == null ||
+        selected.type != TodoListBlockKeys.type ||
+        selected.attributes[NoteBodyEditorCodec.globalTaskAttribute] != true) {
+      return null;
+    }
+    var globalIndex = 0;
+    for (final node in editorState.document.root.children) {
+      if (node.type != TodoListBlockKeys.type ||
+          node.attributes[NoteBodyEditorCodec.globalTaskAttribute] != true) {
+        continue;
+      }
+      if (listEquals(node.path, selected.path)) return globalIndex;
+      globalIndex++;
+    }
+    return null;
+  }
+
+  Future<void> _scheduleSelectedTask(EditorState editorState) async {
+    final taskIndex = _selectedGlobalTaskIndex(editorState);
+    if (taskIndex == null) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Place the cursor in a global task first.'),
+          ),
+        );
+      }
+      return;
+    }
+    if (_note == null) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Save this note before scheduling a task.'),
+          ),
+        );
+      }
+      return;
+    }
+    final selected = await showDatePicker(
+      context: context,
+      initialDate: DateTime.now(),
+      firstDate: DateTime(2000),
+      lastDate: DateTime(2100),
+    );
+    if (selected == null || !mounted) return;
+    setState(() => _saving = true);
+    try {
+      final repository = ref.read(noteRepositoryProvider);
+      final saved = await repository.save(
+        _note!,
+        title: _title.text,
+        body: NoteBodyEditorCodec.export(editorState),
+      );
+      await repository.scheduleGlobalTask(
+        noteId: saved.id,
+        taskIndex: taskIndex,
+        date: selected,
+      );
+      _note = await repository.get(saved.id);
+      _editorState?.dispose();
+      _wideEditorScrollController?.dispose();
+      _editorState = await NoteBodyEditorCodec.load(_note, repository);
+      _wideEditorScrollController = EditorScrollController(
+        editorState: _editorState!,
+        shrinkWrap: false,
+      );
+      ref.invalidate(notesProvider);
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Unable to schedule task: $error')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
   Widget _buildEditor(BuildContext context, {required bool wideLayout}) {
     final editor = AppFlowyEditor(
       editorState: _editorState!,
@@ -2118,6 +2443,7 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
           linkMobileToolbarItem,
           listMobileToolbarItem,
           _globalTaskMobileToolbarItem,
+          _scheduleTaskMobileToolbarItem,
           _localCheckboxMobileToolbarItem,
           quoteMobileToolbarItem,
           dividerMobileToolbarItem,
@@ -2144,6 +2470,7 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
         bulletedListItem,
         numberedListItem,
         _globalTaskToolbarItem,
+        _scheduleTaskToolbarItem,
         _localCheckboxToolbarItem,
         linkItem,
       ],
@@ -2191,7 +2518,7 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
   Future<void> _openWikiLink(String title) async {
     final target = await ref
         .read(noteRepositoryProvider)
-        .findByTitleOrAlias(title);
+        .findByWikiLinkTitle(title);
     if (!mounted) return;
     if (target == null) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -2336,6 +2663,35 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
                       controller: _title,
                       decoration: const InputDecoration(labelText: 'Title'),
                     ),
+                    if (widget.newTodo)
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            TextButton.icon(
+                              onPressed: _saving
+                                  ? null
+                                  : _chooseNewTodoSchedule,
+                              icon: const Icon(Icons.calendar_month),
+                              label: Text(
+                                _scheduledFor == null
+                                    ? 'Schedule for a day'
+                                    : 'Scheduled: ${formatDailyDate(_scheduledFor!)}',
+                              ),
+                            ),
+                            if (_scheduledFor != null)
+                              IconButton(
+                                tooltip: 'Clear schedule',
+                                icon: const Icon(Icons.close),
+                                onPressed: _saving
+                                    ? null
+                                    : () =>
+                                          setState(() => _scheduledFor = null),
+                              ),
+                          ],
+                        ),
+                      ),
                     if (_note == null && !widget.newTodo)
                       Align(
                         alignment: Alignment.centerLeft,
@@ -2680,12 +3036,110 @@ class _TodoNoteGroup extends StatelessWidget {
   }
 }
 
-class _TodoRow extends ConsumerWidget {
+class _TodoRow extends ConsumerStatefulWidget {
   const _TodoRow({super.key, required this.todo});
   final TodoItem todo;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) => Padding(
+  ConsumerState<_TodoRow> createState() => _TodoRowState();
+}
+
+class _TodoRowState extends ConsumerState<_TodoRow> {
+  late final TextEditingController _editor;
+  late final FocusNode _editorFocus;
+  var _editing = false;
+  var _saving = false;
+
+  TodoItem get _todo => widget.todo;
+
+  @override
+  void initState() {
+    super.initState();
+    _editor = TextEditingController(
+      text: TodoMarkdown.editableText(_todo.text),
+    );
+    _editorFocus = FocusNode();
+  }
+
+  @override
+  void didUpdateWidget(covariant _TodoRow oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!_editing && oldWidget.todo.text != _todo.text) {
+      _editor.text = TodoMarkdown.editableText(_todo.text);
+    }
+  }
+
+  @override
+  void dispose() {
+    _editor.dispose();
+    _editorFocus.dispose();
+    super.dispose();
+  }
+
+  void _startEditing() {
+    setState(() => _editing = true);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _editorFocus.requestFocus();
+      _editor.selection = TextSelection.collapsed(offset: _editor.text.length);
+    });
+  }
+
+  Future<void> _saveText() async {
+    if (_saving) return;
+    final text = _editor.text.trim();
+    if (text.isEmpty) {
+      _editor.text = TodoMarkdown.editableText(_todo.text);
+      if (mounted) setState(() => _editing = false);
+      return;
+    }
+    if (text == TodoMarkdown.editableText(_todo.text)) {
+      if (mounted) setState(() => _editing = false);
+      return;
+    }
+    setState(() => _saving = true);
+    try {
+      await ref.read(noteRepositoryProvider).updateTodoText(_todo, text);
+      if (mounted) setState(() => _editing = false);
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Unable to update task: $error')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  Future<void> _schedule() async {
+    final current = TodoMarkdown.scheduledDate(_todo.text);
+    final selected = await showDatePicker(
+      context: context,
+      initialDate: current == null ? DateTime.now() : DateTime.parse(current),
+      firstDate: DateTime(2000),
+      lastDate: DateTime(2100),
+    );
+    if (selected == null || !mounted) return;
+    try {
+      await ref
+          .read(noteRepositoryProvider)
+          .scheduleGlobalTask(
+            noteId: _todo.noteId,
+            taskIndex: _todo.taskIndex,
+            date: selected,
+          );
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Unable to schedule task: $error')),
+        );
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => Padding(
     padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
     child: Row(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -2695,36 +3149,82 @@ class _TodoRow extends ConsumerWidget {
           // it beside a task that wraps over several lines.
           padding: const EdgeInsets.only(top: 1, right: 8),
           child: Checkbox(
-            value: todo.isCompleted,
-            semanticLabel: 'Mark ${todo.text} complete',
+            value: _todo.isCompleted,
+            semanticLabel: 'Mark ${_todo.text} complete',
             materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
             visualDensity: VisualDensity.compact,
-            onChanged: (_) => ref.read(noteRepositoryProvider).toggleTodo(todo),
+            onChanged: _saving
+                ? null
+                : (_) => ref.read(noteRepositoryProvider).toggleTodo(_todo),
           ),
         ),
         Expanded(
-          child: InkWell(
-            onTap: () =>
-                context.push('/note/${Uri.encodeComponent(todo.noteId)}'),
-            child: Padding(
-              padding: const EdgeInsets.only(bottom: 2),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  MarkdownBody(
-                    data: todo.text,
-                    styleSheet: MarkdownStyleSheet.fromTheme(
-                      Theme.of(context),
-                    ).copyWith(p: Theme.of(context).textTheme.bodyLarge),
+          child: _editing
+              ? TextField(
+                  controller: _editor,
+                  focusNode: _editorFocus,
+                  enabled: !_saving,
+                  minLines: 1,
+                  maxLines: null,
+                  textInputAction: TextInputAction.done,
+                  onSubmitted: (_) => unawaited(_saveText()),
+                  onTapOutside: (_) => unawaited(_saveText()),
+                  decoration: const InputDecoration(
+                    isDense: true,
+                    hintText: 'Task text',
                   ),
-                ],
-              ),
-            ),
+                )
+              : InkWell(
+                  onTap: _startEditing,
+                  child: Padding(
+                    padding: const EdgeInsets.only(top: 8, bottom: 6),
+                    child: MarkdownBody(
+                      data: MarkdownContract.renderWikiLinks(_todo.text),
+                      styleSheet: MarkdownStyleSheet.fromTheme(
+                        Theme.of(context),
+                      ).copyWith(p: Theme.of(context).textTheme.bodyLarge),
+                      onTapLink: (_, href, _) =>
+                          _openTaskLink(context, ref, href),
+                    ),
+                  ),
+                ),
+        ),
+        if (_editing)
+          IconButton(
+            tooltip: 'Save task text',
+            onPressed: _saving ? null : () => unawaited(_saveText()),
+            icon: _saving
+                ? const SizedBox.square(
+                    dimension: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.done),
           ),
+        IconButton(
+          tooltip: TodoMarkdown.scheduledDate(_todo.text) == null
+              ? 'Schedule task'
+              : 'Reschedule task',
+          onPressed: _saving ? null : () => unawaited(_schedule()),
+          icon: const Icon(Icons.calendar_month),
         ),
       ],
     ),
   );
+
+  Future<void> _openTaskLink(
+    BuildContext context,
+    WidgetRef ref,
+    String? href,
+  ) async {
+    final title = MarkdownContract.wikiLinkTitle(href ?? '');
+    if (title == null) return;
+    final target = await ref
+        .read(noteRepositoryProvider)
+        .findByWikiLinkTitle(title);
+    if (target != null && context.mounted) {
+      context.push('/note/${Uri.encodeComponent(target.id)}');
+    }
+  }
 }
 
 class VoiceCaptureScreen extends ConsumerStatefulWidget {

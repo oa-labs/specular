@@ -80,8 +80,16 @@ not remember its folder or exact wording.
 - **Implemented (2026-08-15):** Upgrade search from a title/body substring
   match to ranked full-text search with highlighted matches, phrase search, and
   All/Titles/Body scopes.
-- Add a backlinks panel for wiki links and Markdown note links, including
-  unlinked title mentions where practical.
+- **Implemented (2026-08-15):** Scheduled global tasks can link to a selected
+  daily note using portable `[[YYYY-MM-DD]]` syntax. Specular creates a
+  missing daily note, shows grouped incoming task backlinks there, and lets
+  users complete the original task or edit its text from the global to-do
+  view.
+- **Implemented (2026-08-15):** A durable local link index powers a general
+  backlinks panel on every note for wiki links and relative Markdown note
+  links. It rebuilds from canonical Markdown after local edits, imports, sync
+  updates, moves/renames, and deletions.
+- Add unlinked title mentions where practical.
 - Optionally add a lightweight local graph only after backlinks and filters
   provide clear value.
 
@@ -100,6 +108,9 @@ follow-ups—need less repeated setup and produce usable next actions.
 
 - Add user-editable templates for notes, meetings, people, and journals.
 - Support date-aware recurring templates for daily, weekly, and monthly notes.
+- **Implemented (2026-08-15):** Schedule or reschedule a global task with a
+  date picker and a Reflect-compatible daily-note backlink; task text is
+  editable from the global to-do view without removing its schedule.
 - Add task metadata: due date, reminder, priority, and recurrence.
 - Add task views for Today, Upcoming, Overdue, and Completed, while retaining
   plain Markdown checkboxes as the base format.

@@ -143,6 +143,11 @@ Markdown checkboxes (`- [ ]` and `- [x]`) are indexed as global to-dos. The
 **To-dos** screen lets you complete items without manually opening their source
 note, and the Android widget exposes the same task list from the home screen.
 
+Schedule a global to-do from its editor calendar action, or while creating a
+new to-do. Specular writes Reflect-compatible `[[YYYY-MM-DD]]` syntax, creates
+that daily note when needed, and shows the source task as an incoming backlink
+on the selected day.
+
 Use the calendar action to open today’s note. Voice capture can also append a
 transcript or a to-do to it.
 

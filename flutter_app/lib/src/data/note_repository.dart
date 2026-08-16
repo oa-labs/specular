@@ -94,6 +94,7 @@ class NoteRepository {
       await _db.transaction(() async {
         await _db.delete(_db.todoEntries).go();
         await _db.delete(_db.todoIndexStates).go();
+        await _db.delete(_db.linkEntries).go();
         await _db.delete(_db.attachments).go();
         await _db.delete(_db.syncOperations).go();
         await _db.delete(_db.noteRows).go();
@@ -218,6 +219,69 @@ class NoteRepository {
     );
   }
 
+  /// Streams global tasks in other notes whose daily-date wikilink resolves
+  /// to [daily]'s repository path. The relationship stays derived from
+  /// Markdown so imported Reflect notes and local changes behave identically.
+  Stream<List<ScheduledTaskBacklink>> watchScheduledTaskBacklinks(Note daily) {
+    if (!daily.isDaily) return Stream.value(const []);
+    final date = p.basenameWithoutExtension(daily.path);
+    if (!TodoMarkdown.isDailyDate(date)) return Stream.value(const []);
+    final query = _db.select(_db.noteRows)
+      ..where((row) => row.isPendingDeletion.equals(false))
+      ..orderBy([
+        (row) => OrderingTerm.desc(row.updatedAt),
+        (row) => OrderingTerm.asc(row.title),
+      ]);
+    return query.watch().map(
+      (rows) => [
+        for (final row in rows)
+          if (row.id != daily.id)
+            for (final task in TodoMarkdown.extractScheduled(row.body))
+              if (task.date == date)
+                ScheduledTaskBacklink(
+                  sourceNoteId: row.id,
+                  sourceNoteTitle: row.title,
+                  taskIndex: task.index,
+                  text: task.text,
+                  isCompleted: task.completed,
+                ),
+      ],
+    );
+  }
+
+  /// Streams incoming wiki and relative Markdown links through the durable
+  /// link index. This is intentionally separate from task scheduling so every
+  /// note type can expose its relationships.
+  Stream<List<NoteBacklink>> watchBacklinks(Note target) {
+    final query =
+        _db.select(_db.linkEntries).join([
+            innerJoin(
+              _db.noteRows,
+              _db.noteRows.id.equalsExp(_db.linkEntries.sourceNoteId),
+            ),
+          ])
+          ..where(
+            _db.linkEntries.targetNoteId.equals(target.id) &
+                _db.noteRows.isPendingDeletion.equals(false),
+          )
+          ..orderBy([
+            OrderingTerm.desc(_db.noteRows.updatedAt),
+            OrderingTerm.asc(_db.linkEntries.linkIndex),
+          ]);
+    return query.watch().map(
+      (rows) => rows
+          .map(
+            (row) => NoteBacklink(
+              sourceNoteId: row.readTable(_db.linkEntries).sourceNoteId,
+              sourceNoteTitle: row.readTable(_db.noteRows).title,
+              kind: row.readTable(_db.linkEntries).kind,
+              label: row.readTable(_db.linkEntries).label,
+            ),
+          )
+          .toList(),
+    );
+  }
+
   Future<Note?> get(String id) async {
     final row = await (_db.select(
       _db.noteRows,
@@ -263,6 +327,17 @@ class NoteRepository {
       }
     }
     return null;
+  }
+
+  /// Resolves date-shaped wikilinks by their stable daily file path before
+  /// falling back to Reflect's title/alias matching.
+  Future<Note?> findByWikiLinkTitle(String title) async {
+    final value = title.trim();
+    if (TodoMarkdown.isDailyDate(value)) {
+      final daily = await findByPath('daily/$value.md');
+      if (daily != null) return daily;
+    }
+    return findByTitleOrAlias(value);
   }
 
   Future<List<Note>> dirtyNotes() async =>
@@ -444,6 +519,12 @@ class NoteRepository {
       await (_db.delete(
         _db.syncOperations,
       )..where((row) => row.noteId.equals(note.id))).go();
+      await (_db.delete(_db.linkEntries)..where(
+            (row) =>
+                row.sourceNoteId.equals(note.id) |
+                row.targetNoteId.equals(note.id),
+          ))
+          .go();
     });
   }
 
@@ -567,13 +648,20 @@ class NoteRepository {
   }
 
   Future<Note> getOrCreateToday() async {
-    final date = DateTime.now().toIso8601String().substring(0, 10);
-    final path = 'daily/$date.md';
+    return getOrCreateDaily(DateTime.now());
+  }
+
+  /// Ensures that a local-calendar day has a daily note. Scheduling calls
+  /// this eagerly so its portable wikilink immediately has a real target.
+  Future<Note> getOrCreateDaily(DateTime date) async {
+    final normalized = DateTime(date.year, date.month, date.day);
+    final value = _dailyDate(normalized);
+    final path = 'daily/$value.md';
     final existing = await (_db.select(
       _db.noteRows,
     )..where((note) => note.path.equals(path))).getSingleOrNull();
     if (existing != null) return _toNote(existing);
-    return createDaily(path, date);
+    return createDaily(path, value);
   }
 
   Future<Note> createDaily(
@@ -609,7 +697,7 @@ class NoteRepository {
     return note;
   }
 
-  Future<Note> appendToToday(String markdown) async {
+  Future<Note> appendToToday(String markdown, {DateTime? scheduledFor}) async {
     if (markdown.trim().isEmpty) {
       throw ArgumentError.value(
         markdown,
@@ -617,11 +705,15 @@ class NoteRepository {
         'A capture cannot be blank',
       );
     }
+    final scheduled = scheduledFor == null
+        ? markdown
+        : TodoMarkdown.scheduleGlobalAt(markdown, 0, _dailyDate(scheduledFor));
+    if (scheduledFor != null) await getOrCreateDaily(scheduledFor);
     final today = await getOrCreateToday();
     return save(
       today,
       title: today.title,
-      body: '${today.body.trimRight()}\n\n${markdown.trim()}\n',
+      body: '${today.body.trimRight()}\n\n${scheduled.trim()}\n',
     );
   }
 
@@ -815,6 +907,40 @@ class NoteRepository {
     );
   }
 
+  /// Updates the source Markdown for a task edited from the global to-do
+  /// screen. A task's schedule remains intact and is managed separately.
+  Future<void> updateTodoText(TodoItem todo, String text) async {
+    final note = await get(todo.noteId);
+    if (note == null) return;
+    await save(
+      note,
+      title: note.title,
+      body: TodoMarkdown.updateGlobalTextAt(note.body, todo.taskIndex, text),
+    );
+  }
+
+  /// Schedules an existing global task and creates its destination daily note
+  /// before the source task is saved. This keeps the source/destination link
+  /// usable even while offline.
+  Future<void> scheduleGlobalTask({
+    required String noteId,
+    required int taskIndex,
+    required DateTime date,
+  }) async {
+    final note = await get(noteId);
+    if (note == null) return;
+    await getOrCreateDaily(date);
+    await save(
+      note,
+      title: note.title,
+      body: TodoMarkdown.scheduleGlobalAt(
+        note.body,
+        taskIndex,
+        _dailyDate(date),
+      ),
+    );
+  }
+
   /// Rebuilds the legacy task index once so existing local `- [ ]` checkboxes
   /// disappear from the global task list. Subsequent writes index only `+`.
   Future<void> migrateGlobalTaskIndex() async {
@@ -839,6 +965,69 @@ class NoteRepository {
             ),
           );
     });
+  }
+
+  /// Rebuilds the durable link index from canonical Markdown. It is safe to
+  /// call after upgrades and imports; all ordinary writes also refresh it.
+  Future<void> rebuildLinkIndex() async {
+    await _db.transaction(() async {
+      await _db.delete(_db.linkEntries).go();
+      final notes =
+          (await (_db.select(
+                _db.noteRows,
+              )..where((row) => row.isPendingDeletion.equals(false))).get())
+              .map(_toNote)
+              .toList();
+      final byPath = {for (final note in notes) note.path: note};
+      for (final source in notes) {
+        var linkIndex = 0;
+        for (final link in MarkdownContract.extractNoteLinks(
+          source.path,
+          source.body,
+        )) {
+          final target = link.kind == 'wiki'
+              ? _resolveWikiTarget(notes, link.target)
+              : byPath[link.target];
+          if (target != null) {
+            await _db
+                .into(_db.linkEntries)
+                .insert(
+                  LinkEntriesCompanion.insert(
+                    sourceNoteId: source.id,
+                    linkIndex: linkIndex,
+                    targetNoteId: target.id,
+                    kind: link.kind,
+                    label: link.label,
+                  ),
+                );
+          }
+          linkIndex++;
+        }
+      }
+    });
+  }
+
+  Note? _resolveWikiTarget(List<Note> notes, String title) {
+    final target = title.trim();
+    if (target.isEmpty) return null;
+    final normalized = target.toLowerCase();
+    for (final note in notes) {
+      if (note.title.trim() == target) return note;
+    }
+    for (final note in notes) {
+      if (note.title.trim().toLowerCase() == normalized) return note;
+    }
+    for (final note in notes) {
+      if (note.aliases.any((alias) => alias.trim() == target)) return note;
+    }
+    for (final note in notes) {
+      if (note.aliases.any(
+        (alias) => alias.trim().toLowerCase() == normalized,
+      )) {
+        return note;
+      }
+    }
+    return null;
   }
 
   Future<Note> importImage(Note note, File source) async {
@@ -1106,6 +1295,7 @@ class NoteRepository {
             );
       }
     });
+    await rebuildLinkIndex();
     return (await get(note.id.value))!;
   }
 
@@ -1169,6 +1359,9 @@ class NoteRepository {
         ? filename
         : '${folder.trim().replaceAll(RegExp(r'/+$'), '')}/$filename';
   }
+
+  String _dailyDate(DateTime date) =>
+      '${date.year.toString().padLeft(4, '0')}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
 
   String _normalizeMarkdownPath(String input) {
     final normalized = p.normalize(input.trim()).replaceAll('\\', '/');

@@ -53,3 +53,36 @@ class TodoItem {
   final bool isCompleted;
   final String noteTitle;
 }
+
+/// A global task in another note that points at a daily note through a
+/// `[[YYYY-MM-DD]]` wikilink.
+class ScheduledTaskBacklink {
+  const ScheduledTaskBacklink({
+    required this.sourceNoteId,
+    required this.sourceNoteTitle,
+    required this.taskIndex,
+    required this.text,
+    required this.isCompleted,
+  });
+
+  final String sourceNoteId;
+  final String sourceNoteTitle;
+  final int taskIndex;
+  final String text;
+  final bool isCompleted;
+}
+
+/// An incoming wiki or relative Markdown link resolved by the local index.
+class NoteBacklink {
+  const NoteBacklink({
+    required this.sourceNoteId,
+    required this.sourceNoteTitle,
+    required this.kind,
+    required this.label,
+  });
+
+  final String sourceNoteId;
+  final String sourceNoteTitle;
+  final String kind;
+  final String label;
+}

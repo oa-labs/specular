@@ -1522,6 +1522,380 @@ class TodoIndexStatesCompanion extends UpdateCompanion<TodoIndexState> {
   }
 }
 
+class $LinkEntriesTable extends LinkEntries
+    with TableInfo<$LinkEntriesTable, LinkEntry> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $LinkEntriesTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _sourceNoteIdMeta = const VerificationMeta(
+    'sourceNoteId',
+  );
+  @override
+  late final GeneratedColumn<String> sourceNoteId = GeneratedColumn<String>(
+    'sourceNoteId',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _linkIndexMeta = const VerificationMeta(
+    'linkIndex',
+  );
+  @override
+  late final GeneratedColumn<int> linkIndex = GeneratedColumn<int>(
+    'linkIndex',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _targetNoteIdMeta = const VerificationMeta(
+    'targetNoteId',
+  );
+  @override
+  late final GeneratedColumn<String> targetNoteId = GeneratedColumn<String>(
+    'targetNoteId',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _kindMeta = const VerificationMeta('kind');
+  @override
+  late final GeneratedColumn<String> kind = GeneratedColumn<String>(
+    'kind',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _labelMeta = const VerificationMeta('label');
+  @override
+  late final GeneratedColumn<String> label = GeneratedColumn<String>(
+    'label',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  @override
+  List<GeneratedColumn> get $columns => [
+    sourceNoteId,
+    linkIndex,
+    targetNoteId,
+    kind,
+    label,
+  ];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'link_index';
+  @override
+  VerificationContext validateIntegrity(
+    Insertable<LinkEntry> instance, {
+    bool isInserting = false,
+  }) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('sourceNoteId')) {
+      context.handle(
+        _sourceNoteIdMeta,
+        sourceNoteId.isAcceptableOrUnknown(
+          data['sourceNoteId']!,
+          _sourceNoteIdMeta,
+        ),
+      );
+    } else if (isInserting) {
+      context.missing(_sourceNoteIdMeta);
+    }
+    if (data.containsKey('linkIndex')) {
+      context.handle(
+        _linkIndexMeta,
+        linkIndex.isAcceptableOrUnknown(data['linkIndex']!, _linkIndexMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_linkIndexMeta);
+    }
+    if (data.containsKey('targetNoteId')) {
+      context.handle(
+        _targetNoteIdMeta,
+        targetNoteId.isAcceptableOrUnknown(
+          data['targetNoteId']!,
+          _targetNoteIdMeta,
+        ),
+      );
+    } else if (isInserting) {
+      context.missing(_targetNoteIdMeta);
+    }
+    if (data.containsKey('kind')) {
+      context.handle(
+        _kindMeta,
+        kind.isAcceptableOrUnknown(data['kind']!, _kindMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_kindMeta);
+    }
+    if (data.containsKey('label')) {
+      context.handle(
+        _labelMeta,
+        label.isAcceptableOrUnknown(data['label']!, _labelMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_labelMeta);
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {sourceNoteId, linkIndex};
+  @override
+  LinkEntry map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return LinkEntry(
+      sourceNoteId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}sourceNoteId'],
+      )!,
+      linkIndex: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}linkIndex'],
+      )!,
+      targetNoteId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}targetNoteId'],
+      )!,
+      kind: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}kind'],
+      )!,
+      label: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}label'],
+      )!,
+    );
+  }
+
+  @override
+  $LinkEntriesTable createAlias(String alias) {
+    return $LinkEntriesTable(attachedDatabase, alias);
+  }
+}
+
+class LinkEntry extends DataClass implements Insertable<LinkEntry> {
+  final String sourceNoteId;
+  final int linkIndex;
+  final String targetNoteId;
+  final String kind;
+  final String label;
+  const LinkEntry({
+    required this.sourceNoteId,
+    required this.linkIndex,
+    required this.targetNoteId,
+    required this.kind,
+    required this.label,
+  });
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['sourceNoteId'] = Variable<String>(sourceNoteId);
+    map['linkIndex'] = Variable<int>(linkIndex);
+    map['targetNoteId'] = Variable<String>(targetNoteId);
+    map['kind'] = Variable<String>(kind);
+    map['label'] = Variable<String>(label);
+    return map;
+  }
+
+  LinkEntriesCompanion toCompanion(bool nullToAbsent) {
+    return LinkEntriesCompanion(
+      sourceNoteId: Value(sourceNoteId),
+      linkIndex: Value(linkIndex),
+      targetNoteId: Value(targetNoteId),
+      kind: Value(kind),
+      label: Value(label),
+    );
+  }
+
+  factory LinkEntry.fromJson(
+    Map<String, dynamic> json, {
+    ValueSerializer? serializer,
+  }) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return LinkEntry(
+      sourceNoteId: serializer.fromJson<String>(json['sourceNoteId']),
+      linkIndex: serializer.fromJson<int>(json['linkIndex']),
+      targetNoteId: serializer.fromJson<String>(json['targetNoteId']),
+      kind: serializer.fromJson<String>(json['kind']),
+      label: serializer.fromJson<String>(json['label']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'sourceNoteId': serializer.toJson<String>(sourceNoteId),
+      'linkIndex': serializer.toJson<int>(linkIndex),
+      'targetNoteId': serializer.toJson<String>(targetNoteId),
+      'kind': serializer.toJson<String>(kind),
+      'label': serializer.toJson<String>(label),
+    };
+  }
+
+  LinkEntry copyWith({
+    String? sourceNoteId,
+    int? linkIndex,
+    String? targetNoteId,
+    String? kind,
+    String? label,
+  }) => LinkEntry(
+    sourceNoteId: sourceNoteId ?? this.sourceNoteId,
+    linkIndex: linkIndex ?? this.linkIndex,
+    targetNoteId: targetNoteId ?? this.targetNoteId,
+    kind: kind ?? this.kind,
+    label: label ?? this.label,
+  );
+  LinkEntry copyWithCompanion(LinkEntriesCompanion data) {
+    return LinkEntry(
+      sourceNoteId: data.sourceNoteId.present
+          ? data.sourceNoteId.value
+          : this.sourceNoteId,
+      linkIndex: data.linkIndex.present ? data.linkIndex.value : this.linkIndex,
+      targetNoteId: data.targetNoteId.present
+          ? data.targetNoteId.value
+          : this.targetNoteId,
+      kind: data.kind.present ? data.kind.value : this.kind,
+      label: data.label.present ? data.label.value : this.label,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('LinkEntry(')
+          ..write('sourceNoteId: $sourceNoteId, ')
+          ..write('linkIndex: $linkIndex, ')
+          ..write('targetNoteId: $targetNoteId, ')
+          ..write('kind: $kind, ')
+          ..write('label: $label')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode =>
+      Object.hash(sourceNoteId, linkIndex, targetNoteId, kind, label);
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is LinkEntry &&
+          other.sourceNoteId == this.sourceNoteId &&
+          other.linkIndex == this.linkIndex &&
+          other.targetNoteId == this.targetNoteId &&
+          other.kind == this.kind &&
+          other.label == this.label);
+}
+
+class LinkEntriesCompanion extends UpdateCompanion<LinkEntry> {
+  final Value<String> sourceNoteId;
+  final Value<int> linkIndex;
+  final Value<String> targetNoteId;
+  final Value<String> kind;
+  final Value<String> label;
+  final Value<int> rowid;
+  const LinkEntriesCompanion({
+    this.sourceNoteId = const Value.absent(),
+    this.linkIndex = const Value.absent(),
+    this.targetNoteId = const Value.absent(),
+    this.kind = const Value.absent(),
+    this.label = const Value.absent(),
+    this.rowid = const Value.absent(),
+  });
+  LinkEntriesCompanion.insert({
+    required String sourceNoteId,
+    required int linkIndex,
+    required String targetNoteId,
+    required String kind,
+    required String label,
+    this.rowid = const Value.absent(),
+  }) : sourceNoteId = Value(sourceNoteId),
+       linkIndex = Value(linkIndex),
+       targetNoteId = Value(targetNoteId),
+       kind = Value(kind),
+       label = Value(label);
+  static Insertable<LinkEntry> custom({
+    Expression<String>? sourceNoteId,
+    Expression<int>? linkIndex,
+    Expression<String>? targetNoteId,
+    Expression<String>? kind,
+    Expression<String>? label,
+    Expression<int>? rowid,
+  }) {
+    return RawValuesInsertable({
+      if (sourceNoteId != null) 'sourceNoteId': sourceNoteId,
+      if (linkIndex != null) 'linkIndex': linkIndex,
+      if (targetNoteId != null) 'targetNoteId': targetNoteId,
+      if (kind != null) 'kind': kind,
+      if (label != null) 'label': label,
+      if (rowid != null) 'rowid': rowid,
+    });
+  }
+
+  LinkEntriesCompanion copyWith({
+    Value<String>? sourceNoteId,
+    Value<int>? linkIndex,
+    Value<String>? targetNoteId,
+    Value<String>? kind,
+    Value<String>? label,
+    Value<int>? rowid,
+  }) {
+    return LinkEntriesCompanion(
+      sourceNoteId: sourceNoteId ?? this.sourceNoteId,
+      linkIndex: linkIndex ?? this.linkIndex,
+      targetNoteId: targetNoteId ?? this.targetNoteId,
+      kind: kind ?? this.kind,
+      label: label ?? this.label,
+      rowid: rowid ?? this.rowid,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (sourceNoteId.present) {
+      map['sourceNoteId'] = Variable<String>(sourceNoteId.value);
+    }
+    if (linkIndex.present) {
+      map['linkIndex'] = Variable<int>(linkIndex.value);
+    }
+    if (targetNoteId.present) {
+      map['targetNoteId'] = Variable<String>(targetNoteId.value);
+    }
+    if (kind.present) {
+      map['kind'] = Variable<String>(kind.value);
+    }
+    if (label.present) {
+      map['label'] = Variable<String>(label.value);
+    }
+    if (rowid.present) {
+      map['rowid'] = Variable<int>(rowid.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('LinkEntriesCompanion(')
+          ..write('sourceNoteId: $sourceNoteId, ')
+          ..write('linkIndex: $linkIndex, ')
+          ..write('targetNoteId: $targetNoteId, ')
+          ..write('kind: $kind, ')
+          ..write('label: $label, ')
+          ..write('rowid: $rowid')
+          ..write(')'))
+        .toString();
+  }
+}
+
 class $AttachmentsTable extends Attachments
     with TableInfo<$AttachmentsTable, Attachment> {
   @override
@@ -2618,6 +2992,7 @@ abstract class _$AppDatabase extends GeneratedDatabase {
   late final $TodoIndexStatesTable todoIndexStates = $TodoIndexStatesTable(
     this,
   );
+  late final $LinkEntriesTable linkEntries = $LinkEntriesTable(this);
   late final $AttachmentsTable attachments = $AttachmentsTable(this);
   late final $SyncOperationsTable syncOperations = $SyncOperationsTable(this);
   late final $SyncLeasesTable syncLeases = $SyncLeasesTable(this);
@@ -2629,6 +3004,7 @@ abstract class _$AppDatabase extends GeneratedDatabase {
     noteRows,
     todoEntries,
     todoIndexStates,
+    linkEntries,
     attachments,
     syncOperations,
     syncLeases,
@@ -3382,6 +3758,207 @@ typedef $$TodoIndexStatesTableProcessedTableManager =
       TodoIndexState,
       PrefetchHooks Function()
     >;
+typedef $$LinkEntriesTableCreateCompanionBuilder =
+    LinkEntriesCompanion Function({
+      required String sourceNoteId,
+      required int linkIndex,
+      required String targetNoteId,
+      required String kind,
+      required String label,
+      Value<int> rowid,
+    });
+typedef $$LinkEntriesTableUpdateCompanionBuilder =
+    LinkEntriesCompanion Function({
+      Value<String> sourceNoteId,
+      Value<int> linkIndex,
+      Value<String> targetNoteId,
+      Value<String> kind,
+      Value<String> label,
+      Value<int> rowid,
+    });
+
+class $$LinkEntriesTableFilterComposer
+    extends Composer<_$AppDatabase, $LinkEntriesTable> {
+  $$LinkEntriesTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<String> get sourceNoteId => $composableBuilder(
+    column: $table.sourceNoteId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get linkIndex => $composableBuilder(
+    column: $table.linkIndex,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get targetNoteId => $composableBuilder(
+    column: $table.targetNoteId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get kind => $composableBuilder(
+    column: $table.kind,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get label => $composableBuilder(
+    column: $table.label,
+    builder: (column) => ColumnFilters(column),
+  );
+}
+
+class $$LinkEntriesTableOrderingComposer
+    extends Composer<_$AppDatabase, $LinkEntriesTable> {
+  $$LinkEntriesTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<String> get sourceNoteId => $composableBuilder(
+    column: $table.sourceNoteId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get linkIndex => $composableBuilder(
+    column: $table.linkIndex,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get targetNoteId => $composableBuilder(
+    column: $table.targetNoteId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get kind => $composableBuilder(
+    column: $table.kind,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get label => $composableBuilder(
+    column: $table.label,
+    builder: (column) => ColumnOrderings(column),
+  );
+}
+
+class $$LinkEntriesTableAnnotationComposer
+    extends Composer<_$AppDatabase, $LinkEntriesTable> {
+  $$LinkEntriesTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<String> get sourceNoteId => $composableBuilder(
+    column: $table.sourceNoteId,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<int> get linkIndex =>
+      $composableBuilder(column: $table.linkIndex, builder: (column) => column);
+
+  GeneratedColumn<String> get targetNoteId => $composableBuilder(
+    column: $table.targetNoteId,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get kind =>
+      $composableBuilder(column: $table.kind, builder: (column) => column);
+
+  GeneratedColumn<String> get label =>
+      $composableBuilder(column: $table.label, builder: (column) => column);
+}
+
+class $$LinkEntriesTableTableManager
+    extends
+        RootTableManager<
+          _$AppDatabase,
+          $LinkEntriesTable,
+          LinkEntry,
+          $$LinkEntriesTableFilterComposer,
+          $$LinkEntriesTableOrderingComposer,
+          $$LinkEntriesTableAnnotationComposer,
+          $$LinkEntriesTableCreateCompanionBuilder,
+          $$LinkEntriesTableUpdateCompanionBuilder,
+          (
+            LinkEntry,
+            BaseReferences<_$AppDatabase, $LinkEntriesTable, LinkEntry>,
+          ),
+          LinkEntry,
+          PrefetchHooks Function()
+        > {
+  $$LinkEntriesTableTableManager(_$AppDatabase db, $LinkEntriesTable table)
+    : super(
+        TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$LinkEntriesTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$LinkEntriesTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$LinkEntriesTableAnnotationComposer($db: db, $table: table),
+          updateCompanionCallback:
+              ({
+                Value<String> sourceNoteId = const Value.absent(),
+                Value<int> linkIndex = const Value.absent(),
+                Value<String> targetNoteId = const Value.absent(),
+                Value<String> kind = const Value.absent(),
+                Value<String> label = const Value.absent(),
+                Value<int> rowid = const Value.absent(),
+              }) => LinkEntriesCompanion(
+                sourceNoteId: sourceNoteId,
+                linkIndex: linkIndex,
+                targetNoteId: targetNoteId,
+                kind: kind,
+                label: label,
+                rowid: rowid,
+              ),
+          createCompanionCallback:
+              ({
+                required String sourceNoteId,
+                required int linkIndex,
+                required String targetNoteId,
+                required String kind,
+                required String label,
+                Value<int> rowid = const Value.absent(),
+              }) => LinkEntriesCompanion.insert(
+                sourceNoteId: sourceNoteId,
+                linkIndex: linkIndex,
+                targetNoteId: targetNoteId,
+                kind: kind,
+                label: label,
+                rowid: rowid,
+              ),
+          withReferenceMapper: (p0) => p0
+              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .toList(),
+          prefetchHooksCallback: null,
+        ),
+      );
+}
+
+typedef $$LinkEntriesTableProcessedTableManager =
+    ProcessedTableManager<
+      _$AppDatabase,
+      $LinkEntriesTable,
+      LinkEntry,
+      $$LinkEntriesTableFilterComposer,
+      $$LinkEntriesTableOrderingComposer,
+      $$LinkEntriesTableAnnotationComposer,
+      $$LinkEntriesTableCreateCompanionBuilder,
+      $$LinkEntriesTableUpdateCompanionBuilder,
+      (LinkEntry, BaseReferences<_$AppDatabase, $LinkEntriesTable, LinkEntry>),
+      LinkEntry,
+      PrefetchHooks Function()
+    >;
 typedef $$AttachmentsTableCreateCompanionBuilder =
     AttachmentsCompanion Function({
       required String path,
@@ -3989,6 +4566,8 @@ class $AppDatabaseManager {
       $$TodoEntriesTableTableManager(_db, _db.todoEntries);
   $$TodoIndexStatesTableTableManager get todoIndexStates =>
       $$TodoIndexStatesTableTableManager(_db, _db.todoIndexStates);
+  $$LinkEntriesTableTableManager get linkEntries =>
+      $$LinkEntriesTableTableManager(_db, _db.linkEntries);
   $$AttachmentsTableTableManager get attachments =>
       $$AttachmentsTableTableManager(_db, _db.attachments);
   $$SyncOperationsTableTableManager get syncOperations =>

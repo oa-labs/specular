@@ -18,6 +18,21 @@ class ParsedMarkdown {
   final String? frontmatter;
 }
 
+/// A resolved-on-index link reference from canonical note Markdown.
+class NoteLinkReference {
+  const NoteLinkReference({
+    required this.kind,
+    required this.target,
+    required this.label,
+  });
+
+  /// `wiki` targets are titles/aliases; `markdown` targets are repository
+  /// paths resolved relative to the source note.
+  final String kind;
+  final String target;
+  final String label;
+}
+
 /// Small, deliberately conservative parser matching the established Reflect
 /// contract. Unknown frontmatter is preserved verbatim on note updates.
 class MarkdownContract {
@@ -88,6 +103,41 @@ class MarkdownContract {
       return null;
     }
     return resolved;
+  }
+
+  /// Extracts the portable note-to-note links that participate in backlinks.
+  /// Attachment and external Markdown links are ignored by [resolveNoteLink].
+  static List<NoteLinkReference> extractNoteLinks(
+    String sourceNotePath,
+    String markdown,
+  ) {
+    final links = <NoteLinkReference>[];
+    for (final match in _wikiLink.allMatches(markdown)) {
+      final title = match.group(1)!.trim();
+      if (title.isEmpty) continue;
+      links.add(NoteLinkReference(kind: 'wiki', target: title, label: title));
+    }
+    for (final match in _inlineLinkDestination.allMatches(markdown)) {
+      final destination = match.group(2)!;
+      final href = destination.startsWith('<') && destination.endsWith('>')
+          ? destination.substring(1, destination.length - 1)
+          : destination;
+      final target = resolveNoteLink(sourceNotePath, href);
+      if (target == null) continue;
+      final label =
+          RegExp(
+            r'!?\[([^\]\r\n]*)\]\(',
+          ).firstMatch(match.group(1)!)?.group(1)?.trim() ??
+          '';
+      links.add(
+        NoteLinkReference(
+          kind: 'markdown',
+          target: target,
+          label: label.isEmpty ? target : label,
+        ),
+      );
+    }
+    return links;
   }
 
   /// Rewrites relative Markdown links after a note has moved.
@@ -303,6 +353,7 @@ class TodoMarkdown {
     r'^[ \t]*\+[ \t]+\[([ xX])\][ \t]*(.*)$',
     multiLine: true,
   );
+  static final _dailyWikiLink = RegExp(r'\[\[(\d{4}-\d{2}-\d{2})\]\]');
 
   /// Reflect global tasks use a `+` marker. `-` and `*` checkbox rows remain
   /// local to their note and deliberately do not enter the task index.
@@ -317,6 +368,100 @@ class TodoMarkdown {
           completed: match.group(1)?.toLowerCase() == 'x',
         ),
   ];
+
+  /// Global tasks that carry Reflect's portable daily-note schedule link.
+  /// Only valid calendar dates participate; ordinary date-shaped wikilinks do
+  /// not accidentally create a relationship with a daily note.
+  static List<({int index, String text, bool completed, String date})>
+  extractScheduled(String markdown) => [
+    for (final task in extract(markdown))
+      if (scheduledDate(task.text) case final date?)
+        (
+          index: task.index,
+          text: task.text,
+          completed: task.completed,
+          date: date,
+        ),
+  ];
+
+  /// Returns the last valid daily-date wikilink in task text. Scheduling
+  /// normalizes tasks to one link, but accepting the last link makes imported
+  /// Reflect content deterministic until it is next edited.
+  static String? scheduledDate(String text) {
+    String? result;
+    for (final match in _dailyWikiLink.allMatches(text)) {
+      final date = match.group(1)!;
+      if (isDailyDate(date)) result = date;
+    }
+    return result;
+  }
+
+  static bool isDailyDate(String value) {
+    final match = RegExp(r'^(\d{4})-(\d{2})-(\d{2})$').firstMatch(value);
+    if (match == null) return false;
+    final year = int.parse(match.group(1)!);
+    final month = int.parse(match.group(2)!);
+    final day = int.parse(match.group(3)!);
+    final date = DateTime(year, month, day);
+    return date.year == year && date.month == month && date.day == day;
+  }
+
+  /// Adds or replaces a global task's daily schedule. Every existing valid
+  /// daily-date wikilink on that row is removed so the persisted task has one
+  /// unambiguous destination, appended in Reflect's familiar trailing form.
+  static String scheduleGlobalAt(String markdown, int taskIndex, String date) {
+    if (!isDailyDate(date)) {
+      throw ArgumentError.value(date, 'date', 'Use YYYY-MM-DD.');
+    }
+    var current = 0;
+    return markdown.replaceAllMapped(_globalTask, (match) {
+      if (current++ != taskIndex) return match.group(0)!;
+      final taskText = match
+          .group(2)!
+          .replaceAllMapped(
+            _dailyWikiLink,
+            (link) => isDailyDate(link.group(1)!) ? '' : link.group(0)!,
+          );
+      final normalized = taskText.replaceAll(RegExp(r'\s+'), ' ').trim();
+      final prefix = RegExp(
+        r'^[ \t]*\+[ \t]+\[[ xX]\][ \t]*',
+      ).firstMatch(match.group(0)!)!.group(0)!;
+      return '$prefix$normalized [[$date]]';
+    });
+  }
+
+  /// Removes the task's schedule marker for inline editing. Scheduling has a
+  /// dedicated control, so editing task wording cannot accidentally create or
+  /// remove a daily-note relationship.
+  static String editableText(String text) => text
+      .replaceAllMapped(
+        _dailyWikiLink,
+        (link) => isDailyDate(link.group(1)!) ? '' : link.group(0)!,
+      )
+      .replaceAll(RegExp(r'\s+'), ' ')
+      .trim();
+
+  /// Replaces a global task's user-facing text while retaining its current
+  /// completion state, list indentation, and scheduled daily-note wikilink.
+  static String updateGlobalTextAt(
+    String markdown,
+    int taskIndex,
+    String text,
+  ) {
+    final updatedText = editableText(text);
+    if (updatedText.isEmpty) {
+      throw ArgumentError.value(text, 'text', 'A task cannot be blank.');
+    }
+    var current = 0;
+    return markdown.replaceAllMapped(_globalTask, (match) {
+      if (current++ != taskIndex) return match.group(0)!;
+      final prefix = RegExp(
+        r'^[ \t]*\+[ \t]+\[[ xX]\][ \t]*',
+      ).firstMatch(match.group(0)!)!.group(0)!;
+      final date = scheduledDate(match.group(2)!);
+      return '$prefix$updatedText${date == null ? '' : ' [[$date]]'}';
+    });
+  }
 
   /// Toggles a task by its index within the global `+` task list.
   static String toggleGlobalAt(String markdown, int taskIndex) =>
