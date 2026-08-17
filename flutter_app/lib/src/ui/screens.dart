@@ -457,17 +457,26 @@ class _DailyNotesScreenState extends ConsumerState<DailyNotesScreen> {
         ),
         const Divider(height: 1),
         Expanded(
-          child: SingleChildScrollView(
-            keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
-            padding: const EdgeInsets.fromLTRB(16, 20, 16, 40),
-            child: _DailyDayPanel(
-              key: ValueKey('mobile-$key'),
-              date: _selectedDate,
-              note: dailyByDate[key],
-              scheduledTasks: scheduledByDate[key] ?? const [],
-              active: _activeDate == key,
-              onActivate: _activate,
-              mobile: true,
+          child: LayoutBuilder(
+            builder: (context, constraints) => SingleChildScrollView(
+              keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+              padding: const EdgeInsets.fromLTRB(16, 20, 16, 24),
+              child: ConstrainedBox(
+                constraints: BoxConstraints(
+                  minWidth: constraints.maxWidth - 32,
+                  minHeight: constraints.maxHeight - 44,
+                ),
+                child: _DailyDayPanel(
+                  key: ValueKey('mobile-$key'),
+                  date: _selectedDate,
+                  note: dailyByDate[key],
+                  scheduledTasks: scheduledByDate[key] ?? const [],
+                  active: _activeDate == key,
+                  onActivate: _activate,
+                  mobile: true,
+                  minHeight: constraints.maxHeight - 44,
+                ),
+              ),
             ),
           ),
         ),
@@ -665,6 +674,7 @@ class _DailyDayPanel extends ConsumerStatefulWidget {
     required this.active,
     required this.onActivate,
     this.mobile = false,
+    this.minHeight,
   });
 
   final DateTime date;
@@ -673,6 +683,7 @@ class _DailyDayPanel extends ConsumerStatefulWidget {
   final bool active;
   final ValueChanged<DateTime> onActivate;
   final bool mobile;
+  final double? minHeight;
 
   @override
   ConsumerState<_DailyDayPanel> createState() => _DailyDayPanelState();
@@ -696,9 +707,15 @@ class _DailyDayPanelState extends ConsumerState<_DailyDayPanel> {
   void didUpdateWidget(covariant _DailyDayPanel oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (!widget.active && oldWidget.active) unawaited(_saveNow());
+    final persistedBody = _editableBody(widget.note);
+    // A completed autosave updates notesProvider. Do not write that same value
+    // back into a focused TextField: Android treats the controller mutation as
+    // a new text-input connection and briefly closes/reopens the keyboard.
     if (!_hasLocalChanges &&
-        widget.note?.rawMarkdown != oldWidget.note?.rawMarkdown) {
-      _controller.text = _editableBody(widget.note);
+        !_focusNode.hasFocus &&
+        widget.note?.rawMarkdown != oldWidget.note?.rawMarkdown &&
+        _controller.text != persistedBody) {
+      _controller.text = persistedBody;
     }
   }
 
@@ -735,7 +752,6 @@ class _DailyDayPanelState extends ConsumerState<_DailyDayPanel> {
           .read(noteRepositoryProvider)
           .saveDailyContent(widget.date, _controller.text);
       _hasLocalChanges = false;
-      ref.invalidate(notesProvider);
     } catch (error) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -752,78 +768,89 @@ class _DailyDayPanelState extends ConsumerState<_DailyDayPanel> {
     final theme = Theme.of(context);
     final isToday = DateUtils.isSameDay(widget.date, DateTime.now());
     final content = _controller.text;
-    return Card(
-      margin: widget.mobile
-          ? EdgeInsets.zero
-          : const EdgeInsets.only(bottom: 12),
-      color: isToday
-          ? theme.colorScheme.primaryContainer.withValues(alpha: .28)
-          : null,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              displayDailyDate(widget.date),
-              style: theme.textTheme.titleMedium?.copyWith(
-                color: isToday ? theme.colorScheme.primary : null,
-              ),
-            ),
-            const SizedBox(height: 10),
-            if (widget.active)
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  TextField(
-                    controller: _controller,
-                    focusNode: _focusNode,
-                    autofocus: true,
-                    minLines: 4,
-                    maxLines: null,
-                    keyboardType: TextInputType.multiline,
-                    textCapitalization: TextCapitalization.sentences,
-                    style: theme.textTheme.bodyLarge,
-                    decoration: const InputDecoration(
-                      hintText: 'Write a note…',
-                      border: InputBorder.none,
-                      isDense: true,
-                    ),
-                    onChanged: _onChanged,
-                  ),
-                  if (widget.mobile) ...[
-                    const SizedBox(height: 10),
-                    _DailyMarkdownToolbar(onInsert: _insertMarkdown),
-                  ],
-                ],
-              )
-            else
-              InkWell(
-                onTap: () => widget.onActivate(widget.date),
-                borderRadius: BorderRadius.circular(8),
-                child: ConstrainedBox(
-                  constraints: const BoxConstraints(minHeight: 82),
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 4),
-                    child: content.trim().isEmpty
-                        ? Text(
-                            'Tap to write…',
-                            style: theme.textTheme.bodyMedium?.copyWith(
-                              color: theme.colorScheme.onSurfaceVariant,
-                            ),
-                          )
-                        : MarkdownBody(data: content),
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: widget.active ? null : () => widget.onActivate(widget.date),
+      child: Card(
+        margin: widget.mobile
+            ? EdgeInsets.zero
+            : const EdgeInsets.only(bottom: 12),
+        color: isToday
+            ? theme.colorScheme.primaryContainer.withValues(alpha: .28)
+            : null,
+        child: ConstrainedBox(
+          constraints: BoxConstraints(minHeight: widget.minHeight ?? 0),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  displayDailyDate(widget.date),
+                  style: theme.textTheme.titleMedium?.copyWith(
+                    color: isToday ? theme.colorScheme.primary : null,
                   ),
                 ),
-              ),
-            if (widget.scheduledTasks.isNotEmpty) ...[
-              const SizedBox(height: 12),
-              Text('Scheduled tasks', style: theme.textTheme.labelLarge),
-              const SizedBox(height: 4),
-              for (final task in widget.scheduledTasks)
-                Text('• ${task.text}', style: theme.textTheme.bodyMedium),
-            ],
-          ],
+                const SizedBox(height: 10),
+                if (widget.active)
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      TextField(
+                        controller: _controller,
+                        focusNode: _focusNode,
+                        autofocus: true,
+                        minLines: 4,
+                        maxLines: null,
+                        keyboardType: TextInputType.multiline,
+                        textCapitalization: TextCapitalization.sentences,
+                        style: theme.textTheme.bodyLarge,
+                        decoration: const InputDecoration(
+                          hintText: 'Write a note…',
+                          border: InputBorder.none,
+                          isDense: true,
+                        ),
+                        onChanged: _onChanged,
+                      ),
+                      if (widget.mobile) ...[
+                        const SizedBox(height: 10),
+                        _DailyMarkdownToolbar(onInsert: _insertMarkdown),
+                      ],
+                    ],
+                  )
+                else
+                  GestureDetector(
+                    onTap: () => widget.onActivate(widget.date),
+                    behavior: HitTestBehavior.opaque,
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(minHeight: 82),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 4),
+                        child: content.trim().isEmpty
+                            ? Text(
+                                'Tap to write…',
+                                style: theme.textTheme.bodyMedium?.copyWith(
+                                  color: theme.colorScheme.onSurfaceVariant,
+                                ),
+                              )
+                            // The Daily preview is an edit affordance, not a
+                            // read-only note detail. Prevent Markdown's internal
+                            // link/selection recognizers from winning the tap
+                            // arena over the enclosing edit gesture.
+                            : IgnorePointer(child: MarkdownBody(data: content)),
+                      ),
+                    ),
+                  ),
+                if (widget.scheduledTasks.isNotEmpty) ...[
+                  const SizedBox(height: 12),
+                  Text('Scheduled tasks', style: theme.textTheme.labelLarge),
+                  const SizedBox(height: 4),
+                  for (final task in widget.scheduledTasks)
+                    Text('• ${task.text}', style: theme.textTheme.bodyMedium),
+                ],
+              ],
+            ),
+          ),
         ),
       ),
     );
@@ -2091,38 +2118,92 @@ class _NotePreviewBody extends ConsumerWidget {
               ],
             ),
           ),
-          Padding(
-            padding: const EdgeInsets.all(16),
-            child: MarkdownBody(
-              data: NoteBodyEditorCodec.normalizeTaskListSpacing(
-                MarkdownContract.renderWikiLinks(note.body),
-              ),
-              styleSheet: MarkdownStyleSheet.fromTheme(
-                Theme.of(context),
-              ).copyWith(p: Theme.of(context).textTheme.bodyLarge),
-              // Match AppFlowy's task rows: the 22px checkbox slot starts
-              // with the first text line, leaving its glyph vertically
-              // centered beside that line.
-              listItemCrossAxisAlignment:
-                  MarkdownListItemCrossAxisAlignment.start,
-              onTapLink: (_, href, _) => _openLink(context, ref, href),
-              imageBuilder: (uri, title, alt) =>
-                  _AttachmentImage(notePath: note.path, uri: uri),
-              checkboxBuilder: (checked) {
-                final index = taskIndex++;
-                return SizedBox.square(
-                  dimension: 22,
-                  child: Checkbox(
-                    value: checked,
-                    materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                    visualDensity: VisualDensity.compact,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(4),
+          SizedBox(
+            width: double.infinity,
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  final markdown = MarkdownBody(
+                    data: NoteBodyEditorCodec.normalizeTaskListSpacing(
+                      MarkdownContract.renderWikiLinks(note.body),
                     ),
-                    onChanged: (_) => _toggleTodo(ref, note, index),
-                  ),
-                );
-              },
+                    // On macOS, Markdown's selectable mode provides the native
+                    // text selection and Copy commands without changing
+                    // Android's touch interactions for links and task checkboxes.
+                    selectable: Platform.isMacOS,
+                    styleSheet: MarkdownStyleSheet.fromTheme(
+                      Theme.of(context),
+                    ).copyWith(p: Theme.of(context).textTheme.bodyLarge),
+                    // Match AppFlowy's task rows: the 22px checkbox slot starts
+                    // with the first text line, leaving its glyph vertically
+                    // centered beside that line.
+                    listItemCrossAxisAlignment:
+                        MarkdownListItemCrossAxisAlignment.start,
+                    onTapLink: (_, href, _) => _openLink(context, ref, href),
+                    imageBuilder: (uri, title, alt) =>
+                        _AttachmentImage(notePath: note.path, uri: uri),
+                    checkboxBuilder: (checked) {
+                      final index = taskIndex++;
+                      return SizedBox.square(
+                        dimension: 22,
+                        child: Checkbox(
+                          value: checked,
+                          materialTapTargetSize:
+                              MaterialTapTargetSize.shrinkWrap,
+                          visualDensity: VisualDensity.compact,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                          onChanged: (_) => _toggleTodo(ref, note, index),
+                        ),
+                      );
+                    },
+                  );
+                  if (!PlatformCapabilities.current.isDesktop ||
+                      !usesWideLayout(context)) {
+                    return markdown;
+                  }
+
+                  // Match the macOS editor's readable line width and its
+                  // left-biased desktop position, so switching between edit and
+                  // preview does not make the note jump sideways.
+                  const maxWidth = 760.0;
+                  const editorHorizontalPadding = 32.0;
+                  const contentHorizontalPadding =
+                      editorHorizontalPadding * 0.2;
+                  final contentWidth = math.min(maxWidth, constraints.maxWidth);
+                  final originalLeftInset =
+                      (constraints.maxWidth - contentWidth) / 2 +
+                      editorHorizontalPadding;
+                  final targetLeftInset = originalLeftInset * 0.2;
+                  final availableOffset = constraints.maxWidth - contentWidth;
+                  final contentOffset = math.max(
+                    0,
+                    targetLeftInset - contentHorizontalPadding,
+                  );
+                  final alignmentX = availableOffset == 0
+                      ? -1.0
+                      : (contentOffset / availableOffset * 2 - 1).clamp(
+                          -1.0,
+                          1.0,
+                        );
+
+                  return Align(
+                    alignment: Alignment(alignmentX, -1),
+                    child: SizedBox(
+                      key: const ValueKey('note-preview-markdown'),
+                      width: contentWidth,
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: contentHorizontalPadding,
+                        ),
+                        child: markdown,
+                      ),
+                    ),
+                  );
+                },
+              ),
             ),
           ),
           _NoteBacklinks(note: note),

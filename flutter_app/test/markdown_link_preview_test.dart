@@ -155,4 +155,68 @@ void main() {
     await tester.pumpWidget(const SizedBox.shrink());
     await tester.pump(const Duration(milliseconds: 1));
   });
+
+  testWidgets('makes macOS note-preview text selectable', (tester) async {
+    tester.view.physicalSize = const Size(1440, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    late Directory root;
+    late AppDatabase database;
+    late NoteRepository repository;
+    late String noteId;
+
+    await tester.runAsync(() async {
+      root = await Directory.systemTemp.createTemp('specular-selection-test-');
+      database = AppDatabase.forTesting(NativeDatabase.memory());
+      repository = NoteRepository(database, Directory('${root.path}/notes'));
+      await repository.applyRemote(
+        path: 'notes/selectable.md',
+        sha: 'note-sha',
+        raw: '# Selectable note\n\nCopy this preview text.\n',
+      );
+      noteId = (await repository.findByPath('notes/selectable.md'))!.id;
+    });
+    addTearDown(() async {
+      await database.close();
+      await root.delete(recursive: true);
+    });
+
+    final router = GoRouter(
+      initialLocation: '/note/${Uri.encodeComponent(noteId)}',
+      routes: [
+        GoRoute(
+          path: '/note/:id',
+          builder: (_, state) =>
+              NoteDetailScreen(id: state.pathParameters['id']!),
+        ),
+      ],
+    );
+    addTearDown(router.dispose);
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [noteRepositoryProvider.overrideWithValue(repository)],
+        child: MaterialApp.router(routerConfig: router),
+      ),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+
+    if (Platform.isMacOS) {
+      expect(find.byType(SelectableText), findsWidgets);
+      expect(
+        tester
+            .getTopLeft(find.byKey(const ValueKey('note-preview-markdown')))
+            .dx,
+        closeTo(80.8, 0.01),
+      );
+    } else {
+      expect(find.byType(SelectableText), findsNothing);
+    }
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump(const Duration(milliseconds: 1));
+  });
 }
