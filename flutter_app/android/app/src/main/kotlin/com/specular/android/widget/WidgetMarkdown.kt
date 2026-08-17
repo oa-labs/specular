@@ -9,6 +9,13 @@ import android.text.Spanned
  */
 internal fun renderWidgetMarkdown(markdown: String): Spanned {
     val escaped = Html.escapeHtml(markdown)
+        // Reflect's [[wikilinks]] are rendered as a link span, matching the
+        // Flutter to-do list. The row itself remains the click target because
+        // RemoteViews cannot attach a PendingIntent to an individual span.
+        .replace(Regex("\\[\\[([^]\\r\\n]+)]]")) { match ->
+            val title = match.groupValues[1].trim()
+            if (title.isEmpty()) match.value else "<a href=\"specular-wiki\">$title</a>"
+        }
         .replace(Regex("!\\[([^]]*)]\\([^)]*\\)"), "$1")
         .replace(Regex("\\[([^]]+)]\\([^)]*\\)"), "$1")
         .replace(Regex("`([^`]+)`"), "<tt>$1</tt>")

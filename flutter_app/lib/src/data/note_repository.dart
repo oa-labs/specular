@@ -676,7 +676,7 @@ class NoteRepository {
   ///
   /// Whitespace-only content never creates a document. Clearing a persisted
   /// daily document removes it through the usual sync-aware deletion path.
-  /// The date heading remains generated structure rather than user content.
+  /// Daily Markdown is user content only; its date comes from the filename.
   Future<Note?> saveDailyContent(DateTime date, String markdown) async {
     final normalized = markdown.trim();
     // Include a pending-deletion row so quickly typing into a just-cleared
@@ -715,9 +715,9 @@ class NoteRepository {
   }) async {
     final id = '01${_uuid.v4().replaceAll('-', '').substring(0, 24)}';
     final normalizedTitle = title.trim().isEmpty ? 'Untitled' : title.trim();
-    final normalizedBody = body.trim().isEmpty
-        ? '# $normalizedTitle\n\n'
-        : '# $normalizedTitle\n\n${body.trim()}\n';
+    // Reflect daily notes use the date in their filename, not as a generated
+    // Markdown heading. Keep their first Markdown element as user content.
+    final normalizedBody = body.trim().isEmpty ? '' : '${body.trim()}\n';
     final raw = '${MarkdownContract.frontmatter(id)}$normalizedBody';
     final note = await _put(
       NoteRowsCompanion.insert(
@@ -753,10 +753,13 @@ class NoteRepository {
         ? markdown
         : TodoMarkdown.scheduleGlobalAt(markdown, 0, _dailyDate(scheduledFor));
     final today = await getOrCreateToday();
+    final existing = today.body.trimRight();
     return save(
       today,
       title: today.title,
-      body: '${today.body.trimRight()}\n\n${scheduled.trim()}\n',
+      body: existing.isEmpty
+          ? '${scheduled.trim()}\n'
+          : '$existing\n\n${scheduled.trim()}\n',
     );
   }
 
@@ -769,7 +772,9 @@ class NoteRepository {
     final normalizedTitle = title.trim().isEmpty
         ? original.title
         : title.trim();
-    final normalizedBody = body.startsWith('# ')
+    final normalizedBody = original.isDaily
+        ? body
+        : body.startsWith('# ')
         ? body
         : '# $normalizedTitle\n\n$body';
     final frontmatter = parsed.frontmatter == null

@@ -26,6 +26,7 @@ void main() {
     expect(daily.isDaily, isTrue);
     expect(daily.path, startsWith('daily/'));
     expect(daily.body, contains('- [ ] Buy milk'));
+    expect(daily.body, isNot(startsWith('# ')));
     expect(
       (await repository.watchNotes().first).where((note) => !note.isDaily),
       isEmpty,
@@ -182,11 +183,21 @@ void main() {
       final created = await repository.saveDailyContent(date, 'Daily thought');
       expect(created, isNotNull);
       expect(created!.path, 'daily/2026-08-16.md');
-      expect(created.body, contains('Daily thought'));
+      expect(created.body, 'Daily thought\n');
+      expect(created.rawMarkdown, endsWith('---\nDaily thought\n'));
+      expect(created.rawMarkdown, isNot(contains('# 2026-08-16')));
       expect(
         await File('${root.path}/notes/daily/2026-08-16.md').exists(),
         isTrue,
       );
+
+      final updated = await repository.save(
+        created,
+        title: created.title,
+        body: 'Updated thought',
+      );
+      expect(updated.body, 'Updated thought');
+      expect(updated.body, isNot(startsWith('# ')));
 
       expect(await repository.saveDailyContent(date, ''), isNull);
       expect(await repository.findDaily(date), isNull);

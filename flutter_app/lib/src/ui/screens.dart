@@ -837,7 +837,13 @@ class _DailyDayPanelState extends ConsumerState<_DailyDayPanel> {
                             // read-only note detail. Prevent Markdown's internal
                             // link/selection recognizers from winning the tap
                             // arena over the enclosing edit gesture.
-                            : IgnorePointer(child: MarkdownBody(data: content)),
+                            : IgnorePointer(
+                                child: MarkdownBody(
+                                  data: MarkdownContract.renderWikiLinks(
+                                    content,
+                                  ),
+                                ),
+                              ),
                       ),
                     ),
                   ),
