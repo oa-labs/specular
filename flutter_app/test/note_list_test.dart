@@ -36,9 +36,9 @@ void main() {
     addTearDown(container.dispose);
 
     container.read(homeSelectedViewProvider.notifier).state =
-        NoteListView.notes;
+        NoteListView.daily;
 
-    expect(container.read(homeSelectedViewProvider), NoteListView.notes);
+    expect(container.read(homeSelectedViewProvider), NoteListView.daily);
   });
 
   test('sorts within pinned notes by the selected order', () {

@@ -19,9 +19,9 @@ format—no custom server, Google Play Services, Firebase, or telemetry required
 - **Safe conflict handling.** When a local edit conflicts with a remote update,
   Specular preserves the local version as a dated conflict copy instead of
   overwriting it.
-- **Daily notes and global to-dos.** Open or create today's note in one tap,
-  collect Markdown checklist items from across notes, and filter them by open,
-  completed, or all.
+- **Daily notes and global to-dos.** Scroll a date-organized Daily writing
+  surface, collect Markdown checklist items from across notes, and filter them
+  by open, completed, or all.
 - **Search and organization.** Search note titles and bodies, browse folders,
   sort notes, and use pinned notes for quick access.
 - **Markdown with links and images.** Work with common Markdown, wiki links,
@@ -139,17 +139,28 @@ Reflect-compatible front matter used to identify a note. Image files are saved i
 
 ### Tasks and daily notes
 
-Markdown checkboxes (`- [ ]` and `- [x]`) are indexed as global to-dos. The
-**To-dos** screen lets you complete items without manually opening their source
+Global Markdown checkboxes (`+ [ ]` and `+ [x]`) are indexed as to-dos. Local
+`- [ ]` and `* [ ]` checkboxes remain in their source note. The **To-dos**
+screen lets you complete global items without manually opening their source
 note, and the Android widget exposes the same task list from the home screen.
 
 Schedule a global to-do from its editor calendar action, or while creating a
-new to-do. Specular writes Reflect-compatible `[[YYYY-MM-DD]]` syntax, creates
-that daily note when needed, and shows the source task as an incoming backlink
-on the selected day.
+new to-do. Specular writes Reflect-compatible `[[YYYY-MM-DD]]` syntax and
+shows the source task on the selected day without creating an otherwise empty
+daily Markdown file.
 
-Use the calendar action to open today’s note. Voice capture can also append a
-transcript or a to-do to it.
+Recurring global to-dos use Obsidian Tasks-style Markdown. Add a valid due
+date—either `[[YYYY-MM-DD]]` or `📅 YYYY-MM-DD`—and then `🔁 every` followed
+by `day`, `weekday`, `week`, `month`, or `year`; a positive interval is
+optional (for example, `+ [ ] Pay rent [[2026-06-01]] 🔁 every month` or
+`+ [ ] Back up vault 📅 2026-06-01 🔁 every 2 weeks`). Completing a dated
+recurring global task marks it done and inserts the next occurrence below it.
+Weekdays are Monday through Friday, and the next due date advances from the
+task's existing due date rather than the day it was completed.
+
+Use the **Daily** view to scroll and write across dates. A daily Markdown file
+is created only after meaningful content is entered; voice capture can also
+append a transcript or a to-do to today’s note.
 
 ### Optional AI and voice services
 

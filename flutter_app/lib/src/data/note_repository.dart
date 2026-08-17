@@ -219,13 +219,13 @@ class NoteRepository {
     );
   }
 
-  /// Streams global tasks in other notes whose daily-date wikilink resolves
-  /// to [daily]'s repository path. The relationship stays derived from
-  /// Markdown so imported Reflect notes and local changes behave identically.
-  Stream<List<ScheduledTaskBacklink>> watchScheduledTaskBacklinks(Note daily) {
-    if (!daily.isDaily) return Stream.value(const []);
-    final date = p.basenameWithoutExtension(daily.path);
-    if (!TodoMarkdown.isDailyDate(date)) return Stream.value(const []);
+  /// Streams global tasks whose parsed due date is [date]. This deliberately
+  /// does not require a daily file: a scheduled task is useful on the Daily
+  /// surface without materializing an otherwise empty Markdown document.
+  Stream<List<ScheduledTaskBacklink>> watchScheduledTaskBacklinksForDate(
+    DateTime date,
+  ) {
+    final value = _dailyDate(date);
     final query = _db.select(_db.noteRows)
       ..where((row) => row.isPendingDeletion.equals(false))
       ..orderBy([
@@ -235,17 +235,26 @@ class NoteRepository {
     return query.watch().map(
       (rows) => [
         for (final row in rows)
-          if (row.id != daily.id)
-            for (final task in TodoMarkdown.extractScheduled(row.body))
-              if (task.date == date)
-                ScheduledTaskBacklink(
-                  sourceNoteId: row.id,
-                  sourceNoteTitle: row.title,
-                  taskIndex: task.index,
-                  text: task.text,
-                  isCompleted: task.completed,
-                ),
+          for (final task in TodoMarkdown.extractScheduled(row.body))
+            if (task.date == value)
+              ScheduledTaskBacklink(
+                sourceNoteId: row.id,
+                sourceNoteTitle: row.title,
+                taskIndex: task.index,
+                text: task.text,
+                isCompleted: task.completed,
+              ),
       ],
+    );
+  }
+
+  /// Legacy note-oriented facade retained for note detail views.
+  Stream<List<ScheduledTaskBacklink>> watchScheduledTaskBacklinks(Note daily) {
+    if (!daily.isDaily) return Stream.value(const []);
+    final date = p.basenameWithoutExtension(daily.path);
+    if (!TodoMarkdown.isDailyDate(date)) return Stream.value(const []);
+    return watchScheduledTaskBacklinksForDate(DateTime.parse(date)).map(
+      (tasks) => tasks.where((task) => task.sourceNoteId != daily.id).toList(),
     );
   }
 
@@ -651,8 +660,43 @@ class NoteRepository {
     return getOrCreateDaily(DateTime.now());
   }
 
-  /// Ensures that a local-calendar day has a daily note. Scheduling calls
-  /// this eagerly so its portable wikilink immediately has a real target.
+  /// Looks up a daily note by its local-calendar date without creating it.
+  Future<Note?> findDaily(DateTime date) async {
+    final path = 'daily/${_dailyDate(date)}.md';
+    final row =
+        await (_db.select(_db.noteRows)..where(
+              (note) =>
+                  note.path.equals(path) & note.isPendingDeletion.equals(false),
+            ))
+            .getSingleOrNull();
+    return row == null ? null : _toNote(row);
+  }
+
+  /// Saves one Daily panel under the lazy-file contract.
+  ///
+  /// Whitespace-only content never creates a document. Clearing a persisted
+  /// daily document removes it through the usual sync-aware deletion path.
+  /// The date heading remains generated structure rather than user content.
+  Future<Note?> saveDailyContent(DateTime date, String markdown) async {
+    final normalized = markdown.trim();
+    // Include a pending-deletion row so quickly typing into a just-cleared
+    // panel restores the same identity rather than colliding on its path.
+    final existing = await findByPath('daily/${_dailyDate(date)}.md');
+    if (normalized.isEmpty) {
+      if (existing != null && !existing.isPendingDeletion) {
+        await delete(existing);
+      }
+      return null;
+    }
+    final value = _dailyDate(date);
+    if (existing == null) {
+      return createDaily('daily/$value.md', value, body: normalized);
+    }
+    return save(existing, title: value, body: normalized);
+  }
+
+  /// Explicitly creates a local-calendar daily note for flows that already
+  /// have content to write. Scheduling intentionally does not call this.
   Future<Note> getOrCreateDaily(DateTime date) async {
     final normalized = DateTime(date.year, date.month, date.day);
     final value = _dailyDate(normalized);
@@ -708,7 +752,6 @@ class NoteRepository {
     final scheduled = scheduledFor == null
         ? markdown
         : TodoMarkdown.scheduleGlobalAt(markdown, 0, _dailyDate(scheduledFor));
-    if (scheduledFor != null) await getOrCreateDaily(scheduledFor);
     final today = await getOrCreateToday();
     return save(
       today,
@@ -746,7 +789,11 @@ class NoteRepository {
         isPinned: Value(original.isPinned),
         lastRemoteSha: Value(original.lastRemoteSha),
         isDirty: const Value(true),
-        isPendingDeletion: Value(original.isPendingDeletion),
+        // Daily's lazy editor can reach a queued-deletion state when a user
+        // clears and then immediately starts writing again before sync.
+        isPendingDeletion: Value(
+          original.isDaily ? false : original.isPendingDeletion,
+        ),
         pendingRenameFromPath: Value(original.pendingRenameFromPath),
         pendingRenameFromSha: Value(original.pendingRenameFromSha),
         isConflict: Value(original.isConflict),
@@ -907,6 +954,22 @@ class NoteRepository {
     );
   }
 
+  /// Toggles a checkbox from a note preview. Global tasks share the same
+  /// recurrence-aware completion behavior as the To-dos screen; local
+  /// checkboxes retain their ordinary in-place toggle semantics.
+  Future<void> toggleCheckbox({
+    required String noteId,
+    required int taskIndex,
+  }) async {
+    final note = await get(noteId);
+    if (note == null) return;
+    await save(
+      note,
+      title: note.title,
+      body: TodoMarkdown.toggleCheckboxAt(note.body, taskIndex),
+    );
+  }
+
   /// Updates the source Markdown for a task edited from the global to-do
   /// screen. A task's schedule remains intact and is managed separately.
   Future<void> updateTodoText(TodoItem todo, String text) async {
@@ -929,7 +992,6 @@ class NoteRepository {
   }) async {
     final note = await get(noteId);
     if (note == null) return;
-    await getOrCreateDaily(date);
     await save(
       note,
       title: note.title,

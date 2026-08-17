@@ -255,5 +255,88 @@ summary: "**Project** [plan](https://example.com)"
         'New wording',
       );
     });
+
+    test('parses Obsidian-style dates and recurrence intervals', () {
+      final metadata = TodoMarkdown.taskMetadata(
+        'Water plants 📅 2026-06-01 🔁 every 2 weeks',
+      );
+
+      expect(metadata.dueDate!.date, '2026-06-01');
+      expect(metadata.dueDate!.style, TodoDueDateStyle.emoji);
+      expect(metadata.recurrence!.interval, 2);
+      expect(metadata.recurrence!.unit, TaskRecurrenceUnit.week);
+      expect(
+        TodoMarkdown.taskMetadata('Review 🔁 every 0 days').recurrence,
+        isNull,
+      );
+      expect(
+        TodoMarkdown.taskMetadata('Review 🔁 every fortnight').recurrence,
+        isNull,
+      );
+      expect(
+        TodoMarkdown.editableText('Review 🔁 every 0 days'),
+        'Review 🔁 every 0 days',
+      );
+    });
+
+    test('preserves emoji date style when a task is rescheduled', () {
+      expect(
+        TodoMarkdown.scheduleGlobalAt(
+          '+ [ ] Water plants 📅 2026-06-01 🔁 every day',
+          0,
+          '2026-06-02',
+        ),
+        '+ [ ] Water plants 🔁 every day 📅 2026-06-02',
+      );
+    });
+
+    test('completes a recurring task and inserts its next occurrence', () {
+      const source = '+ [ ] Pay rent [[2026-01-31]] 🔁 every month';
+
+      expect(
+        TodoMarkdown.toggleGlobalAt(source, 0),
+        '+ [x] Pay rent [[2026-01-31]] 🔁 every month\n'
+        '+ [ ] Pay rent 🔁 every month [[2026-02-28]]',
+      );
+    });
+
+    test('reopening a completed recurring task does not duplicate it', () {
+      const source = '+ [x] Pay rent [[2026-01-31]] 🔁 every month';
+
+      expect(
+        TodoMarkdown.toggleGlobalAt(source, 0),
+        '+ [ ] Pay rent [[2026-01-31]] 🔁 every month',
+      );
+    });
+
+    test('advances weekday recurrence across weekends', () {
+      const recurrence = TaskRecurrence(
+        interval: 2,
+        unit: TaskRecurrenceUnit.weekday,
+      );
+
+      expect(
+        TodoMarkdown.nextOccurrenceDate('2026-06-05', recurrence),
+        '2026-06-09',
+      );
+    });
+
+    test('only global recurring tasks create follow-up rows', () {
+      const source =
+          '- [ ] Local 📅 2026-06-01 🔁 every day\n'
+          '+ [ ] Global 📅 2026-06-01 🔁 every day';
+
+      expect(
+        TodoMarkdown.toggleCheckboxAt(source, 0),
+        '- [x] Local 📅 2026-06-01 🔁 every day\n'
+        '+ [ ] Global 📅 2026-06-01 🔁 every day',
+      );
+      expect(
+        TodoMarkdown.toggleCheckboxAt(source, 1),
+        '- [ ] Local 📅 2026-06-01 🔁 every day\n'
+        '+ [x] Global 📅 2026-06-01 🔁 every day\n'
+        '+ [ ] Global 🔁 every day 📅 2026-06-02',
+      );
+    });
   });
 }

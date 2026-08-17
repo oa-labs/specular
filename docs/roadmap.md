@@ -81,10 +81,9 @@ not remember its folder or exact wording.
   match to ranked full-text search with highlighted matches, phrase search, and
   All/Titles/Body scopes.
 - **Implemented (2026-08-15):** Scheduled global tasks can link to a selected
-  daily note using portable `[[YYYY-MM-DD]]` syntax. Specular creates a
-  missing daily note, shows grouped incoming task backlinks there, and lets
-  users complete the original task or edit its text from the global to-do
-  view.
+  date using portable `[[YYYY-MM-DD]]` syntax. Specular shows grouped incoming
+  tasks on that date without materializing an empty daily file, and lets users
+  complete the original task or edit its text from the global to-do view.
 - **Implemented (2026-08-15):** A durable local link index powers a general
   backlinks panel on every note for wiki links and relative Markdown note
   links. It rebuilds from canonical Markdown after local edits, imports, sync
@@ -111,7 +110,10 @@ follow-ups—need less repeated setup and produce usable next actions.
 - **Implemented (2026-08-15):** Schedule or reschedule a global task with a
   date picker and a Reflect-compatible daily-note backlink; task text is
   editable from the global to-do view without removing its schedule.
-- Add task metadata: due date, reminder, priority, and recurrence.
+- **Implemented (2026-08-15):** Dated global tasks can recur through portable
+  Obsidian Tasks-style `🔁 every …` Markdown; completion inserts the next
+  occurrence using the task's existing due-date marker style.
+- Add task metadata: reminder and priority.
 - Add task views for Today, Upcoming, Overdue, and Completed, while retaining
   plain Markdown checkboxes as the base format.
 - Let users link a task back to its source note and filter tasks by tag/folder.

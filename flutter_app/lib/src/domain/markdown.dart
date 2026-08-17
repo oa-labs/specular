@@ -344,6 +344,43 @@ class MarkdownContract {
   }
 }
 
+enum TodoDueDateStyle { wikiLink, emoji }
+
+class TodoDueDate {
+  const TodoDueDate({required this.date, required this.style});
+
+  final String date;
+  final TodoDueDateStyle style;
+}
+
+enum TaskRecurrenceUnit { day, weekday, week, month, year }
+
+class TaskRecurrence {
+  const TaskRecurrence({required this.interval, required this.unit});
+
+  final int interval;
+  final TaskRecurrenceUnit unit;
+}
+
+class TodoTaskMetadata {
+  const TodoTaskMetadata({this.dueDate, this.recurrence});
+
+  final TodoDueDate? dueDate;
+  final TaskRecurrence? recurrence;
+}
+
+class _DueDateMatch {
+  const _DueDateMatch({
+    required this.start,
+    required this.end,
+    required this.dueDate,
+  });
+
+  final int start;
+  final int end;
+  final TodoDueDate dueDate;
+}
+
 class TodoMarkdown {
   static final _checkbox = RegExp(
     r'^[ \t]*[-*+][ \t]+\[([ xX])\][ \t]*(.*)$',
@@ -354,6 +391,13 @@ class TodoMarkdown {
     multiLine: true,
   );
   static final _dailyWikiLink = RegExp(r'\[\[(\d{4}-\d{2}-\d{2})\]\]');
+  static final _emojiDueDate = RegExp(r'📅[ \t]+(\d{4}-\d{2}-\d{2})');
+  static final _recurrence = RegExp(
+    r'🔁[ \t]+every[ \t]+(?:(\d+)[ \t]+)?'
+    r'(days?|weekdays?|weeks?|months?|years?)'
+    r'(?=$|[ \t.,;:!?()\[\]{}])',
+    caseSensitive: false,
+  );
 
   /// Reflect global tasks use a `+` marker. `-` and `*` checkbox rows remain
   /// local to their note and deliberately do not enter the task index.
@@ -375,25 +419,33 @@ class TodoMarkdown {
   static List<({int index, String text, bool completed, String date})>
   extractScheduled(String markdown) => [
     for (final task in extract(markdown))
-      if (scheduledDate(task.text) case final date?)
+      if (taskMetadata(task.text).dueDate case final dueDate?)
         (
           index: task.index,
           text: task.text,
           completed: task.completed,
-          date: date,
+          date: dueDate.date,
         ),
   ];
 
-  /// Returns the last valid daily-date wikilink in task text. Scheduling
-  /// normalizes tasks to one link, but accepting the last link makes imported
-  /// Reflect content deterministic until it is next edited.
-  static String? scheduledDate(String text) {
-    String? result;
-    for (final match in _dailyWikiLink.allMatches(text)) {
-      final date = match.group(1)!;
-      if (isDailyDate(date)) result = date;
+  /// Returns the last valid task due-date marker in task text. Scheduling
+  /// normalizes tasks to one marker, but accepting the last marker makes
+  /// imported content deterministic until it is next edited.
+  static String? scheduledDate(String text) => taskMetadata(text).dueDate?.date;
+
+  /// Parses the portable task metadata that Specular understands. The last
+  /// valid due-date marker wins so imported Markdown with duplicate markers is
+  /// deterministic until a later Specular edit normalizes it.
+  static TodoTaskMetadata taskMetadata(String text) {
+    TodoDueDate? dueDate;
+    for (final match in _dueDateMatches(text)) {
+      dueDate = match.dueDate;
     }
-    return result;
+    TaskRecurrence? recurrence;
+    for (final match in _recurrence.allMatches(text)) {
+      if (_recurrenceForMatch(match) case final parsed?) recurrence = parsed;
+    }
+    return TodoTaskMetadata(dueDate: dueDate, recurrence: recurrence);
   }
 
   static bool isDailyDate(String value) {
@@ -406,9 +458,9 @@ class TodoMarkdown {
     return date.year == year && date.month == month && date.day == day;
   }
 
-  /// Adds or replaces a global task's daily schedule. Every existing valid
-  /// daily-date wikilink on that row is removed so the persisted task has one
-  /// unambiguous destination, appended in Reflect's familiar trailing form.
+  /// Adds or replaces a global task's due date. Every existing valid due-date
+  /// marker on that row is removed so the persisted task has one unambiguous
+  /// destination while retaining its existing marker style when present.
   static String scheduleGlobalAt(String markdown, int taskIndex, String date) {
     if (!isDailyDate(date)) {
       throw ArgumentError.value(date, 'date', 'Use YYYY-MM-DD.');
@@ -416,33 +468,35 @@ class TodoMarkdown {
     var current = 0;
     return markdown.replaceAllMapped(_globalTask, (match) {
       if (current++ != taskIndex) return match.group(0)!;
-      final taskText = match
-          .group(2)!
-          .replaceAllMapped(
-            _dailyWikiLink,
-            (link) => isDailyDate(link.group(1)!) ? '' : link.group(0)!,
-          );
-      final normalized = taskText.replaceAll(RegExp(r'\s+'), ' ').trim();
+      final metadata = taskMetadata(match.group(2)!);
       final prefix = RegExp(
         r'^[ \t]*\+[ \t]+\[[ xX]\][ \t]*',
       ).firstMatch(match.group(0)!)!.group(0)!;
-      return '$prefix$normalized [[$date]]';
+      return '$prefix${_composeTaskText(
+        editableText(match.group(2)!),
+        dueDate: TodoDueDate(date: date, style: metadata.dueDate?.style ?? TodoDueDateStyle.wikiLink),
+        recurrence: metadata.recurrence,
+      )}';
     });
   }
 
-  /// Removes the task's schedule marker for inline editing. Scheduling has a
-  /// dedicated control, so editing task wording cannot accidentally create or
-  /// remove a daily-note relationship.
-  static String editableText(String text) => text
-      .replaceAllMapped(
-        _dailyWikiLink,
-        (link) => isDailyDate(link.group(1)!) ? '' : link.group(0)!,
-      )
-      .replaceAll(RegExp(r'\s+'), ' ')
-      .trim();
+  /// Removes supported task metadata for inline wording edits. Scheduling has
+  /// a dedicated control and recurrence is Markdown-first, so editing wording
+  /// cannot accidentally create or remove a due-date relationship.
+  static String editableText(String text) {
+    var result = text;
+    for (final match in _dueDateMatches(text).reversed) {
+      result = result.replaceRange(match.start, match.end, '');
+    }
+    result = result.replaceAllMapped(
+      _recurrence,
+      (match) => _recurrenceForMatch(match) == null ? match.group(0)! : '',
+    );
+    return result.replaceAll(RegExp(r'\s+'), ' ').trim();
+  }
 
   /// Replaces a global task's user-facing text while retaining its current
-  /// completion state, list indentation, and scheduled daily-note wikilink.
+  /// completion state, list indentation, due date, and recurrence metadata.
   static String updateGlobalTextAt(
     String markdown,
     int taskIndex,
@@ -458,27 +512,214 @@ class TodoMarkdown {
       final prefix = RegExp(
         r'^[ \t]*\+[ \t]+\[[ xX]\][ \t]*',
       ).firstMatch(match.group(0)!)!.group(0)!;
-      final date = scheduledDate(match.group(2)!);
-      return '$prefix$updatedText${date == null ? '' : ' [[$date]]'}';
+      final metadata = taskMetadata(match.group(2)!);
+      return '$prefix${_composeTaskText(updatedText, dueDate: metadata.dueDate, recurrence: metadata.recurrence)}';
     });
   }
 
   /// Toggles a task by its index within the global `+` task list.
-  static String toggleGlobalAt(String markdown, int taskIndex) =>
-      _toggleAt(markdown, taskIndex, _globalTask);
+  static String toggleGlobalAt(String markdown, int taskIndex) {
+    var current = 0;
+    return markdown.replaceAllMapped(_globalTask, (match) {
+      if (current++ != taskIndex) return match.group(0)!;
+      return _toggleGlobalTaskMatch(match);
+    });
+  }
+
+  /// Returns the next due date that a global completion will create, if any.
+  /// Callers use this to ensure the destination daily note exists before the
+  /// source Markdown changes.
+  static String? nextScheduledDateOnGlobalCompletion(
+    String markdown,
+    int taskIndex,
+  ) {
+    var current = 0;
+    for (final match in _globalTask.allMatches(markdown)) {
+      if (current++ != taskIndex) continue;
+      return _nextDateForUncheckedTask(match);
+    }
+    return null;
+  }
 
   /// Toggles a checkbox by its index among every checkbox in a note. This is
   /// used by the note preview, where local and global checkboxes are both
   /// interactive.
-  static String toggleCheckboxAt(String markdown, int taskIndex) =>
-      _toggleAt(markdown, taskIndex, _checkbox);
-
-  static String _toggleAt(String markdown, int taskIndex, RegExp pattern) {
+  static String toggleCheckboxAt(String markdown, int taskIndex) {
     var current = 0;
-    return markdown.replaceAllMapped(pattern, (match) {
+    return markdown.replaceAllMapped(_checkbox, (match) {
       if (current++ != taskIndex) return match.group(0)!;
-      final marker = match.group(1)?.toLowerCase() == 'x' ? ' ' : 'x';
-      return match.group(0)!.replaceFirst(RegExp(r'\[.\]'), '[$marker]');
+      final isGlobal = RegExp(
+        r'^[ \t]*\+[ \t]+\[[ xX]\]',
+      ).hasMatch(match.group(0)!);
+      return isGlobal ? _toggleGlobalTaskMatch(match) : _toggleMatch(match);
     });
+  }
+
+  /// Equivalent to [nextScheduledDateOnGlobalCompletion] for the mixed
+  /// checkbox index used by note previews.
+  static String? nextScheduledDateOnCheckboxCompletion(
+    String markdown,
+    int taskIndex,
+  ) {
+    var current = 0;
+    for (final match in _checkbox.allMatches(markdown)) {
+      if (current++ != taskIndex) continue;
+      final isGlobal = RegExp(
+        r'^[ \t]*\+[ \t]+\[[ xX]\]',
+      ).hasMatch(match.group(0)!);
+      return isGlobal ? _nextDateForUncheckedTask(match) : null;
+    }
+    return null;
+  }
+
+  /// Advances a valid, dated recurrence exactly once. This is exposed for
+  /// tests and keeps date calculation shared by every completion surface.
+  static String nextOccurrenceDate(String date, TaskRecurrence recurrence) {
+    if (!isDailyDate(date)) {
+      throw ArgumentError.value(date, 'date', 'Use YYYY-MM-DD.');
+    }
+    final source = DateTime.parse(date);
+    final next = switch (recurrence.unit) {
+      TaskRecurrenceUnit.day => source.add(Duration(days: recurrence.interval)),
+      TaskRecurrenceUnit.week => source.add(
+        Duration(days: 7 * recurrence.interval),
+      ),
+      TaskRecurrenceUnit.weekday => _addWeekdays(source, recurrence.interval),
+      TaskRecurrenceUnit.month => _addMonths(source, recurrence.interval),
+      TaskRecurrenceUnit.year => _addMonths(source, 12 * recurrence.interval),
+    };
+    return '${next.year.toString().padLeft(4, '0')}-'
+        '${next.month.toString().padLeft(2, '0')}-'
+        '${next.day.toString().padLeft(2, '0')}';
+  }
+
+  static String _toggleGlobalTaskMatch(Match match) {
+    if (match.group(1)?.toLowerCase() == 'x') return _toggleMatch(match);
+    final metadata = taskMetadata(match.group(2)!);
+    if (metadata.dueDate == null || metadata.recurrence == null) {
+      return _toggleMatch(match);
+    }
+    final prefix = RegExp(
+      r'^[ \t]*\+[ \t]+\[[ xX]\][ \t]*',
+    ).firstMatch(match.group(0)!)!.group(0)!;
+    final completed = match.group(0)!.replaceFirst('[ ]', '[x]');
+    final nextDate = nextOccurrenceDate(
+      metadata.dueDate!.date,
+      metadata.recurrence!,
+    );
+    final nextTask = _composeTaskText(
+      editableText(match.group(2)!),
+      dueDate: TodoDueDate(date: nextDate, style: metadata.dueDate!.style),
+      recurrence: metadata.recurrence,
+    );
+    return '$completed\n$prefix$nextTask';
+  }
+
+  static String? _nextDateForUncheckedTask(Match match) {
+    if (match.group(1)?.toLowerCase() == 'x') return null;
+    final metadata = taskMetadata(match.group(2)!);
+    if (metadata.dueDate == null || metadata.recurrence == null) return null;
+    return nextOccurrenceDate(metadata.dueDate!.date, metadata.recurrence!);
+  }
+
+  static String _toggleMatch(Match match) {
+    final marker = match.group(1)?.toLowerCase() == 'x' ? ' ' : 'x';
+    return match.group(0)!.replaceFirst(RegExp(r'\[.\]'), '[$marker]');
+  }
+
+  static List<_DueDateMatch> _dueDateMatches(String text) {
+    final matches = <_DueDateMatch>[];
+    for (final match in _dailyWikiLink.allMatches(text)) {
+      final date = match.group(1)!;
+      if (!isDailyDate(date)) continue;
+      matches.add(
+        _DueDateMatch(
+          start: match.start,
+          end: match.end,
+          dueDate: TodoDueDate(date: date, style: TodoDueDateStyle.wikiLink),
+        ),
+      );
+    }
+    for (final match in _emojiDueDate.allMatches(text)) {
+      final date = match.group(1)!;
+      if (!isDailyDate(date)) continue;
+      matches.add(
+        _DueDateMatch(
+          start: match.start,
+          end: match.end,
+          dueDate: TodoDueDate(date: date, style: TodoDueDateStyle.emoji),
+        ),
+      );
+    }
+    matches.sort((left, right) => left.start.compareTo(right.start));
+    return matches;
+  }
+
+  static TaskRecurrenceUnit? _recurrenceUnit(String value) =>
+      switch (value.toLowerCase()) {
+        'day' || 'days' => TaskRecurrenceUnit.day,
+        'weekday' || 'weekdays' => TaskRecurrenceUnit.weekday,
+        'week' || 'weeks' => TaskRecurrenceUnit.week,
+        'month' || 'months' => TaskRecurrenceUnit.month,
+        'year' || 'years' => TaskRecurrenceUnit.year,
+        _ => null,
+      };
+
+  static TaskRecurrence? _recurrenceForMatch(Match match) {
+    final interval = int.tryParse(match.group(1) ?? '1') ?? 0;
+    final unit = _recurrenceUnit(match.group(2)!);
+    return interval > 0 && unit != null
+        ? TaskRecurrence(interval: interval, unit: unit)
+        : null;
+  }
+
+  static String _composeTaskText(
+    String text, {
+    TodoDueDate? dueDate,
+    TaskRecurrence? recurrence,
+  }) {
+    final parts = <String>[text.trim()];
+    if (recurrence != null) parts.add(_formatRecurrence(recurrence));
+    if (dueDate != null) {
+      parts.add(
+        dueDate.style == TodoDueDateStyle.emoji
+            ? '📅 ${dueDate.date}'
+            : '[[${dueDate.date}]]',
+      );
+    }
+    return parts.where((part) => part.isNotEmpty).join(' ');
+  }
+
+  static String _formatRecurrence(TaskRecurrence recurrence) {
+    final unit = switch (recurrence.unit) {
+      TaskRecurrenceUnit.day => 'day',
+      TaskRecurrenceUnit.weekday => 'weekday',
+      TaskRecurrenceUnit.week => 'week',
+      TaskRecurrenceUnit.month => 'month',
+      TaskRecurrenceUnit.year => 'year',
+    };
+    return recurrence.interval == 1
+        ? '🔁 every $unit'
+        : '🔁 every ${recurrence.interval} ${unit}s';
+  }
+
+  static DateTime _addWeekdays(DateTime source, int count) {
+    var result = source;
+    var remaining = count;
+    while (remaining > 0) {
+      result = result.add(const Duration(days: 1));
+      if (result.weekday <= DateTime.friday) remaining--;
+    }
+    return result;
+  }
+
+  static DateTime _addMonths(DateTime source, int months) {
+    final target = DateTime(source.year, source.month + months, 1);
+    final lastDay = DateTime(target.year, target.month + 1, 0).day;
+    return DateTime(
+      target.year,
+      target.month,
+      source.day.clamp(1, lastDay).toInt(),
+    );
   }
 }

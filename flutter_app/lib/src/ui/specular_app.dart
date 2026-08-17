@@ -77,7 +77,7 @@ final notesProvider = StreamProvider<List<Note>>(
 /// Keeps the home tab selected while a route that replaces the home route is
 /// open, such as saving an edited note and returning through its preview.
 final homeSelectedViewProvider = StateProvider<NoteListView>(
-  (_) => NoteListView.all,
+  (_) => NoteListView.daily,
 );
 
 enum TodoFilter { open, done, all }
@@ -605,9 +605,9 @@ class _AdaptiveAppShell extends StatelessWidget {
               ),
               destinations: const [
                 NavigationRailDestination(
-                  icon: Icon(Icons.notes_outlined),
-                  selectedIcon: Icon(Icons.notes),
-                  label: Text('Notes'),
+                  icon: Icon(Icons.today_outlined),
+                  selectedIcon: Icon(Icons.today),
+                  label: Text('Daily'),
                 ),
                 NavigationRailDestination(
                   icon: Icon(Icons.checklist_outlined),

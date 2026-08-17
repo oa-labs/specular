@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 import 'package:flutter/gestures.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -30,7 +31,7 @@ enum NoteListSort { lastUpdated, alphabetical }
 
 /// The small, stable set of home views. Folders remain available when creating
 /// notes, but are deliberately not promoted into the primary navigation.
-enum NoteListView { all, notes, meetings, people }
+enum NoteListView { daily, all, meetings, people }
 
 enum NoteObjectType { note, meeting, person }
 
@@ -114,8 +115,8 @@ NoteObjectType noteObjectType(Note note) {
 }
 
 bool noteMatchesView(Note note, NoteListView view) => switch (view) {
+  NoteListView.daily => false,
   NoteListView.all => true,
-  NoteListView.notes => noteObjectType(note) == NoteObjectType.note,
   NoteListView.meetings => noteObjectType(note) == NoteObjectType.meeting,
   NoteListView.people => noteObjectType(note) == NoteObjectType.person,
 };
@@ -292,6 +293,591 @@ List<Note> sortAndFilterNotes(
   return visible;
 }
 
+/// Reflect-style daily writing surface. Dates with no backing file remain
+/// editable placeholders until meaningful text is saved.
+class DailyNotesScreen extends ConsumerStatefulWidget {
+  const DailyNotesScreen({super.key});
+
+  @override
+  ConsumerState<DailyNotesScreen> createState() => _DailyNotesScreenState();
+}
+
+class _DailyNotesScreenState extends ConsumerState<DailyNotesScreen> {
+  static const _futureDays = 90;
+  static const _pastDays = 270;
+  static const _estimatedDayHeight = 132.0;
+  late final ScrollController _scrollController;
+  final _today = DateUtils.dateOnly(DateTime.now());
+  late DateTime _selectedDate;
+  String? _activeDate;
+  var _showToday = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _selectedDate = _today;
+    _scrollController = ScrollController(
+      initialScrollOffset: _futureDays * _estimatedDayHeight,
+    )..addListener(_onScroll);
+  }
+
+  @override
+  void dispose() {
+    _scrollController
+      ..removeListener(_onScroll)
+      ..dispose();
+    super.dispose();
+  }
+
+  void _onScroll() {
+    final show =
+        _scrollController.hasClients &&
+        (_scrollController.offset - _futureDays * _estimatedDayHeight).abs() >
+            180;
+    if (show != _showToday && mounted) setState(() => _showToday = show);
+  }
+
+  void _activate(DateTime date) {
+    final value = formatDailyDate(date);
+    if (_activeDate != value) setState(() => _activeDate = value);
+  }
+
+  void _selectDate(DateTime date) {
+    setState(() {
+      _selectedDate = DateUtils.dateOnly(date);
+      _activeDate = null;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final wideLayout = usesWideLayout(context);
+    final state = ref.watch(notesProvider);
+    final allNotes = state.asData?.value ?? const <Note>[];
+    final dailyByDate = <String, Note>{
+      for (final note in allNotes)
+        if (note.isDaily) formatDailyDateFromPath(note.path): note,
+    };
+    final scheduledByDate = <String, List<ScheduledTaskBacklink>>{};
+    for (final note in allNotes) {
+      if (note.isPendingDeletion) continue;
+      for (final task in TodoMarkdown.extractScheduled(note.body)) {
+        (scheduledByDate[task.date] ??= []).add(
+          ScheduledTaskBacklink(
+            sourceNoteId: note.id,
+            sourceNoteTitle: note.title,
+            taskIndex: task.index,
+            text: task.text,
+            isCompleted: task.completed,
+          ),
+        );
+      }
+    }
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(wideLayout ? 'Daily' : displayDailyMonth(_selectedDate)),
+        actions: [
+          if ((!wideLayout && !DateUtils.isSameDay(_selectedDate, _today)) ||
+              (wideLayout && _showToday))
+            TextButton.icon(
+              onPressed: wideLayout ? _goToToday : () => _selectDate(_today),
+              icon: const Icon(Icons.my_location),
+              label: const Text('Today'),
+            ),
+          IconButton(
+            tooltip: 'View to-dos',
+            onPressed: () => context.push('/todos'),
+            icon: const Icon(Icons.checklist),
+          ),
+          IconButton(
+            tooltip: 'Search notes',
+            onPressed: () => context.push('/search'),
+            icon: const Icon(Icons.search),
+          ),
+        ],
+      ),
+      body: Column(
+        children: [
+          _HomeViewSelector(
+            selectedView: NoteListView.daily,
+            onSelected: (view) =>
+                ref.read(homeSelectedViewProvider.notifier).state = view,
+          ),
+          Expanded(
+            child: state.isLoading
+                ? const Center(child: CircularProgressIndicator())
+                : wideLayout
+                ? _buildDesktopTimeline(dailyByDate, scheduledByDate)
+                : _buildMobileDay(dailyByDate, scheduledByDate),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _goToToday() => _scrollController.animateTo(
+    _futureDays * _estimatedDayHeight,
+    duration: const Duration(milliseconds: 250),
+    curve: Curves.easeOut,
+  );
+
+  Widget _buildDesktopTimeline(
+    Map<String, Note> dailyByDate,
+    Map<String, List<ScheduledTaskBacklink>> scheduledByDate,
+  ) => ListView.builder(
+    controller: _scrollController,
+    keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+    padding: const EdgeInsets.fromLTRB(16, 8, 16, 40),
+    itemCount: _futureDays + _pastDays + 1,
+    itemBuilder: (context, index) {
+      final date = _today.add(Duration(days: _futureDays - index));
+      final key = formatDailyDate(date);
+      return _DailyDayPanel(
+        key: ValueKey(key),
+        date: date,
+        note: dailyByDate[key],
+        scheduledTasks: scheduledByDate[key] ?? const [],
+        active: _activeDate == key,
+        onActivate: _activate,
+      );
+    },
+  );
+
+  Widget _buildMobileDay(
+    Map<String, Note> dailyByDate,
+    Map<String, List<ScheduledTaskBacklink>> scheduledByDate,
+  ) {
+    final key = formatDailyDate(_selectedDate);
+    return Column(
+      children: [
+        _MobileDailyDatePicker(
+          key: ValueKey(_mondayFor(_selectedDate)),
+          selectedDate: _selectedDate,
+          onSelected: _selectDate,
+        ),
+        const Divider(height: 1),
+        Expanded(
+          child: SingleChildScrollView(
+            keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+            padding: const EdgeInsets.fromLTRB(16, 20, 16, 40),
+            child: _DailyDayPanel(
+              key: ValueKey('mobile-$key'),
+              date: _selectedDate,
+              note: dailyByDate[key],
+              scheduledTasks: scheduledByDate[key] ?? const [],
+              active: _activeDate == key,
+              onActivate: _activate,
+              mobile: true,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+String formatDailyDateFromPath(String path) {
+  final value = path.split('/').last.replaceFirst(RegExp(r'\.md$'), '');
+  return TodoMarkdown.isDailyDate(value) ? value : '';
+}
+
+String displayDailyDate(DateTime date) {
+  const weekdays = [
+    'Monday',
+    'Tuesday',
+    'Wednesday',
+    'Thursday',
+    'Friday',
+    'Saturday',
+    'Sunday',
+  ];
+  const months = [
+    'January',
+    'February',
+    'March',
+    'April',
+    'May',
+    'June',
+    'July',
+    'August',
+    'September',
+    'October',
+    'November',
+    'December',
+  ];
+  return '${weekdays[date.weekday - 1]}, ${months[date.month - 1]} ${date.day}, ${date.year}';
+}
+
+String displayDailyMonth(DateTime date) {
+  const months = [
+    'January',
+    'February',
+    'March',
+    'April',
+    'May',
+    'June',
+    'July',
+    'August',
+    'September',
+    'October',
+    'November',
+    'December',
+  ];
+  return '${months[date.month - 1]} ${date.year}';
+}
+
+DateTime _mondayFor(DateTime date) =>
+    DateUtils.dateOnly(date).subtract(Duration(days: date.weekday - 1));
+
+class _MobileDailyDatePicker extends StatefulWidget {
+  const _MobileDailyDatePicker({
+    super.key,
+    required this.selectedDate,
+    required this.onSelected,
+  });
+
+  final DateTime selectedDate;
+  final ValueChanged<DateTime> onSelected;
+
+  @override
+  State<_MobileDailyDatePicker> createState() => _MobileDailyDatePickerState();
+}
+
+class _MobileDailyDatePickerState extends State<_MobileDailyDatePicker> {
+  static const _initialPage = 10000;
+  late final DateTime _initialWeek;
+  late final PageController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _initialWeek = _mondayFor(widget.selectedDate);
+    _controller = PageController(initialPage: _initialPage);
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return SizedBox(
+      height: 86,
+      child: PageView.builder(
+        controller: _controller,
+        onPageChanged: (page) {
+          final start = _initialWeek.add(
+            Duration(days: 7 * (page - _initialPage)),
+          );
+          final weekdayOffset = widget.selectedDate.weekday - 1;
+          widget.onSelected(start.add(Duration(days: weekdayOffset)));
+        },
+        itemBuilder: (context, page) {
+          final start = _initialWeek.add(
+            Duration(days: 7 * (page - _initialPage)),
+          );
+          return Row(
+            children: [
+              for (var offset = 0; offset != 7; offset++)
+                Expanded(
+                  child: _MobileDateCell(
+                    date: start.add(Duration(days: offset)),
+                    selected: DateUtils.isSameDay(
+                      start.add(Duration(days: offset)),
+                      widget.selectedDate,
+                    ),
+                    onPressed: widget.onSelected,
+                    theme: theme,
+                  ),
+                ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _MobileDateCell extends StatelessWidget {
+  const _MobileDateCell({
+    required this.date,
+    required this.selected,
+    required this.onPressed,
+    required this.theme,
+  });
+
+  final DateTime date;
+  final bool selected;
+  final ValueChanged<DateTime> onPressed;
+  final ThemeData theme;
+
+  @override
+  Widget build(BuildContext context) {
+    const weekdays = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+    final color = selected
+        ? theme.colorScheme.onPrimary
+        : theme.colorScheme.onSurfaceVariant;
+    return Semantics(
+      button: true,
+      selected: selected,
+      label: '${displayDailyDate(date)}${selected ? ', selected' : ''}',
+      child: InkWell(
+        onTap: () => onPressed(date),
+        child: Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Text(
+                weekdays[date.weekday - 1],
+                style: theme.textTheme.labelSmall,
+              ),
+              const SizedBox(height: 5),
+              Container(
+                width: 32,
+                height: 32,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  color: selected ? theme.colorScheme.primary : null,
+                  borderRadius: BorderRadius.circular(9),
+                ),
+                child: Text(
+                  '${date.day}',
+                  style: theme.textTheme.labelLarge?.copyWith(color: color),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _DailyDayPanel extends ConsumerStatefulWidget {
+  const _DailyDayPanel({
+    super.key,
+    required this.date,
+    required this.note,
+    required this.scheduledTasks,
+    required this.active,
+    required this.onActivate,
+    this.mobile = false,
+  });
+
+  final DateTime date;
+  final Note? note;
+  final List<ScheduledTaskBacklink> scheduledTasks;
+  final bool active;
+  final ValueChanged<DateTime> onActivate;
+  final bool mobile;
+
+  @override
+  ConsumerState<_DailyDayPanel> createState() => _DailyDayPanelState();
+}
+
+class _DailyDayPanelState extends ConsumerState<_DailyDayPanel> {
+  late final TextEditingController _controller;
+  late final FocusNode _focusNode;
+  Timer? _saveTimer;
+  var _hasLocalChanges = false;
+  var _saving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = TextEditingController(text: _editableBody(widget.note));
+    _focusNode = FocusNode()..addListener(_onFocusChanged);
+  }
+
+  @override
+  void didUpdateWidget(covariant _DailyDayPanel oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!widget.active && oldWidget.active) unawaited(_saveNow());
+    if (!_hasLocalChanges &&
+        widget.note?.rawMarkdown != oldWidget.note?.rawMarkdown) {
+      _controller.text = _editableBody(widget.note);
+    }
+  }
+
+  @override
+  void dispose() {
+    _saveTimer?.cancel();
+    unawaited(_saveNow());
+    _focusNode
+      ..removeListener(_onFocusChanged)
+      ..dispose();
+    _controller.dispose();
+    super.dispose();
+  }
+
+  String _editableBody(Note? note) =>
+      note == null ? '' : NoteBodyEditorCodec.editableBody(note).trim();
+
+  void _onFocusChanged() {
+    if (!_focusNode.hasFocus) unawaited(_saveNow());
+  }
+
+  void _onChanged(String _) {
+    _hasLocalChanges = true;
+    _saveTimer?.cancel();
+    _saveTimer = Timer(const Duration(milliseconds: 750), _saveNow);
+  }
+
+  Future<void> _saveNow() async {
+    _saveTimer?.cancel();
+    if (!_hasLocalChanges || _saving) return;
+    _saving = true;
+    try {
+      await ref
+          .read(noteRepositoryProvider)
+          .saveDailyContent(widget.date, _controller.text);
+      _hasLocalChanges = false;
+      ref.invalidate(notesProvider);
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Unable to save daily note: $error')),
+        );
+      }
+    } finally {
+      _saving = false;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isToday = DateUtils.isSameDay(widget.date, DateTime.now());
+    final content = _controller.text;
+    return Card(
+      margin: widget.mobile
+          ? EdgeInsets.zero
+          : const EdgeInsets.only(bottom: 12),
+      color: isToday
+          ? theme.colorScheme.primaryContainer.withValues(alpha: .28)
+          : null,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              displayDailyDate(widget.date),
+              style: theme.textTheme.titleMedium?.copyWith(
+                color: isToday ? theme.colorScheme.primary : null,
+              ),
+            ),
+            const SizedBox(height: 10),
+            if (widget.active)
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  TextField(
+                    controller: _controller,
+                    focusNode: _focusNode,
+                    autofocus: true,
+                    minLines: 4,
+                    maxLines: null,
+                    keyboardType: TextInputType.multiline,
+                    textCapitalization: TextCapitalization.sentences,
+                    style: theme.textTheme.bodyLarge,
+                    decoration: const InputDecoration(
+                      hintText: 'Write a note…',
+                      border: InputBorder.none,
+                      isDense: true,
+                    ),
+                    onChanged: _onChanged,
+                  ),
+                  if (widget.mobile) ...[
+                    const SizedBox(height: 10),
+                    _DailyMarkdownToolbar(onInsert: _insertMarkdown),
+                  ],
+                ],
+              )
+            else
+              InkWell(
+                onTap: () => widget.onActivate(widget.date),
+                borderRadius: BorderRadius.circular(8),
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(minHeight: 82),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 4),
+                    child: content.trim().isEmpty
+                        ? Text(
+                            'Tap to write…',
+                            style: theme.textTheme.bodyMedium?.copyWith(
+                              color: theme.colorScheme.onSurfaceVariant,
+                            ),
+                          )
+                        : MarkdownBody(data: content),
+                  ),
+                ),
+              ),
+            if (widget.scheduledTasks.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              Text('Scheduled tasks', style: theme.textTheme.labelLarge),
+              const SizedBox(height: 4),
+              for (final task in widget.scheduledTasks)
+                Text('• ${task.text}', style: theme.textTheme.bodyMedium),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _insertMarkdown(String prefix) {
+    final selection = _controller.selection;
+    final start = selection.isValid ? selection.start : _controller.text.length;
+    final end = selection.isValid ? selection.end : _controller.text.length;
+    final selected = _controller.text.substring(start, end);
+    final replacement = '$prefix$selected';
+    _controller.value = _controller.value.copyWith(
+      text: _controller.text.replaceRange(start, end, replacement),
+      selection: TextSelection.collapsed(offset: start + replacement.length),
+      composing: TextRange.empty,
+    );
+    _onChanged(_controller.text);
+    _focusNode.requestFocus();
+  }
+}
+
+class _DailyMarkdownToolbar extends StatelessWidget {
+  const _DailyMarkdownToolbar({required this.onInsert});
+
+  final ValueChanged<String> onInsert;
+
+  @override
+  Widget build(BuildContext context) => SingleChildScrollView(
+    scrollDirection: Axis.horizontal,
+    child: Row(
+      children: [
+        _button(context, Icons.title, 'Heading', '# '),
+        _button(context, Icons.task_alt, 'Task', '- [ ] '),
+        _button(context, Icons.format_list_bulleted, 'Bulleted list', '- '),
+        _button(context, Icons.format_list_numbered, 'Ordered list', '1. '),
+        _button(context, Icons.check_box_outlined, 'Checklist', '- [ ] '),
+        _button(context, Icons.format_quote, 'Quote', '> '),
+      ],
+    ),
+  );
+
+  Widget _button(
+    BuildContext context,
+    IconData icon,
+    String tooltip,
+    String text,
+  ) => IconButton(
+    tooltip: tooltip,
+    visualDensity: VisualDensity.compact,
+    onPressed: () => onInsert(text),
+    icon: Icon(icon, size: 20),
+  );
+}
+
 /// A pull that found the same remote head deserves an explicit confirmation:
 /// the note list does not otherwise visibly change.
 String syncRefreshMessage(SyncResult result) => result.noRemoteChanges
@@ -309,7 +895,6 @@ class _NoteListScreenState extends ConsumerState<NoteListScreen> {
   var _sort = NoteListSort.lastUpdated;
   var _loadedPreferences = false;
   var _createExpanded = false;
-  var _openingToday = false;
   var _onboardingComplete = false;
   var _backupPromptDismissed = false;
   final _summaryJobs = <String>{};
@@ -353,32 +938,6 @@ class _NoteListScreenState extends ConsumerState<NoteListScreen> {
         .read(secureStorageProvider)
         .write(key: backupPromptDismissedStorageKey, value: 'true');
     if (mounted) setState(() => _backupPromptDismissed = true);
-  }
-
-  Future<void> _openToday() async {
-    if (_openingToday) return;
-    setState(() => _openingToday = true);
-    try {
-      final date = DateTime.now().toIso8601String().substring(0, 10);
-      final note = await ref
-          .read(noteRepositoryProvider)
-          .findByPath('daily/$date.md');
-      if (!mounted) return;
-      if (note != null) {
-        context.push('/editor/${Uri.encodeComponent(note.id)}');
-      } else {
-        // A missing daily note remains a draft until the editor is saved.
-        context.push('/editor/new?daily=$date');
-      }
-    } catch (error) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Unable to open today\'s note: $error')),
-        );
-      }
-    } finally {
-      if (mounted) setState(() => _openingToday = false);
-    }
   }
 
   Future<void> _refresh() async {
@@ -506,6 +1065,7 @@ class _NoteListScreenState extends ConsumerState<NoteListScreen> {
   @override
   Widget build(BuildContext context) {
     final selectedView = ref.watch(homeSelectedViewProvider);
+    if (selectedView == NoteListView.daily) return const DailyNotesScreen();
     final backupStatus = ref.watch(backupStatusProvider).asData?.value;
     final notesState = ref.watch(notesProvider);
     final allNotes = notesState.asData?.value ?? const <Note>[];
@@ -523,14 +1083,10 @@ class _NoteListScreenState extends ConsumerState<NoteListScreen> {
             icon: const Icon(Icons.checklist),
           ),
           IconButton(
-            tooltip: 'Open today\'s note',
-            onPressed: _openingToday ? null : _openToday,
-            icon: _openingToday
-                ? const SizedBox.square(
-                    dimension: 20,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : const Icon(Icons.calendar_today),
+            tooltip: 'Open Daily',
+            onPressed: () => ref.read(homeSelectedViewProvider.notifier).state =
+                NoteListView.daily,
+            icon: const Icon(Icons.today),
           ),
           IconButton(
             tooltip: 'Search notes',
@@ -712,7 +1268,7 @@ class _HomeViewSelector extends StatelessWidget {
     padding: const EdgeInsets.fromLTRB(16, 6, 16, 4),
     child: SegmentedButton<NoteListView>(
       segments: const [
-        ButtonSegment(value: NoteListView.notes, label: Text('Notes')),
+        ButtonSegment(value: NoteListView.daily, label: Text('Daily')),
         ButtonSegment(
           value: NoteListView.meetings,
           label: Text('Meetings', softWrap: false),
@@ -1498,81 +2054,87 @@ class _NotePreviewBody extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     var taskIndex = 0;
-    return Column(
-      children: [
-        Container(
-          width: double.infinity,
-          margin: const EdgeInsets.fromLTRB(16, 16, 16, 0),
-          padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            color: Theme.of(context).colorScheme.surfaceContainerHighest,
-            borderRadius: BorderRadius.circular(16),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  Text(
-                    'Summary',
-                    style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                      color: Theme.of(context).colorScheme.primary,
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 4),
-              Text(
-                hasUsableSummary(note) ? note.summary! : 'No summary available',
-                style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                  fontStyle: FontStyle.italic,
-                  color: Theme.of(context).colorScheme.onSurfaceVariant,
-                ),
-              ),
-            ],
-          ),
-        ),
-        _NoteBacklinks(note: note),
-        if (note.isDaily) _DailyTaskBacklinks(daily: note),
-        Expanded(
-          child: Markdown(
-            data: NoteBodyEditorCodec.normalizeTaskListSpacing(
-              MarkdownContract.renderWikiLinks(note.body),
-            ),
+    return SingleChildScrollView(
+      child: Column(
+        children: [
+          Container(
+            width: double.infinity,
+            margin: const EdgeInsets.fromLTRB(16, 16, 16, 0),
             padding: const EdgeInsets.all(16),
-            styleSheet: MarkdownStyleSheet.fromTheme(
-              Theme.of(context),
-            ).copyWith(p: Theme.of(context).textTheme.bodyLarge),
-            // Match the editor: align the checkbox to the task text baseline.
-            listItemCrossAxisAlignment:
-                MarkdownListItemCrossAxisAlignment.baseline,
-            onTapLink: (_, href, _) => _openLink(context, ref, href),
-            imageBuilder: (uri, title, alt) =>
-                _AttachmentImage(notePath: note.path, uri: uri),
-            checkboxBuilder: (checked) {
-              final index = taskIndex++;
-              return Checkbox(
-                value: checked,
-                materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                visualDensity: VisualDensity.compact,
-                onChanged: (_) => _toggleTodo(ref, note, index),
-              );
-            },
+            decoration: BoxDecoration(
+              color: Theme.of(context).colorScheme.surfaceContainerHighest,
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Text(
+                      'Summary',
+                      style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                        color: Theme.of(context).colorScheme.primary,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  hasUsableSummary(note)
+                      ? note.summary!
+                      : 'No summary available',
+                  style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                    fontStyle: FontStyle.italic,
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ],
+            ),
           ),
-        ),
-      ],
+          Padding(
+            padding: const EdgeInsets.all(16),
+            child: MarkdownBody(
+              data: NoteBodyEditorCodec.normalizeTaskListSpacing(
+                MarkdownContract.renderWikiLinks(note.body),
+              ),
+              styleSheet: MarkdownStyleSheet.fromTheme(
+                Theme.of(context),
+              ).copyWith(p: Theme.of(context).textTheme.bodyLarge),
+              // Match AppFlowy's task rows: the 22px checkbox slot starts
+              // with the first text line, leaving its glyph vertically
+              // centered beside that line.
+              listItemCrossAxisAlignment:
+                  MarkdownListItemCrossAxisAlignment.start,
+              onTapLink: (_, href, _) => _openLink(context, ref, href),
+              imageBuilder: (uri, title, alt) =>
+                  _AttachmentImage(notePath: note.path, uri: uri),
+              checkboxBuilder: (checked) {
+                final index = taskIndex++;
+                return SizedBox.square(
+                  dimension: 22,
+                  child: Checkbox(
+                    value: checked,
+                    materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    visualDensity: VisualDensity.compact,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    onChanged: (_) => _toggleTodo(ref, note, index),
+                  ),
+                );
+              },
+            ),
+          ),
+          _NoteBacklinks(note: note),
+          if (note.isDaily) _DailyTaskBacklinks(daily: note),
+        ],
+      ),
     );
   }
 
   Future<void> _toggleTodo(WidgetRef ref, Note displayed, int taskIndex) async {
     final repository = ref.read(noteRepositoryProvider);
-    final current = await repository.get(displayed.id);
-    if (current == null) return;
-    await repository.save(
-      current,
-      title: current.title,
-      body: TodoMarkdown.toggleCheckboxAt(current.body, taskIndex),
-    );
+    await repository.toggleCheckbox(noteId: displayed.id, taskIndex: taskIndex);
     ref.invalidate(notesProvider);
   }
 
@@ -2404,6 +2966,15 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
   }
 
   Widget _buildEditor(BuildContext context, {required bool wideLayout}) {
+    const desktopEditorMaxWidth = 760.0;
+    const desktopEditorHorizontalPadding = 32.0;
+    // AppFlowy centers desktop blocks whose width is capped. On macOS, keep
+    // the readable line length but bring the content 80% closer to the left
+    // edge. The reduced internal padding completes that same adjustment when
+    // the window is narrower than the block's maximum width.
+    const macEditorHorizontalPadding = desktopEditorHorizontalPadding * 0.2;
+    final isMacDesktopEditor =
+        wideLayout && PlatformCapabilities.current.isDesktop;
     final editor = AppFlowyEditor(
       editorState: _editorState!,
       focusNode: _editorFocus,
@@ -2413,8 +2984,12 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
       // line length, even when it is running on an Android tablet.
       editorStyle: wideLayout
           ? EditorStyle.desktop(
-              maxWidth: 760,
-              padding: const EdgeInsets.symmetric(horizontal: 32),
+              maxWidth: desktopEditorMaxWidth,
+              padding: EdgeInsets.symmetric(
+                horizontal: isMacDesktopEditor
+                    ? macEditorHorizontalPadding
+                    : desktopEditorHorizontalPadding,
+              ),
               cursorColor: Theme.of(context).colorScheme.primary,
               textStyleConfiguration: TextStyleConfiguration(
                 text: Theme.of(context).textTheme.bodyLarge!,
@@ -2451,7 +3026,7 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
         child: editor,
       );
     }
-    return FloatingToolbar(
+    final toolbar = FloatingToolbar(
       editorState: _editorState!,
       editorScrollController: _wideEditorScrollController!,
       textDirection: Directionality.of(context),
@@ -2475,6 +3050,33 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
         linkItem,
       ],
       child: editor,
+    );
+    if (!isMacDesktopEditor) return toolbar;
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final editorWidth = math.min(
+          desktopEditorMaxWidth,
+          constraints.maxWidth,
+        );
+        final originalLeftInset =
+            (constraints.maxWidth - editorWidth) / 2 +
+            desktopEditorHorizontalPadding;
+        final targetLeftInset = originalLeftInset * 0.2;
+        final availableOffset = constraints.maxWidth - editorWidth;
+        final editorOffset = math.max(
+          0,
+          targetLeftInset - macEditorHorizontalPadding,
+        );
+        final alignmentX = availableOffset == 0
+            ? -1.0
+            : (editorOffset / availableOffset * 2 - 1).clamp(-1.0, 1.0);
+
+        return Align(
+          alignment: Alignment(alignmentX, -1),
+          child: SizedBox(width: editorWidth, child: toolbar),
+        );
+      },
     );
   }
 
