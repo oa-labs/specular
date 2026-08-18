@@ -393,10 +393,9 @@ class _DailyNotesScreenState extends ConsumerState<DailyNotesScreen> {
       appBar: AppBar(
         title: Text(wideLayout ? 'Daily' : displayDailyMonth(_selectedDate)),
         actions: [
-          if ((!wideLayout && !DateUtils.isSameDay(_selectedDate, _today)) ||
-              (wideLayout && _showToday))
+          if (wideLayout && _showToday)
             TextButton.icon(
-              onPressed: wideLayout ? _goToToday : () => _selectDate(_today),
+              onPressed: _goToToday,
               icon: const Icon(Icons.my_location),
               label: const Text('Today'),
             ),
@@ -501,6 +500,7 @@ class _DailyNotesScreenState extends ConsumerState<DailyNotesScreen> {
               key: ValueKey(_mondayFor(_selectedDate)),
               selectedDate: _selectedDate,
               onSelected: _selectDate,
+              onToday: () => _selectDate(_today),
             ),
           ),
         ),
@@ -591,10 +591,12 @@ class _MobileDailyDatePicker extends StatefulWidget {
     super.key,
     required this.selectedDate,
     required this.onSelected,
+    required this.onToday,
   });
 
   final DateTime selectedDate;
   final ValueChanged<DateTime> onSelected;
+  final VoidCallback onToday;
 
   @override
   State<_MobileDailyDatePicker> createState() => _MobileDailyDatePickerState();
@@ -641,39 +643,60 @@ class _MobileDailyDatePickerState extends State<_MobileDailyDatePicker> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return SizedBox(
-      height: 86,
-      child: PageView.builder(
-        controller: _controller,
-        onPageChanged: (page) {
-          final start = _initialWeek.add(
-            Duration(days: 7 * (page - _initialPage)),
-          );
-          final weekdayOffset = widget.selectedDate.weekday - 1;
-          widget.onSelected(start.add(Duration(days: weekdayOffset)));
-        },
-        itemBuilder: (context, page) {
-          final start = _initialWeek.add(
-            Duration(days: 7 * (page - _initialPage)),
-          );
-          return Row(
-            children: [
-              for (var offset = 0; offset != 7; offset++)
-                Expanded(
-                  child: _MobileDateCell(
-                    date: start.add(Duration(days: offset)),
-                    selected: DateUtils.isSameDay(
-                      start.add(Duration(days: offset)),
-                      widget.selectedDate,
+    final isTodaySelected = DateUtils.isSameDay(
+      widget.selectedDate,
+      DateTime.now(),
+    );
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        SizedBox(
+          height: 86,
+          child: PageView.builder(
+            controller: _controller,
+            onPageChanged: (page) {
+              final start = _initialWeek.add(
+                Duration(days: 7 * (page - _initialPage)),
+              );
+              final weekdayOffset = widget.selectedDate.weekday - 1;
+              widget.onSelected(start.add(Duration(days: weekdayOffset)));
+            },
+            itemBuilder: (context, page) {
+              final start = _initialWeek.add(
+                Duration(days: 7 * (page - _initialPage)),
+              );
+              return Row(
+                children: [
+                  for (var offset = 0; offset != 7; offset++)
+                    Expanded(
+                      child: _MobileDateCell(
+                        date: start.add(Duration(days: offset)),
+                        selected: DateUtils.isSameDay(
+                          start.add(Duration(days: offset)),
+                          widget.selectedDate,
+                        ),
+                        onPressed: widget.onSelected,
+                        theme: theme,
+                      ),
                     ),
-                    onPressed: widget.onSelected,
-                    theme: theme,
-                  ),
-                ),
-            ],
-          );
-        },
-      ),
+                ],
+              );
+            },
+          ),
+        ),
+        if (!isTodaySelected)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(8, 0, 8, 8),
+            child: Align(
+              alignment: Alignment.centerRight,
+              child: TextButton.icon(
+                onPressed: widget.onToday,
+                icon: const Icon(Icons.my_location_outlined, size: 18),
+                label: const Text('Today'),
+              ),
+            ),
+          ),
+      ],
     );
   }
 }
@@ -694,13 +717,17 @@ class _MobileDateCell extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     const weekdays = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+    final isToday = DateUtils.isSameDay(date, DateTime.now());
     final color = selected
         ? theme.colorScheme.onPrimary
+        : isToday
+        ? theme.colorScheme.primary
         : theme.colorScheme.onSurfaceVariant;
     return Semantics(
       button: true,
       selected: selected,
-      label: '${displayDailyDate(date)}${selected ? ', selected' : ''}',
+      label:
+          '${displayDailyDate(date)}${isToday ? ', today' : ''}${selected ? ', selected' : ''}',
       child: InkWell(
         onTap: () => onPressed(date),
         child: Center(
@@ -708,8 +735,11 @@ class _MobileDateCell extends StatelessWidget {
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
               Text(
-                weekdays[date.weekday - 1],
-                style: theme.textTheme.labelSmall,
+                isToday ? 'Today' : weekdays[date.weekday - 1],
+                style: theme.textTheme.labelSmall?.copyWith(
+                  color: isToday ? theme.colorScheme.primary : null,
+                  fontWeight: isToday ? FontWeight.w700 : null,
+                ),
               ),
               const SizedBox(height: 5),
               Container(
@@ -717,8 +747,17 @@ class _MobileDateCell extends StatelessWidget {
                 height: 32,
                 alignment: Alignment.center,
                 decoration: BoxDecoration(
-                  color: selected ? theme.colorScheme.primary : null,
+                  color: selected
+                      ? theme.colorScheme.primary
+                      : isToday
+                      ? theme.colorScheme.primaryContainer.withValues(
+                          alpha: .42,
+                        )
+                      : null,
                   borderRadius: BorderRadius.circular(9),
+                  border: isToday && !selected
+                      ? Border.all(color: theme.colorScheme.primary, width: 1.5)
+                      : null,
                 ),
                 child: Text(
                   '${date.day}',
@@ -860,12 +899,37 @@ class _DailyDayPanelState extends ConsumerState<_DailyDayPanel> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  displayDailyDate(widget.date),
-                  style: theme.textTheme.titleMedium?.copyWith(
-                    color: isToday ? colors.primary : null,
-                    fontWeight: FontWeight.w700,
-                  ),
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        displayDailyDate(widget.date),
+                        style: theme.textTheme.titleMedium?.copyWith(
+                          color: isToday ? colors.primary : null,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                    if (isToday)
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 4,
+                        ),
+                        decoration: BoxDecoration(
+                          color: colors.primaryContainer,
+                          borderRadius: BorderRadius.circular(99),
+                        ),
+                        child: Text(
+                          'TODAY',
+                          style: theme.textTheme.labelSmall?.copyWith(
+                            color: colors.onPrimaryContainer,
+                            fontWeight: FontWeight.w700,
+                            letterSpacing: .6,
+                          ),
+                        ),
+                      ),
+                  ],
                 ),
                 const SizedBox(height: 10),
                 if (widget.active)
@@ -928,7 +992,7 @@ class _DailyDayPanelState extends ConsumerState<_DailyDayPanel> {
                   Text('Scheduled tasks', style: theme.textTheme.labelLarge),
                   const SizedBox(height: 4),
                   for (final task in widget.scheduledTasks)
-                    Text('• ${task.text}', style: theme.textTheme.bodyMedium),
+                    _ScheduledBacklinkTask(backlink: task),
                 ],
               ],
             ),
