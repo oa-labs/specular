@@ -1,6 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:specular/src/domain/note.dart';
+import 'package:specular/src/domain/note_search.dart';
 import 'package:specular/src/sync/github_sync.dart';
 import 'package:specular/src/ui/specular_app.dart';
 import 'package:specular/src/ui/screens.dart';
@@ -64,6 +65,22 @@ void main() {
         deselectedFolders: const {},
       ).map((note) => note.title),
       ['Alpha', 'Zulu', 'Newest', 'Middle'],
+    );
+  });
+
+  test('filters notes with the shared search syntax without reordering', () {
+    final notes = [
+      note('Newest', 3, body: 'Unrelated'),
+      note('Project plan', 2, body: 'Approved'),
+      note('Archive', 1, body: 'Project plan from last year'),
+    ];
+
+    expect(
+      filterNotesBySearch(
+        notes,
+        NoteSearchQuery('project plan'),
+      ).map((note) => note.title),
+      ['Project plan', 'Archive'],
     );
   });
 

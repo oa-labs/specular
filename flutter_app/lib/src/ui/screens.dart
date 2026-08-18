@@ -29,6 +29,10 @@ import 'specular_app.dart';
 
 enum NoteListSort { lastUpdated, alphabetical }
 
+/// Keeps the home views comfortably readable in a macOS window while allowing
+/// the same layout to fill the available width on phones.
+const _homeContentMaxWidth = 840.0;
+
 /// The small, stable set of home views. Folders remain available when creating
 /// notes, but are deliberately not promoted into the primary navigation.
 enum NoteListView { daily, all, meetings, people }
@@ -293,6 +297,18 @@ List<Note> sortAndFilterNotes(
   return visible;
 }
 
+/// Filters an already-sorted note list with the shared search syntax while
+/// preserving the list's current order.
+List<Note> filterNotesBySearch(Iterable<Note> notes, NoteSearchQuery search) {
+  final visible = notes.toList();
+  if (search.isEmpty) return visible;
+  final matchingIds = rankNotes(
+    visible,
+    search,
+  ).map((result) => result.note.id).toSet();
+  return visible.where((note) => matchingIds.contains(note.id)).toList();
+}
+
 /// Reflect-style daily writing surface. Dates with no backing file remain
 /// editable placeholders until meaningful text is saved.
 class DailyNotesScreen extends ConsumerStatefulWidget {
@@ -389,11 +405,6 @@ class _DailyNotesScreenState extends ConsumerState<DailyNotesScreen> {
             onPressed: () => context.push('/todos'),
             icon: const Icon(Icons.checklist),
           ),
-          IconButton(
-            tooltip: 'Search notes',
-            onPressed: () => context.push('/search'),
-            icon: const Icon(Icons.search),
-          ),
           PopupMenuButton<_DailyAction>(
             tooltip: 'More actions',
             onSelected: (action) {
@@ -421,21 +432,29 @@ class _DailyNotesScreenState extends ConsumerState<DailyNotesScreen> {
           ),
         ],
       ),
-      body: Column(
-        children: [
-          _HomeViewSelector(
-            selectedView: NoteListView.daily,
-            onSelected: (view) =>
-                ref.read(homeSelectedViewProvider.notifier).state = view,
+      body: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: _homeContentMaxWidth),
+          child: SizedBox(
+            width: double.infinity,
+            child: Column(
+              children: [
+                _HomeViewSelector(
+                  selectedView: NoteListView.daily,
+                  onSelected: (view) =>
+                      ref.read(homeSelectedViewProvider.notifier).state = view,
+                ),
+                Expanded(
+                  child: state.isLoading
+                      ? const Center(child: CircularProgressIndicator())
+                      : wideLayout
+                      ? _buildDesktopTimeline(dailyByDate, scheduledByDate)
+                      : _buildMobileDay(dailyByDate, scheduledByDate),
+                ),
+              ],
+            ),
           ),
-          Expanded(
-            child: state.isLoading
-                ? const Center(child: CircularProgressIndicator())
-                : wideLayout
-                ? _buildDesktopTimeline(dailyByDate, scheduledByDate)
-                : _buildMobileDay(dailyByDate, scheduledByDate),
-          ),
-        ],
+        ),
       ),
     );
   }
@@ -452,7 +471,7 @@ class _DailyNotesScreenState extends ConsumerState<DailyNotesScreen> {
   ) => ListView.builder(
     controller: _scrollController,
     keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
-    padding: const EdgeInsets.fromLTRB(16, 8, 16, 40),
+    padding: const EdgeInsets.fromLTRB(16, 20, 16, 40),
     itemCount: _futureDays + _pastDays + 1,
     itemBuilder: (context, index) {
       final date = _today.add(Duration(days: _futureDays - index));
@@ -475,12 +494,16 @@ class _DailyNotesScreenState extends ConsumerState<DailyNotesScreen> {
     final key = formatDailyDate(_selectedDate);
     return Column(
       children: [
-        _MobileDailyDatePicker(
-          key: ValueKey(_mondayFor(_selectedDate)),
-          selectedDate: _selectedDate,
-          onSelected: _selectDate,
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 20, 16, 0),
+          child: _DailyDatePickerSurface(
+            child: _MobileDailyDatePicker(
+              key: ValueKey(_mondayFor(_selectedDate)),
+              selectedDate: _selectedDate,
+              onSelected: _selectDate,
+            ),
+          ),
         ),
-        const Divider(height: 1),
         Expanded(
           child: LayoutBuilder(
             builder: (context, constraints) => SingleChildScrollView(
@@ -575,6 +598,26 @@ class _MobileDailyDatePicker extends StatefulWidget {
 
   @override
   State<_MobileDailyDatePicker> createState() => _MobileDailyDatePickerState();
+}
+
+class _DailyDatePickerSurface extends StatelessWidget {
+  const _DailyDatePickerSurface({required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    return Material(
+      color: colors.surfaceContainerLow,
+      clipBehavior: Clip.antiAlias,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(14),
+        side: BorderSide(color: colors.outlineVariant.withValues(alpha: .5)),
+      ),
+      child: child,
+    );
+  }
 }
 
 class _MobileDailyDatePickerState extends State<_MobileDailyDatePicker> {
@@ -793,16 +836,23 @@ class _DailyDayPanelState extends ConsumerState<_DailyDayPanel> {
     final theme = Theme.of(context);
     final isToday = DateUtils.isSameDay(widget.date, DateTime.now());
     final content = _controller.text;
+    final colors = theme.colorScheme;
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       onTap: widget.active ? null : () => widget.onActivate(widget.date),
       child: Card(
+        elevation: 0,
+        clipBehavior: Clip.antiAlias,
         margin: widget.mobile
             ? EdgeInsets.zero
             : const EdgeInsets.only(bottom: 12),
         color: isToday
-            ? theme.colorScheme.primaryContainer.withValues(alpha: .28)
-            : null,
+            ? colors.primaryContainer.withValues(alpha: .38)
+            : colors.surfaceContainerLow,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(14),
+          side: BorderSide(color: colors.outlineVariant.withValues(alpha: .5)),
+        ),
         child: ConstrainedBox(
           constraints: BoxConstraints(minHeight: widget.minHeight ?? 0),
           child: Padding(
@@ -813,7 +863,8 @@ class _DailyDayPanelState extends ConsumerState<_DailyDayPanel> {
                 Text(
                   displayDailyDate(widget.date),
                   style: theme.textTheme.titleMedium?.copyWith(
-                    color: isToday ? theme.colorScheme.primary : null,
+                    color: isToday ? colors.primary : null,
+                    fontWeight: FontWeight.w700,
                   ),
                 ),
                 const SizedBox(height: 10),
@@ -951,6 +1002,8 @@ class NoteListScreen extends ConsumerStatefulWidget {
 
 class _NoteListScreenState extends ConsumerState<NoteListScreen> {
   var _sort = NoteListSort.lastUpdated;
+  var _allSearchText = '';
+  final _allSearchController = TextEditingController();
   var _loadedPreferences = false;
   var _createExpanded = false;
   var _onboardingComplete = false;
@@ -967,6 +1020,12 @@ class _NoteListScreenState extends ConsumerState<NoteListScreen> {
     if (!mounted) return;
     setState(() => _loadedPreferences = true);
     _loadFirstRunState();
+  }
+
+  @override
+  void dispose() {
+    _allSearchController.dispose();
+    super.dispose();
   }
 
   Future<void> _loadFirstRunState() async {
@@ -1128,7 +1187,11 @@ class _NoteListScreenState extends ConsumerState<NoteListScreen> {
     final notesState = ref.watch(notesProvider);
     final allNotes = notesState.asData?.value ?? const <Note>[];
     if (notesState.hasValue) unawaited(_generateMissingSummaries(allNotes));
-    final notes = sortAndFilterNotes(allNotes, sort: _sort, view: selectedView);
+    final allSearch = NoteSearchQuery(_allSearchText);
+    final notes = filterNotesBySearch(
+      sortAndFilterNotes(allNotes, sort: _sort, view: selectedView),
+      selectedView == NoteListView.all ? allSearch : NoteSearchQuery(''),
+    );
     return Scaffold(
       appBar: AppBar(
         title: SpecularWordmark(
@@ -1139,11 +1202,6 @@ class _NoteListScreenState extends ConsumerState<NoteListScreen> {
             tooltip: 'View to-dos',
             onPressed: () => context.push('/todos'),
             icon: const Icon(Icons.checklist),
-          ),
-          IconButton(
-            tooltip: 'Search notes',
-            onPressed: () => context.push('/search'),
-            icon: const Icon(Icons.search),
           ),
           if (usesWideLayout(context))
             PopupMenuButton<String>(
@@ -1200,56 +1258,85 @@ class _NoteListScreenState extends ConsumerState<NoteListScreen> {
       ),
       body: !_loadedPreferences || notesState.isLoading
           ? const Center(child: CircularProgressIndicator())
-          : Column(
-              children: [
-                _HomeViewSelector(
-                  selectedView: selectedView,
-                  onSelected: (view) =>
-                      ref.read(homeSelectedViewProvider.notifier).state = view,
+          : Center(
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(
+                  maxWidth: _homeContentMaxWidth,
                 ),
-                Expanded(
-                  child: RefreshIndicator(
-                    onRefresh: _refresh,
-                    child: notesState.when(
-                      data: (_) {
-                        if (allNotes.isEmpty && !_onboardingComplete) {
-                          return _FirstRunWelcome(
-                            onStart: () => _completeOnboarding(),
-                            onCreateBackup: () => _completeOnboarding(
-                              destination: '/settings?setup=guided',
+                child: SizedBox(
+                  width: double.infinity,
+                  child: Column(
+                    children: [
+                      _HomeViewSelector(
+                        selectedView: selectedView,
+                        onSelected: (view) =>
+                            ref.read(homeSelectedViewProvider.notifier).state =
+                                view,
+                      ),
+                      if (selectedView == NoteListView.all)
+                        _AllNotesSearchField(
+                          controller: _allSearchController,
+                          onChanged: (value) =>
+                              setState(() => _allSearchText = value),
+                          onClear: () {
+                            _allSearchController.clear();
+                            setState(() => _allSearchText = '');
+                          },
+                        ),
+                      Expanded(
+                        child: RefreshIndicator(
+                          onRefresh: _refresh,
+                          child: notesState.when(
+                            data: (_) {
+                              if (allNotes.isEmpty && !_onboardingComplete) {
+                                return _FirstRunWelcome(
+                                  onStart: () => _completeOnboarding(),
+                                  onCreateBackup: () => _completeOnboarding(
+                                    destination: '/settings?setup=guided',
+                                  ),
+                                  onConnectExisting: () => _completeOnboarding(
+                                    destination: '/settings?setup=existing',
+                                  ),
+                                );
+                              }
+                              if (notes.isEmpty) {
+                                return _RefreshableMessage(
+                                  selectedView == NoteListView.all &&
+                                          !allSearch.isEmpty
+                                      ? 'No matching notes.'
+                                      : allNotes.isEmpty
+                                      ? 'No notes yet. Open Daily to start today\'s note.'
+                                      : 'No ${selectedView.name} yet.',
+                                );
+                              }
+                              return _HomeNoteList(
+                                notes: notes,
+                                selectedView: selectedView,
+                                searchQuery: selectedView == NoteListView.all
+                                    ? allSearch
+                                    : null,
+                                showBackupPrompt:
+                                    backupStatus?.kind ==
+                                        BackupStatusKind.localOnly &&
+                                    !_backupPromptDismissed,
+                                backupStatus: backupStatus,
+                                onOpenSettings: () => context.push('/settings'),
+                                onDismissBackupPrompt: _dismissBackupPrompt,
+                              );
+                            },
+                            error: (error, _) => _RefreshableMessage(
+                              'Unable to load notes: $error',
                             ),
-                            onConnectExisting: () => _completeOnboarding(
-                              destination: '/settings?setup=existing',
+                            loading: () => const Center(
+                              child: CircularProgressIndicator(),
                             ),
-                          );
-                        }
-                        if (notes.isEmpty) {
-                          return _RefreshableMessage(
-                            allNotes.isEmpty
-                                ? 'No notes yet. Tap the calendar to start today\'s note.'
-                                : 'No ${selectedView.name} yet.',
-                          );
-                        }
-                        return _HomeNoteList(
-                          notes: notes,
-                          selectedView: selectedView,
-                          showBackupPrompt:
-                              backupStatus?.kind ==
-                                  BackupStatusKind.localOnly &&
-                              !_backupPromptDismissed,
-                          backupStatus: backupStatus,
-                          onOpenSettings: () => context.push('/settings'),
-                          onDismissBackupPrompt: _dismissBackupPrompt,
-                        );
-                      },
-                      error: (error, _) =>
-                          _RefreshableMessage('Unable to load notes: $error'),
-                      loading: () =>
-                          const Center(child: CircularProgressIndicator()),
-                    ),
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
                 ),
-              ],
+              ),
             ),
       floatingActionButton: usesWideLayout(context)
           ? null
@@ -1318,31 +1405,103 @@ class _HomeViewSelector extends StatelessWidget {
   final ValueChanged<NoteListView> onSelected;
 
   @override
-  Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.fromLTRB(16, 6, 16, 4),
-    child: SegmentedButton<NoteListView>(
-      segments: const [
-        ButtonSegment(value: NoteListView.daily, label: Text('Daily')),
-        ButtonSegment(
-          value: NoteListView.meetings,
-          label: Text('Meetings', softWrap: false),
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+      child: SegmentedButton<NoteListView>(
+        segments: const [
+          ButtonSegment(value: NoteListView.daily, label: Text('Daily')),
+          ButtonSegment(
+            value: NoteListView.meetings,
+            label: Text('Meetings', softWrap: false),
+          ),
+          ButtonSegment(value: NoteListView.people, label: Text('People')),
+          ButtonSegment(value: NoteListView.all, label: Text('All')),
+        ],
+        selected: {selectedView},
+        showSelectedIcon: false,
+        style: ButtonStyle(
+          minimumSize: const WidgetStatePropertyAll(Size(0, 44)),
+          padding: const WidgetStatePropertyAll(
+            EdgeInsets.symmetric(horizontal: 12),
+          ),
+          side: WidgetStatePropertyAll(
+            BorderSide(color: colors.outlineVariant),
+          ),
+          backgroundColor: WidgetStateProperty.resolveWith(
+            (states) => states.contains(WidgetState.selected)
+                ? colors.secondaryContainer
+                : colors.surfaceContainerLow,
+          ),
+          foregroundColor: WidgetStateProperty.resolveWith(
+            (states) => states.contains(WidgetState.selected)
+                ? colors.onSecondaryContainer
+                : colors.onSurfaceVariant,
+          ),
+          textStyle: WidgetStateProperty.resolveWith(
+            (states) => TextStyle(
+              fontSize: 14,
+              fontWeight: states.contains(WidgetState.selected)
+                  ? FontWeight.w700
+                  : FontWeight.w500,
+            ),
+          ),
         ),
-        ButtonSegment(value: NoteListView.people, label: Text('People')),
-        ButtonSegment(value: NoteListView.all, label: Text('All')),
-      ],
-      selected: {selectedView},
-      showSelectedIcon: false,
-      style: const ButtonStyle(
-        visualDensity: VisualDensity.compact,
-        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-        padding: WidgetStatePropertyAll(
-          EdgeInsets.symmetric(horizontal: 8, vertical: 7),
-        ),
-        textStyle: WidgetStatePropertyAll(TextStyle(fontSize: 13)),
+        onSelectionChanged: (selection) => onSelected(selection.first),
       ),
-      onSelectionChanged: (selection) => onSelected(selection.first),
-    ),
-  );
+    );
+  }
+}
+
+class _AllNotesSearchField extends StatelessWidget {
+  const _AllNotesSearchField({
+    required this.controller,
+    required this.onChanged,
+    required this.onClear,
+  });
+
+  final TextEditingController controller;
+  final ValueChanged<String> onChanged;
+  final VoidCallback onClear;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    final border = OutlineInputBorder(
+      borderRadius: BorderRadius.circular(14),
+      borderSide: BorderSide(color: colors.outlineVariant),
+    );
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 20, 16, 20),
+      child: SizedBox(
+        height: 48,
+        child: TextField(
+          controller: controller,
+          onChanged: onChanged,
+          textInputAction: TextInputAction.search,
+          decoration: InputDecoration(
+            hintText: 'Search notes',
+            filled: true,
+            fillColor: colors.surfaceContainerLow,
+            prefixIcon: const Icon(Icons.search),
+            suffixIcon: controller.text.isEmpty
+                ? null
+                : IconButton(
+                    tooltip: 'Clear search',
+                    onPressed: onClear,
+                    icon: const Icon(Icons.close),
+                  ),
+            enabledBorder: border,
+            focusedBorder: border.copyWith(
+              borderSide: BorderSide(color: colors.primary, width: 1.5),
+            ),
+            contentPadding: const EdgeInsets.symmetric(vertical: 11),
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 class _RefreshableMessage extends StatelessWidget {
@@ -1486,6 +1645,7 @@ class _HomeNoteList extends StatelessWidget {
   const _HomeNoteList({
     required this.notes,
     required this.selectedView,
+    this.searchQuery,
     required this.showBackupPrompt,
     required this.backupStatus,
     required this.onOpenSettings,
@@ -1494,6 +1654,7 @@ class _HomeNoteList extends StatelessWidget {
 
   final List<Note> notes;
   final NoteListView selectedView;
+  final NoteSearchQuery? searchQuery;
   final bool showBackupPrompt;
   final BackupStatus? backupStatus;
   final VoidCallback onOpenSettings;
@@ -1503,39 +1664,70 @@ class _HomeNoteList extends StatelessWidget {
   Widget build(BuildContext context) {
     final children = <Widget>[
       if (showBackupPrompt)
-        _BackupStatusCard(
-          status: backupStatus!,
-          onOpenSettings: onOpenSettings,
-          onDismiss: onDismissBackupPrompt,
+        Padding(
+          padding: const EdgeInsets.only(bottom: 10),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(14),
+            child: _BackupStatusCard(
+              status: backupStatus!,
+              onOpenSettings: onOpenSettings,
+              onDismiss: onDismissBackupPrompt,
+            ),
+          ),
         ),
     ];
     if (selectedView == NoteListView.meetings) {
       for (final group in groupMeetingsByDate(notes)) {
         children.add(_MeetingDateHeader(date: group.date));
         for (final note in group.notes) {
-          children
-            ..add(_NoteTile(key: ValueKey(note.id), note: note))
-            ..add(const Divider(height: 1));
+          children.add(
+            _HomeNoteCard(
+              child: _NoteTile(key: ValueKey(note.id), note: note),
+            ),
+          );
         }
       }
     } else {
       for (final note in notes) {
-        children
-          ..add(
-            _NoteTile(
+        children.add(
+          _HomeNoteCard(
+            child: _NoteTile(
               key: ValueKey(note.id),
               note: note,
               showPersonEmail: selectedView == NoteListView.people,
+              searchQuery: searchQuery,
             ),
-          )
-          ..add(const Divider(height: 1));
+          ),
+        );
       }
     }
-    if (children.last is Divider) children.removeLast();
     return ListView(
       physics: const AlwaysScrollableScrollPhysics(),
-      padding: const EdgeInsets.only(bottom: 88),
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 96),
       children: children,
+    );
+  }
+}
+
+class _HomeNoteCard extends StatelessWidget {
+  const _HomeNoteCard({required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Material(
+        color: colors.surfaceContainerLow,
+        clipBehavior: Clip.antiAlias,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(14),
+          side: BorderSide(color: colors.outlineVariant.withValues(alpha: .5)),
+        ),
+        child: child,
+      ),
     );
   }
 }
@@ -1652,6 +1844,8 @@ class _NoteTileState extends ConsumerState<_NoteTile>
   Widget build(BuildContext context) {
     final note = widget.note;
     final type = noteObjectType(note);
+    final plainTitle = MarkdownContract.plainText(note.title);
+    final title = plainTitle.isEmpty ? 'Untitled' : plainTitle;
     final summary = hasUsableSummary(note) ? note.summary! : '';
     final email = widget.searchExcerpt == null && widget.showPersonEmail
         ? noteEmailAddress(note)
@@ -1661,10 +1855,11 @@ class _NoteTileState extends ConsumerState<_NoteTile>
         (widget.showPersonEmail ? email ?? '' : summary);
     final hasMetadata = note.isConflict || email != null;
     final theme = Theme.of(context);
+    final updatedAt = MaterialLocalizations.of(
+      context,
+    ).formatShortDate(note.updatedAt);
     return Semantics(
-      label:
-          '${note.title.isEmpty ? 'Untitled' : note.title}, '
-          '${_isPinned ? 'pinned' : 'not pinned'}',
+      label: '$title, ${_isPinned ? 'pinned' : 'not pinned'}',
       hint: 'Press and hold to ${_isPinned ? 'unpin' : 'pin'}',
       child: AnimatedBuilder(
         animation: _holdProgress,
@@ -1708,11 +1903,13 @@ class _NoteTileState extends ConsumerState<_NoteTile>
                     _NoteKindIcons(note: note, type: type),
                     Expanded(
                       child: _HighlightedText(
-                        text: note.title.isEmpty ? 'Untitled' : note.title,
+                        text: title,
                         query: widget.searchQuery,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: theme.textTheme.titleMedium,
+                        style: theme.textTheme.titleMedium?.copyWith(
+                          fontWeight: FontWeight.w700,
+                        ),
                       ),
                     ),
                     if (_isPinned)
@@ -1785,6 +1982,15 @@ class _NoteTileState extends ConsumerState<_NoteTile>
                       ],
                     ),
                   ),
+                Padding(
+                  padding: const EdgeInsets.only(top: 8),
+                  child: Text(
+                    'Updated $updatedAt',
+                    style: theme.textTheme.labelSmall?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ),
               ],
             ),
           ),
