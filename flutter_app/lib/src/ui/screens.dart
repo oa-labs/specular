@@ -394,6 +394,31 @@ class _DailyNotesScreenState extends ConsumerState<DailyNotesScreen> {
             onPressed: () => context.push('/search'),
             icon: const Icon(Icons.search),
           ),
+          PopupMenuButton<_DailyAction>(
+            tooltip: 'More actions',
+            onSelected: (action) {
+              switch (action) {
+                case _DailyAction.settings:
+                  context.push('/settings');
+              }
+            },
+            itemBuilder: (_) => const [
+              PopupMenuItem(
+                value: _DailyAction.settings,
+                child: Row(
+                  children: [
+                    Icon(Icons.settings),
+                    SizedBox(width: 12),
+                    Text('Settings'),
+                  ],
+                ),
+              ),
+            ],
+            child: const Padding(
+              padding: EdgeInsets.all(12),
+              child: Icon(Icons.more_vert),
+            ),
+          ),
         ],
       ),
       body: Column(
@@ -1116,12 +1141,6 @@ class _NoteListScreenState extends ConsumerState<NoteListScreen> {
             icon: const Icon(Icons.checklist),
           ),
           IconButton(
-            tooltip: 'Open Daily',
-            onPressed: () => ref.read(homeSelectedViewProvider.notifier).state =
-                NoteListView.daily,
-            icon: const Icon(Icons.today),
-          ),
-          IconButton(
             tooltip: 'Search notes',
             onPressed: () => context.push('/search'),
             icon: const Icon(Icons.search),
@@ -1286,6 +1305,8 @@ class _NoteListScreenState extends ConsumerState<NoteListScreen> {
 }
 
 enum _HomeAction { viewOptions, settings }
+
+enum _DailyAction { settings }
 
 class _HomeViewSelector extends StatelessWidget {
   const _HomeViewSelector({
@@ -3701,6 +3722,8 @@ class _TodoNoteGroup extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final note = todos.first;
+    final theme = Theme.of(context);
+    final noteLabelColor = theme.colorScheme.onSurfaceVariant;
     return Padding(
       padding: const EdgeInsets.only(top: 10, bottom: 4),
       child: Column(
@@ -3711,9 +3734,19 @@ class _TodoNoteGroup extends StatelessWidget {
                 context.push('/note/${Uri.encodeComponent(note.noteId)}'),
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-              child: Text(
-                note.noteTitle,
-                style: Theme.of(context).textTheme.titleSmall,
+              child: Row(
+                children: [
+                  Icon(Icons.note_outlined, size: 18, color: noteLabelColor),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      note.noteTitle,
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        color: noteLabelColor,
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ),
           ),

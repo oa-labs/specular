@@ -67,7 +67,7 @@ void main() {
         body: '+ [ ] Ship',
       );
       final remoteContent = note.rawMarkdown;
-      await repository.markSynced(note, 'outdated-blob');
+      await repository.markSynced(note, 'base-blob');
       await repository.updateSummary(
         (await repository.get(note.id))!,
         'Generated checklist summary',
@@ -95,6 +95,155 @@ void main() {
         (await repository.watchNotes().first).where((note) => note.isConflict),
         isEmpty,
       );
+    },
+  );
+
+  test(
+    'records why a remote change preserved local edits as a conflict',
+    () async {
+      final root = await Directory.systemTemp.createTemp(
+        'specular-github-test-',
+      );
+      final database = AppDatabase.forTesting(NativeDatabase.memory());
+      final repository = NoteRepository(
+        database,
+        Directory('${root.path}/notes'),
+      );
+      final note = await repository.create(
+        title: 'Project meeting',
+        body: 'Original agenda',
+      );
+      await repository.markSynced(note, 'base-blob');
+      await repository.save(
+        (await repository.get(note.id))!,
+        title: note.title,
+        body: 'Local meeting notes',
+      );
+      final github = _FakeGitHub(
+        path: note.path,
+        content: note.rawMarkdown,
+        remoteBlobSha: 'remote-blob',
+        additionalBlobs: {'base-blob': note.rawMarkdown},
+      );
+      addTearDown(() async {
+        await database.close();
+        await root.delete(recursive: true);
+      });
+      final progress = <String>[];
+
+      final result = await GitHubSyncEngine(
+        repository,
+        const FlutterSecureStorage(),
+        dio: Dio()..httpClientAdapter = github.adapter,
+        settingsLoader: () async => const GitHubSettings(
+          token: 'test-token',
+          owner: 'owner',
+          repo: 'notes',
+        ),
+      ).sync(onProgress: (update) => progress.add(update.message));
+
+      expect(result.isSuccess, isTrue);
+      expect(
+        progress,
+        contains(
+          'Conflict preserved: the remote note changed while local edits were pending.',
+        ),
+      );
+    },
+  );
+
+  test(
+    'accepts a remote content edit when a summary-only local row has a stale identity',
+    () async {
+      final root = await Directory.systemTemp.createTemp(
+        'specular-github-test-',
+      );
+      final database = AppDatabase.forTesting(NativeDatabase.memory());
+      final repository = NoteRepository(
+        database,
+        Directory('${root.path}/notes'),
+      );
+      final note = await repository.create(
+        title: 'Project meeting',
+        body: 'Original agenda',
+      );
+      await repository.markSynced(note, 'base-blob');
+      await repository.updateSummary(
+        (await repository.get(note.id))!,
+        'Generated meeting summary',
+      );
+      await repository.preserveConflict((await repository.get(note.id))!);
+      const remoteId = '01n9h9zr8m4mt0twnm39db2xwv';
+      final remoteContent = note.rawMarkdown
+          .replaceFirst('Original agenda', 'Updated agenda from GitHub')
+          .replaceFirst('id: ${note.id}', 'id: $remoteId');
+      final github = _FakeGitHub(
+        path: note.path,
+        content: remoteContent,
+        remoteBlobSha: 'remote-blob',
+        additionalBlobs: {'base-blob': note.rawMarkdown},
+      );
+      addTearDown(() async {
+        await database.close();
+        await root.delete(recursive: true);
+      });
+
+      final result = await GitHubSyncEngine(
+        repository,
+        const FlutterSecureStorage(),
+        dio: Dio()..httpClientAdapter = github.adapter,
+        settingsLoader: () async => const GitHubSettings(
+          token: 'test-token',
+          owner: 'owner',
+          repo: 'notes',
+        ),
+      ).sync();
+
+      expect(result.isSuccess, isTrue);
+      expect(await repository.get(note.id), isNull);
+      final current = (await repository.findByPath(note.path))!;
+      expect(current.id, remoteId);
+      expect(current.body, contains('Updated agenda from GitHub'));
+      expect(current.isDirty, isFalse);
+      expect(
+        (await repository.watchNotes().first).where((note) => note.isConflict),
+        isEmpty,
+      );
+      expect(
+        github.blobRequests,
+        contains('/repos/owner/notes/git/blobs/base-blob'),
+      );
+    },
+  );
+
+  test(
+    'preserves an unchanged local version in only one conflict copy',
+    () async {
+      final root = await Directory.systemTemp.createTemp(
+        'specular-github-test-',
+      );
+      final database = AppDatabase.forTesting(NativeDatabase.memory());
+      final repository = NoteRepository(
+        database,
+        Directory('${root.path}/notes'),
+      );
+      final note = await repository.create(
+        title: 'Project meeting',
+        body: 'My local meeting notes',
+      );
+      addTearDown(() async {
+        await database.close();
+        await root.delete(recursive: true);
+      });
+
+      await repository.preserveConflict(note);
+      await repository.preserveConflict(note);
+
+      final conflicts = (await repository.watchNotes().first)
+          .where((candidate) => candidate.isConflict)
+          .toList();
+      expect(conflicts, hasLength(1));
+      expect(conflicts.single.body, note.body);
     },
   );
 
@@ -519,6 +668,8 @@ class _FakeGitHub {
   _FakeGitHub({
     required this.path,
     required this.content,
+    this.remoteBlobSha = 'base-blob',
+    this.additionalBlobs = const {},
     this.pauseFirstRepositoryRead = false,
     this.rejectFirstRefUpdate = false,
     this.refUpdateErrorMessage,
@@ -526,6 +677,8 @@ class _FakeGitHub {
 
   final String path;
   final String content;
+  final String remoteBlobSha;
+  final Map<String, String> additionalBlobs;
   final bool pauseFirstRepositoryRead;
   final bool rejectFirstRefUpdate;
   final String? refUpdateErrorMessage;
@@ -582,6 +735,23 @@ class _FakeGitHub {
     if (request.method == 'GET' && requestPath.contains('/compare/')) {
       compareRequests++;
     }
+    if (request.method == 'GET' && requestPath.contains('/git/blobs/')) {
+      final sha = requestPath.substring(requestPath.lastIndexOf('/') + 1);
+      final blobContent = sha == remoteBlobSha
+          ? content
+          : sha == 'changed-blob'
+          ? _changedContent ?? content
+          : additionalBlobs[sha];
+      if (blobContent != null) {
+        return ResponseBody.fromString(
+          jsonEncode({'content': base64Encode(utf8.encode(blobContent))}),
+          200,
+          headers: {
+            Headers.contentTypeHeader: [Headers.jsonContentType],
+          },
+        );
+      }
+    }
     var statusCode = 200;
     final response = switch ((request.method, requestPath)) {
       ('GET', '/repos/owner/notes') => {'default_branch': 'main'},
@@ -597,14 +767,8 @@ class _FakeGitHub {
       ('GET', '/repos/owner/notes/git/trees/tree-1') => {
         'truncated': false,
         'tree': [
-          {'type': 'blob', 'path': path, 'sha': 'base-blob'},
+          {'type': 'blob', 'path': path, 'sha': remoteBlobSha},
         ],
-      },
-      ('GET', '/repos/owner/notes/git/blobs/base-blob') => {
-        'content': base64Encode(utf8.encode(content)),
-      },
-      ('GET', '/repos/owner/notes/git/blobs/changed-blob') => {
-        'content': base64Encode(utf8.encode(_changedContent ?? content)),
       },
       ('GET', '/repos/owner/notes/compare/head-1...head-2') => {
         'status': 'ahead',

@@ -365,8 +365,16 @@ class NoteRepository {
     final parsed = MarkdownContract.parse(raw);
     final id = MarkdownContract.identityFor(path, parsed.id);
     final previous = await get(id);
+    final pathOccupant = await findByPath(path);
     final movedFromPath = previous?.path;
     final rebaseMovedNote = previous?.rawMarkdown == raw;
+    // A remote file and an older local row can resolve to different identities
+    // at the same path (for example, after a path-derived import or missing
+    // frontmatter). The path index is unique, so remove that stale occupant
+    // before inserting the remote note under its canonical identity.
+    if (pathOccupant != null && pathOccupant.id != id) {
+      await _removeStoredNote(pathOccupant);
+    }
     if (previous != null && previous.path != path) {
       final oldFile = _file(previous.path);
       if (await oldFile.exists()) await oldFile.delete();
@@ -539,47 +547,54 @@ class NoteRepository {
 
   /// Applies remote deletions without treating unsynced local notes as lost.
   /// Local edits to an already-synced note are retained as conflict copies.
-  Future<void> reconcileRemoteRemovals(Set<String> remotePaths) async {
+  Future<void> reconcileRemoteRemovals(
+    Set<String> remotePaths, {
+    void Function()? onConflictPreserved,
+  }) async {
     final localNotes = (await _db.select(_db.noteRows).get()).map(_toNote);
     for (final note in localNotes) {
       final expectedRemotePath = note.isPendingDeletion
           ? note.pendingRenameFromPath ?? note.path
           : note.path;
       if (remotePaths.contains(expectedRemotePath)) continue;
-      await _reconcileRemoteRemoval(note);
+      if (await _reconcileRemoteRemoval(note)) onConflictPreserved?.call();
     }
   }
 
   /// Applies one known remote deletion without requiring a complete tree
   /// scan. This is used by GitHub's compare response for fast incremental
   /// pulls.
-  Future<void> reconcileRemoteRemoval(String remotePath) async {
+  Future<void> reconcileRemoteRemoval(
+    String remotePath, {
+    void Function()? onConflictPreserved,
+  }) async {
     final localNotes = (await _db.select(_db.noteRows).get()).map(_toNote);
     for (final note in localNotes) {
       final expectedRemotePath = note.isPendingDeletion
           ? note.pendingRenameFromPath ?? note.path
           : note.path;
       if (expectedRemotePath != remotePath) continue;
-      await _reconcileRemoteRemoval(note);
+      if (await _reconcileRemoteRemoval(note)) onConflictPreserved?.call();
     }
   }
 
-  Future<void> _reconcileRemoteRemoval(Note note) async {
+  Future<bool> _reconcileRemoteRemoval(Note note) async {
     // A pending deletion is already satisfied when its path is absent from
     // the remote snapshot. This includes local-only conflict copies, which
     // must not remain forever in the sync queue.
     if (note.isPendingDeletion) {
       await completeDeletion(note);
-      return;
+      return false;
     }
-    if (note.pendingRenameFromPath != null) return;
+    if (note.pendingRenameFromPath != null) return false;
 
     // A note with no remote SHA has never been published, so its absence from
     // the remote tree is expected. Clean conflict copies, however, have a
     // remote SHA and should follow a remote deletion just like any other note.
-    if (note.lastRemoteSha == null) return;
-    if (note.isDirty) await preserveConflict(note);
+    if (note.lastRemoteSha == null) return false;
+    final conflictPreserved = note.isDirty && await preserveConflict(note);
     await _removeStoredNote(note);
+    return conflictPreserved;
   }
 
   Future<void> setPinned(Note note, bool isPinned) =>
@@ -587,7 +602,28 @@ class NoteRepository {
         NoteRowsCompanion(isPinned: Value(isPinned)),
       );
 
-  Future<void> preserveConflict(Note note) async {
+  /// Returns whether a new recoverable conflict copy was created.
+  Future<bool> preserveConflict(Note note) async {
+    // A sync can encounter the same unsynced local version more than once
+    // (for example after a failed push or a retry). Keep that version as one
+    // conflict copy, rather than creating another local-only record each
+    // time. A changed body or aliases is a genuinely new version and remains
+    // separately recoverable.
+    final conflictTitle = '${note.title} (conflict)';
+    final existing =
+        await ((_db.select(_db.noteRows)..where(
+                (row) =>
+                    row.isConflict.equals(true) &
+                    row.isDirty.equals(true) &
+                    row.isPendingDeletion.equals(false) &
+                    row.title.equals(conflictTitle) &
+                    row.body.equals(note.body) &
+                    row.aliases.equals(_encodeAliases(note.aliases)),
+              ))
+              ..limit(1))
+            .getSingleOrNull();
+    if (existing != null) return false;
+
     final suffix = DateTime.now().toIso8601String().substring(0, 10);
     final directory = p.dirname(note.path);
     final extension = p.extension(note.path);
@@ -600,7 +636,7 @@ class NoteRepository {
     await _put(
       NoteRowsCompanion.insert(
         id: conflictId,
-        title: '${note.title} (conflict)',
+        title: conflictTitle,
         path: conflictPath,
         rawMarkdown: raw,
         body: note.body,
@@ -615,6 +651,28 @@ class NoteRepository {
       ),
       writeFile: true,
     );
+    return true;
+  }
+
+  /// Removes local-only copies of [note]'s exact content when that content is
+  /// known to be derived metadata rather than a user edit. This prevents an
+  /// old, summary-only false conflict from being uploaded on a later sync.
+  Future<void> discardMatchingConflictCopies(Note note) async {
+    final conflictTitle = '${note.title} (conflict)';
+    final conflicts =
+        (await (_db.select(_db.noteRows)..where(
+                  (row) =>
+                      row.isConflict.equals(true) &
+                      row.title.equals(conflictTitle) &
+                      row.body.equals(note.body) &
+                      row.aliases.equals(_encodeAliases(note.aliases)),
+                ))
+                .get())
+            .map(_toNote)
+            .toList();
+    for (final conflict in conflicts) {
+      await _removeStoredNote(conflict);
+    }
   }
 
   Future<void> _removeStoredNote(Note note) async {

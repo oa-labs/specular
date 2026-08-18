@@ -6,10 +6,18 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 import '../data/note_repository.dart';
 import '../domain/markdown.dart';
+import '../domain/note.dart';
 
 const initialSyncCompletedStorageKey = 'initial_sync_completed';
 const syncDiagnosticsStorageKey = 'github_sync_diagnostics';
 const lastSuccessfulGitHubSyncStorageKey = 'last_successful_github_sync_at';
+
+const _remoteChangedConflictReason =
+    'Conflict preserved: the remote note changed while local edits were pending.';
+const _remoteMoveConflictReason =
+    'Conflict preserved: the remote note moved while local edits were pending.';
+const _remoteDeletionConflictReason =
+    'Conflict preserved: the remote note was deleted while local edits were pending.';
 
 /// A concrete unit of sync work reported to the foreground UI. The totals are
 /// based on the repository snapshot, rather than an indeterminate timer, so
@@ -109,17 +117,19 @@ class SyncDiagnostics {
   static Future<void> setEnabled(FlutterSecureStorage storage, bool enabled) =>
       storage.write(key: syncDiagnosticsStorageKey, value: '$enabled');
 
-  static bool isDetailedStage(SyncProgress progress) =>
-      progress.itemLabel == null &&
-      switch (progress.message) {
-        'Remote is up to date…' ||
-        'Checking deleted notes…' ||
-        'Creating GitHub commit…' ||
-        'Publishing GitHub commit…' ||
-        'Recording synced notes locally…' ||
-        'Remote changes detected; retrying…' => true,
-        _ => false,
-      };
+  static bool isDetailedStage(SyncProgress progress) {
+    if (progress.itemLabel != null) return false;
+    if (progress.message.startsWith('Conflict preserved:')) return true;
+    return switch (progress.message) {
+      'Remote is up to date…' ||
+      'Checking deleted notes…' ||
+      'Creating GitHub commit…' ||
+      'Publishing GitHub commit…' ||
+      'Recording synced notes locally…' ||
+      'Remote changes detected; retrying…' => true,
+      _ => false,
+    };
+  }
 
   static Future<List<SyncLogEntry>> read(FlutterSecureStorage storage) async {
     try {
@@ -684,7 +694,12 @@ class GitHubSyncEngine {
       // This also deliberately leaves unsynced local edits alone: their
       // lastRemoteSha still identifies the remote version they were based on.
       if (local?.lastRemoteSha != remoteSha) {
-        await _applyRemoteMarkdown(settings, path, remoteSha);
+        await _applyRemoteMarkdown(
+          settings,
+          path,
+          remoteSha,
+          onConflict: (reason) => _reportConflict(onProgress, reason),
+        );
       }
       onProgress?.call(
         SyncProgress(
@@ -697,6 +712,8 @@ class GitHubSyncEngine {
     }
     await _repository.reconcileRemoteRemovals(
       markdownEntries.map((entry) => entry['path'] as String).toSet(),
+      onConflictPreserved: () =>
+          _reportConflict(onProgress, _remoteDeletionConflictReason),
     );
     final attachmentEntries = entries.where(_isAttachment).toList();
     onProgress?.call(
@@ -800,7 +817,12 @@ class GitHubSyncEngine {
         if (sha == null || sha.isEmpty) {
           throw StateError('GitHub returned no blob SHA for $path');
         }
-        await _applyRemoteMarkdown(settings, path, sha);
+        await _applyRemoteMarkdown(
+          settings,
+          path,
+          sha,
+          onConflict: (reason) => _reportConflict(onProgress, reason),
+        );
         final previousPath = file['previous_filename'] as String?;
         if (status == 'renamed' && previousPath != null) {
           removedNotePaths.add(previousPath);
@@ -816,7 +838,11 @@ class GitHubSyncEngine {
       );
     }
     for (final path in removedNotePaths) {
-      await _repository.reconcileRemoteRemoval(path);
+      await _repository.reconcileRemoteRemoval(
+        path,
+        onConflictPreserved: () =>
+            _reportConflict(onProgress, _remoteDeletionConflictReason),
+      );
     }
 
     final attachments = files
@@ -861,8 +887,9 @@ class GitHubSyncEngine {
   Future<void> _applyRemoteMarkdown(
     GitHubSettings settings,
     String path,
-    String remoteSha,
-  ) async {
+    String remoteSha, {
+    void Function(String reason)? onConflict,
+  }) async {
     final local = await _repository.findByPath(path);
     if (local?.lastRemoteSha == remoteSha) return;
     final content = await _blobContent(settings, remoteSha);
@@ -870,18 +897,75 @@ class GitHubSyncEngine {
     final sameId = await _repository.get(
       MarkdownContract.identityFor(path, parsed.id),
     );
+    final localSummaryOnly = await _isSummaryOnlyLocalChange(
+      settings,
+      local,
+      content,
+    );
+    final sameIdSummaryOnly = await _isSummaryOnlyLocalChange(
+      settings,
+      sameId,
+      content,
+    );
+    if (localSummaryOnly) {
+      await _repository.discardMatchingConflictCopies(local!);
+    }
+    if (sameIdSummaryOnly && sameId?.id != local?.id) {
+      await _repository.discardMatchingConflictCopies(sameId!);
+    }
     if (local?.isDirty == true &&
         local?.isPendingDeletion != true &&
-        !MarkdownContract.differsOnlyBySummary(local!.rawMarkdown, content)) {
-      await _repository.preserveConflict(local);
+        !MarkdownContract.differsOnlyBySummary(local!.rawMarkdown, content) &&
+        !localSummaryOnly) {
+      if (await _repository.preserveConflict(local)) {
+        onConflict?.call(_remoteChangedConflictReason);
+      }
     }
     if (sameId != null &&
         sameId.path != path &&
         sameId.isDirty &&
-        !MarkdownContract.differsOnlyBySummary(sameId.rawMarkdown, content)) {
-      await _repository.preserveConflict(sameId);
+        !MarkdownContract.differsOnlyBySummary(sameId.rawMarkdown, content) &&
+        !sameIdSummaryOnly) {
+      if (await _repository.preserveConflict(sameId)) {
+        onConflict?.call(_remoteMoveConflictReason);
+      }
     }
     await _repository.applyRemote(path: path, sha: remoteSha, raw: content);
+  }
+
+  /// A generated summary is derived metadata, not a competing local edit.
+  /// When the remote note's content has changed, compare the dirty local copy
+  /// with the blob it was based on rather than with the newer remote version.
+  /// That distinguishes a summary-only mutation from an actual local edit.
+  Future<bool> _hasOnlySummaryChangeSinceRemote(
+    GitHubSettings settings,
+    Note local,
+  ) async {
+    final baselineSha = local.lastRemoteSha;
+    if (baselineSha == null || baselineSha.isEmpty) return false;
+    final baseline = await _blobContent(settings, baselineSha);
+    return MarkdownContract.differsOnlyBySummary(local.rawMarkdown, baseline);
+  }
+
+  Future<bool> _isSummaryOnlyLocalChange(
+    GitHubSettings settings,
+    Note? local,
+    String remoteContent,
+  ) async {
+    if (local?.isDirty != true || local?.isPendingDeletion == true) {
+      return false;
+    }
+    if (MarkdownContract.differsOnlyBySummary(
+      local!.rawMarkdown,
+      remoteContent,
+    )) {
+      return true;
+    }
+    return _hasOnlySummaryChangeSinceRemote(settings, local);
+  }
+
+  void _reportConflict(SyncProgressCallback? onProgress, String reason) {
+    onProgress?.call(SyncProgress(message: reason));
   }
 
   Future<_RemoteSnapshot> _push(
