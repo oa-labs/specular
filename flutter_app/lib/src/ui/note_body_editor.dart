@@ -85,7 +85,7 @@ class NoteBodyEditorCodec {
         children: children,
         attributes: {
           ...node.attributes,
-          if (isGlobal) globalTaskAttribute: true,
+          globalTaskAttribute: isGlobal,
         },
       );
     }
@@ -290,9 +290,9 @@ class _SpecularTodoNodeParser extends NodeParser {
   String transform(Node node, DocumentMarkdownEncoder? encoder) {
     final delta = node.delta ?? (Delta()..insert(''));
     final marker =
-        node.attributes[NoteBodyEditorCodec.globalTaskAttribute] == true
-        ? '+'
-        : '-';
+        node.attributes[NoteBodyEditorCodec.globalTaskAttribute] == false
+        ? '-'
+        : '+';
     final checked = node.attributes[TodoListBlockKeys.checked] == true
         ? '[x]'
         : '[ ]';

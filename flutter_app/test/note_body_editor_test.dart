@@ -133,7 +133,7 @@ void main() {
     expect(NoteBodyEditorCodec.editableBody(note), note.body);
   });
 
-  test('exports AppFlowy to-do blocks as portable Markdown', () {
+  test('defaults AppFlowy to-do blocks to Reflect global Markdown', () {
     final editorState = EditorState(
       document: markdownToDocument('- [ ] Ship the editor'),
     );
@@ -141,7 +141,7 @@ void main() {
 
     expect(
       NoteBodyEditorCodec.export(editorState),
-      contains('- [ ] Ship the editor'),
+      contains('+ [ ] Ship the editor'),
     );
   });
 
@@ -161,11 +161,11 @@ void main() {
 
   test('keeps exported task list items contiguous', () {
     final editorState = EditorState(
-      document: markdownToDocument('- [x] Done\n- [ ] Open'),
+      document: markdownToDocument('+ [x] Done\n+ [ ] Open'),
     );
     addTearDown(editorState.dispose);
 
-    expect(NoteBodyEditorCodec.export(editorState), '- [x] Done\n- [ ] Open');
+    expect(NoteBodyEditorCodec.export(editorState), '+ [x] Done\n+ [ ] Open');
   });
 
   test('exports tagged global tasks with Reflect plus markers', () {
@@ -179,7 +179,13 @@ void main() {
               text: 'Global task',
               attributes: const {NoteBodyEditorCodec.globalTaskAttribute: true},
             ),
-            todoListNode(checked: false, text: 'Local checkbox'),
+            todoListNode(
+              checked: false,
+              text: 'Local checkbox',
+              attributes: const {
+                NoteBodyEditorCodec.globalTaskAttribute: false,
+              },
+            ),
           ],
         ),
       ),

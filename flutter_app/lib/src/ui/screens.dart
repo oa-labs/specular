@@ -358,6 +358,10 @@ class _DailyNotesScreenState extends ConsumerState<DailyNotesScreen> {
     if (_activeDate != value) setState(() => _activeDate = value);
   }
 
+  void _deactivate() {
+    if (_activeDate != null) setState(() => _activeDate = null);
+  }
+
   void _selectDate(DateTime date) {
     setState(() {
       _selectedDate = DateUtils.dateOnly(date);
@@ -482,6 +486,7 @@ class _DailyNotesScreenState extends ConsumerState<DailyNotesScreen> {
         scheduledTasks: scheduledByDate[key] ?? const [],
         active: _activeDate == key,
         onActivate: _activate,
+        onDone: _deactivate,
       );
     },
   );
@@ -521,6 +526,7 @@ class _DailyNotesScreenState extends ConsumerState<DailyNotesScreen> {
                   scheduledTasks: scheduledByDate[key] ?? const [],
                   active: _activeDate == key,
                   onActivate: _activate,
+                  onDone: _deactivate,
                   mobile: true,
                   minHeight: constraints.maxHeight - 44,
                 ),
@@ -780,6 +786,7 @@ class _DailyDayPanel extends ConsumerStatefulWidget {
     required this.scheduledTasks,
     required this.active,
     required this.onActivate,
+    required this.onDone,
     this.mobile = false,
     this.minHeight,
   });
@@ -789,6 +796,7 @@ class _DailyDayPanel extends ConsumerStatefulWidget {
   final List<ScheduledTaskBacklink> scheduledTasks;
   final bool active;
   final ValueChanged<DateTime> onActivate;
+  final VoidCallback onDone;
   final bool mobile;
   final double? minHeight;
 
@@ -870,6 +878,12 @@ class _DailyDayPanelState extends ConsumerState<_DailyDayPanel> {
     }
   }
 
+  Future<void> _finishEditing() async {
+    await _saveNow();
+    _focusNode.unfocus();
+    if (mounted) widget.onDone();
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -931,6 +945,19 @@ class _DailyDayPanelState extends ConsumerState<_DailyDayPanel> {
                       tooltip: 'Edit daily note',
                       onPressed: () => widget.onActivate(widget.date),
                       icon: const Icon(Icons.edit_outlined),
+                    ),
+                  if (widget.active)
+                    TextButton.icon(
+                      onPressed: _saving
+                          ? null
+                          : () => unawaited(_finishEditing()),
+                      icon: _saving
+                          ? const SizedBox.square(
+                              dimension: 18,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.done),
+                      label: const Text('Done'),
                     ),
                 ],
               ),
@@ -4188,8 +4215,7 @@ class _TodoRowState extends ConsumerState<_TodoRow> {
                 ),
         ),
         if (_editing)
-          IconButton(
-            tooltip: 'Save task text',
+          TextButton.icon(
             onPressed: _saving ? null : () => unawaited(_saveText()),
             icon: _saving
                 ? const SizedBox.square(
@@ -4197,6 +4223,7 @@ class _TodoRowState extends ConsumerState<_TodoRow> {
                     child: CircularProgressIndicator(strokeWidth: 2),
                   )
                 : const Icon(Icons.done),
+            label: const Text('Done'),
           ),
         IconButton(
           tooltip: TodoMarkdown.scheduledDate(_todo.text) == null
