@@ -876,126 +876,120 @@ class _DailyDayPanelState extends ConsumerState<_DailyDayPanel> {
     final isToday = DateUtils.isSameDay(widget.date, DateTime.now());
     final content = _controller.text;
     final colors = theme.colorScheme;
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onTap: widget.active ? null : () => widget.onActivate(widget.date),
-      child: Card(
-        elevation: 0,
-        clipBehavior: Clip.antiAlias,
-        margin: widget.mobile
-            ? EdgeInsets.zero
-            : const EdgeInsets.only(bottom: 12),
-        color: isToday
-            ? colors.primaryContainer.withValues(alpha: .38)
-            : colors.surfaceContainerLow,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(14),
-          side: BorderSide(color: colors.outlineVariant.withValues(alpha: .5)),
-        ),
-        child: ConstrainedBox(
-          constraints: BoxConstraints(minHeight: widget.minHeight ?? 0),
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        displayDailyDate(widget.date),
-                        style: theme.textTheme.titleMedium?.copyWith(
-                          color: isToday ? colors.primary : null,
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                    ),
-                    if (isToday)
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 8,
-                          vertical: 4,
-                        ),
-                        decoration: BoxDecoration(
-                          color: colors.primaryContainer,
-                          borderRadius: BorderRadius.circular(99),
-                        ),
-                        child: Text(
-                          'TODAY',
-                          style: theme.textTheme.labelSmall?.copyWith(
-                            color: colors.onPrimaryContainer,
-                            fontWeight: FontWeight.w700,
-                            letterSpacing: .6,
-                          ),
-                        ),
-                      ),
-                  ],
-                ),
-                const SizedBox(height: 10),
-                if (widget.active)
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      TextField(
-                        controller: _controller,
-                        focusNode: _focusNode,
-                        autofocus: true,
-                        minLines: 4,
-                        maxLines: null,
-                        keyboardType: TextInputType.multiline,
-                        textCapitalization: TextCapitalization.sentences,
-                        style: theme.textTheme.bodyLarge,
-                        decoration: const InputDecoration(
-                          hintText: 'Write a note…',
-                          border: InputBorder.none,
-                          isDense: true,
-                        ),
-                        onChanged: _onChanged,
-                      ),
-                      if (widget.mobile) ...[
-                        const SizedBox(height: 10),
-                        _DailyMarkdownToolbar(onInsert: _insertMarkdown),
-                      ],
-                    ],
-                  )
-                else
-                  GestureDetector(
-                    onTap: () => widget.onActivate(widget.date),
-                    behavior: HitTestBehavior.opaque,
-                    child: ConstrainedBox(
-                      constraints: const BoxConstraints(minHeight: 82),
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 4),
-                        child: content.trim().isEmpty
-                            ? Text(
-                                'Tap to write…',
-                                style: theme.textTheme.bodyMedium?.copyWith(
-                                  color: theme.colorScheme.onSurfaceVariant,
-                                ),
-                              )
-                            // The Daily preview is an edit affordance, not a
-                            // read-only note detail. Prevent Markdown's internal
-                            // link/selection recognizers from winning the tap
-                            // arena over the enclosing edit gesture.
-                            : IgnorePointer(
-                                child: MarkdownBody(
-                                  data: MarkdownContract.renderWikiLinks(
-                                    content,
-                                  ),
-                                ),
-                              ),
+    return Card(
+      elevation: 0,
+      clipBehavior: Clip.antiAlias,
+      margin: widget.mobile
+          ? EdgeInsets.zero
+          : const EdgeInsets.only(bottom: 12),
+      color: isToday
+          ? colors.primaryContainer.withValues(alpha: .38)
+          : colors.surfaceContainerLow,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(14),
+        side: BorderSide(color: colors.outlineVariant.withValues(alpha: .5)),
+      ),
+      child: ConstrainedBox(
+        constraints: BoxConstraints(minHeight: widget.minHeight ?? 0),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      displayDailyDate(widget.date),
+                      style: theme.textTheme.titleMedium?.copyWith(
+                        color: isToday ? colors.primary : null,
+                        fontWeight: FontWeight.w700,
                       ),
                     ),
                   ),
-                if (widget.scheduledTasks.isNotEmpty) ...[
-                  const SizedBox(height: 12),
-                  Text('Scheduled tasks', style: theme.textTheme.labelLarge),
-                  const SizedBox(height: 4),
-                  for (final task in widget.scheduledTasks)
-                    _ScheduledBacklinkTask(backlink: task),
+                  if (isToday)
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 4,
+                      ),
+                      decoration: BoxDecoration(
+                        color: colors.primaryContainer,
+                        borderRadius: BorderRadius.circular(99),
+                      ),
+                      child: Text(
+                        'TODAY',
+                        style: theme.textTheme.labelSmall?.copyWith(
+                          color: colors.onPrimaryContainer,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: .6,
+                        ),
+                      ),
+                    ),
+                  if (!widget.active)
+                    IconButton(
+                      tooltip: 'Edit daily note',
+                      onPressed: () => widget.onActivate(widget.date),
+                      icon: const Icon(Icons.edit_outlined),
+                    ),
                 ],
+              ),
+              const SizedBox(height: 10),
+              if (widget.active)
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    TextField(
+                      controller: _controller,
+                      focusNode: _focusNode,
+                      autofocus: true,
+                      minLines: 4,
+                      maxLines: null,
+                      keyboardType: TextInputType.multiline,
+                      textCapitalization: TextCapitalization.sentences,
+                      style: theme.textTheme.bodyLarge,
+                      decoration: const InputDecoration(
+                        hintText: 'Write a note…',
+                        border: InputBorder.none,
+                        isDense: true,
+                      ),
+                      onChanged: _onChanged,
+                    ),
+                    if (widget.mobile) ...[
+                      const SizedBox(height: 10),
+                      _DailyMarkdownToolbar(onInsert: _insertMarkdown),
+                    ],
+                  ],
+                )
+              else
+                ConstrainedBox(
+                  constraints: const BoxConstraints(minHeight: 82),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 4),
+                    child: content.trim().isEmpty
+                        ? InkWell(
+                            onTap: () => widget.onActivate(widget.date),
+                            child: Text(
+                              'Tap to write…',
+                              style: theme.textTheme.bodyMedium?.copyWith(
+                                color: theme.colorScheme.onSurfaceVariant,
+                              ),
+                            ),
+                          )
+                        : MarkdownBody(
+                            data: MarkdownContract.renderWikiLinks(content),
+                            onTapLink: (_, href, _) => _openLink(href),
+                          ),
+                  ),
+                ),
+              if (widget.scheduledTasks.isNotEmpty) ...[
+                const SizedBox(height: 12),
+                Text('Scheduled tasks', style: theme.textTheme.labelLarge),
+                const SizedBox(height: 4),
+                for (final task in widget.scheduledTasks)
+                  _ScheduledBacklinkTask(backlink: task),
               ],
-            ),
+            ],
           ),
         ),
       ),
@@ -1015,6 +1009,12 @@ class _DailyDayPanelState extends ConsumerState<_DailyDayPanel> {
     );
     _onChanged(_controller.text);
     _focusNode.requestFocus();
+  }
+
+  Future<void> _openLink(String? href) async {
+    final note = widget.note;
+    if (note == null) return;
+    await _openMarkdownLink(context, ref, sourcePath: note.path, href: href);
   }
 }
 
@@ -2437,7 +2437,12 @@ class _NotePreviewBody extends ConsumerWidget {
                     // centered beside that line.
                     listItemCrossAxisAlignment:
                         MarkdownListItemCrossAxisAlignment.start,
-                    onTapLink: (_, href, _) => _openLink(context, ref, href),
+                    onTapLink: (_, href, _) => _openMarkdownLink(
+                      context,
+                      ref,
+                      sourcePath: note.path,
+                      href: href,
+                    ),
                     imageBuilder: (uri, title, alt) =>
                         _AttachmentImage(notePath: note.path, uri: uri),
                     checkboxBuilder: (checked) {
@@ -2515,54 +2520,55 @@ class _NotePreviewBody extends ConsumerWidget {
     await repository.toggleCheckbox(noteId: displayed.id, taskIndex: taskIndex);
     ref.invalidate(notesProvider);
   }
+}
 
-  Future<void> _openLink(
-    BuildContext context,
-    WidgetRef ref,
-    String? href,
-  ) async {
-    final wikiTitle = MarkdownContract.wikiLinkTitle(href ?? '');
-    if (wikiTitle != null) {
-      final target = await ref
-          .read(noteRepositoryProvider)
-          .findByWikiLinkTitle(wikiTitle);
-      if (target != null && context.mounted) {
-        context.push('/note/${Uri.encodeComponent(target.id)}');
-      } else if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Linked note is not available locally: $wikiTitle'),
-          ),
-        );
-      }
-      return;
+Future<void> _openMarkdownLink(
+  BuildContext context,
+  WidgetRef ref, {
+  required String sourcePath,
+  required String? href,
+}) async {
+  final wikiTitle = MarkdownContract.wikiLinkTitle(href ?? '');
+  if (wikiTitle != null) {
+    final target = await ref
+        .read(noteRepositoryProvider)
+        .findByWikiLinkTitle(wikiTitle);
+    if (target != null && context.mounted) {
+      context.push('/note/${Uri.encodeComponent(target.id)}');
+    } else if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Linked note is not available locally: $wikiTitle'),
+        ),
+      );
     }
+    return;
+  }
 
-    final targetPath = MarkdownContract.resolveNoteLink(note.path, href ?? '');
-    if (targetPath != null) {
-      final target = await ref
-          .read(noteRepositoryProvider)
-          .findByPath(targetPath);
-      if (target != null && context.mounted) {
-        context.push('/note/${Uri.encodeComponent(target.id)}');
-      } else if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Linked note is not available locally: $targetPath'),
-          ),
-        );
-      }
-      return;
+  final targetPath = MarkdownContract.resolveNoteLink(sourcePath, href ?? '');
+  if (targetPath != null) {
+    final target = await ref
+        .read(noteRepositoryProvider)
+        .findByPath(targetPath);
+    if (target != null && context.mounted) {
+      context.push('/note/${Uri.encodeComponent(target.id)}');
+    } else if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Linked note is not available locally: $targetPath'),
+        ),
+      );
     }
+    return;
+  }
 
-    final uri = Uri.tryParse(href ?? '');
-    if (uri == null || !uri.hasScheme) return;
-    if (await launchUrl(uri, mode: LaunchMode.externalApplication)) return;
-    if (context.mounted) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('Unable to open link.')));
-    }
+  final uri = Uri.tryParse(href ?? '');
+  if (uri == null || !uri.hasScheme) return;
+  if (await launchUrl(uri, mode: LaunchMode.externalApplication)) return;
+  if (context.mounted) {
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('Unable to open link.')));
   }
 }
 

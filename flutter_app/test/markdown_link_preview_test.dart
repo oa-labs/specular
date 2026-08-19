@@ -156,6 +156,69 @@ void main() {
     await tester.pump(const Duration(milliseconds: 1));
   });
 
+  testWidgets('opens a Markdown link from the daily preview', (tester) async {
+    tester.view.physicalSize = const Size(400, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    late Directory root;
+    late AppDatabase database;
+    late NoteRepository repository;
+
+    await tester.runAsync(() async {
+      root = await Directory.systemTemp.createTemp('specular-daily-link-test-');
+      database = AppDatabase.forTesting(NativeDatabase.memory());
+      repository = NoteRepository(database, Directory('${root.path}/notes'));
+      final today = formatDailyDate(DateTime.now());
+      await repository.applyRemote(
+        path: 'daily/$today.md',
+        sha: 'daily-sha',
+        raw: '[Open design review](../meetings/design-review.md)\n',
+      );
+      await repository.applyRemote(
+        path: 'meetings/design-review.md',
+        sha: 'meeting-sha',
+        raw: '# Design review\n',
+      );
+    });
+    addTearDown(() async {
+      await database.close();
+      await root.delete(recursive: true);
+    });
+
+    final router = GoRouter(
+      initialLocation: '/',
+      routes: [
+        GoRoute(path: '/', builder: (_, _) => const DailyNotesScreen()),
+        GoRoute(
+          path: '/note/:id',
+          builder: (_, state) =>
+              NoteDetailScreen(id: state.pathParameters['id']!),
+        ),
+      ],
+    );
+    addTearDown(router.dispose);
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [noteRepositoryProvider.overrideWithValue(repository)],
+        child: MaterialApp.router(routerConfig: router),
+      ),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+
+    await tester.tap(find.text('Open design review'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+
+    expect(find.text('Design review'), findsOneWidget);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump(const Duration(milliseconds: 1));
+  });
+
   testWidgets('makes macOS note-preview text selectable', (tester) async {
     tester.view.physicalSize = const Size(1440, 900);
     tester.view.devicePixelRatio = 1;
