@@ -3426,7 +3426,16 @@ class $$NoteRowsTableTableManager
                 rowid: rowid,
               ),
           withReferenceMapper: (p0) => p0
-              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .map(
+                (e) => (
+                  e.readTable<$NoteRowsTable, NoteRow>(table),
+                  BaseReferences<_$AppDatabase, $NoteRowsTable, NoteRow>(
+                    db,
+                    table,
+                    e,
+                  ),
+                ),
+              )
               .toList(),
           prefetchHooksCallback: null,
         ),
@@ -3606,7 +3615,16 @@ class $$TodoEntriesTableTableManager
                 rowid: rowid,
               ),
           withReferenceMapper: (p0) => p0
-              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .map(
+                (e) => (
+                  e.readTable<$TodoEntriesTable, TodoEntry>(table),
+                  BaseReferences<_$AppDatabase, $TodoEntriesTable, TodoEntry>(
+                    db,
+                    table,
+                    e,
+                  ),
+                ),
+              )
               .toList(),
           prefetchHooksCallback: null,
         ),
@@ -3734,7 +3752,16 @@ class $$TodoIndexStatesTableTableManager
                 Value<bool> isReady = const Value.absent(),
               }) => TodoIndexStatesCompanion.insert(id: id, isReady: isReady),
           withReferenceMapper: (p0) => p0
-              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .map(
+                (e) => (
+                  e.readTable<$TodoIndexStatesTable, TodoIndexState>(table),
+                  BaseReferences<
+                    _$AppDatabase,
+                    $TodoIndexStatesTable,
+                    TodoIndexState
+                  >(db, table, e),
+                ),
+              )
               .toList(),
           prefetchHooksCallback: null,
         ),
@@ -3938,7 +3965,16 @@ class $$LinkEntriesTableTableManager
                 rowid: rowid,
               ),
           withReferenceMapper: (p0) => p0
-              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .map(
+                (e) => (
+                  e.readTable<$LinkEntriesTable, LinkEntry>(table),
+                  BaseReferences<_$AppDatabase, $LinkEntriesTable, LinkEntry>(
+                    db,
+                    table,
+                    e,
+                  ),
+                ),
+              )
               .toList(),
           prefetchHooksCallback: null,
         ),
@@ -4137,7 +4173,16 @@ class $$AttachmentsTableTableManager
                 rowid: rowid,
               ),
           withReferenceMapper: (p0) => p0
-              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .map(
+                (e) => (
+                  e.readTable<$AttachmentsTable, Attachment>(table),
+                  BaseReferences<_$AppDatabase, $AttachmentsTable, Attachment>(
+                    db,
+                    table,
+                    e,
+                  ),
+                ),
+              )
               .toList(),
           prefetchHooksCallback: null,
         ),
@@ -4373,7 +4418,16 @@ class $$SyncOperationsTableTableManager
                 createdAt: createdAt,
               ),
           withReferenceMapper: (p0) => p0
-              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .map(
+                (e) => (
+                  e.readTable<$SyncOperationsTable, SyncOperation>(table),
+                  BaseReferences<
+                    _$AppDatabase,
+                    $SyncOperationsTable,
+                    SyncOperation
+                  >(db, table, e),
+                ),
+              )
               .toList(),
           prefetchHooksCallback: null,
         ),
@@ -4535,7 +4589,16 @@ class $$SyncLeasesTableTableManager
                 rowid: rowid,
               ),
           withReferenceMapper: (p0) => p0
-              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .map(
+                (e) => (
+                  e.readTable<$SyncLeasesTable, SyncLease>(table),
+                  BaseReferences<_$AppDatabase, $SyncLeasesTable, SyncLease>(
+                    db,
+                    table,
+                    e,
+                  ),
+                ),
+              )
               .toList(),
           prefetchHooksCallback: null,
         ),
