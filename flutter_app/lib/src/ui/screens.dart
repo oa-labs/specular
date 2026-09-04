@@ -1365,7 +1365,8 @@ class _NoteListScreenState extends ConsumerState<NoteListScreen> {
           ),
         ],
       ),
-      body: shouldShowNotesLoadingSpinner(
+      body:
+          shouldShowNotesLoadingSpinner(
             notes: notesState,
             preferencesLoaded: _loadedPreferences,
           )

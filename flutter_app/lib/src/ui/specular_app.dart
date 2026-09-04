@@ -206,9 +206,7 @@ bool syncBlocksHomeUi(SyncUiState sync, {required bool hasLocalNotes}) {
 bool syncShowsProgressSnackbar(
   SyncUiState sync, {
   required bool hasLocalNotes,
-}) =>
-    sync.isSyncing &&
-    !syncBlocksHomeUi(sync, hasLocalNotes: hasLocalNotes);
+}) => sync.isSyncing && !syncBlocksHomeUi(sync, hasLocalNotes: hasLocalNotes);
 
 SyncHomeProgressKind syncHomeProgressKind(
   SyncUiState sync, {
@@ -223,8 +221,11 @@ SyncHomeProgressKind syncHomeProgressKind(
 
 /// Full-screen loading is only for a first load with no previous value.
 /// Invalidate, refresh, and reload must keep prior notes or to-dos visible.
+bool loadingWipesContent({required bool isLoading, required bool hasValue}) =>
+    isLoading && !hasValue;
+
 bool asyncValueWipesContent<T>(AsyncValue<T> value) =>
-    value.isLoading && !value.hasValue;
+    loadingWipesContent(isLoading: value.isLoading, hasValue: value.hasValue);
 
 /// Shared gate for Daily, All, Meetings, People, and other note lists.
 bool shouldShowNotesLoadingSpinner({
@@ -614,10 +615,7 @@ class _SpecularAppState extends ConsumerState<SpecularApp> {
               child ?? const SizedBox.shrink(),
               // Snackbar-only, including first sync. hasLocalNotes: true keeps
               // the shell from ever choosing a blocking overlay.
-              if (syncShowsProgressSnackbar(
-                syncState,
-                hasLocalNotes: true,
-              ))
+              if (syncShowsProgressSnackbar(syncState, hasLocalNotes: true))
                 _SyncProgressSnackbar(state: syncState),
             ],
           ),
