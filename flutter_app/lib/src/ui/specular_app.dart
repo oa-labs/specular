@@ -168,7 +168,75 @@ class SyncUiState {
   final int? completed;
   final int? total;
   final String? itemLabel;
+
+  SyncUiState copyWith({
+    bool? isSyncing,
+    bool? isInitialSync,
+    String? message,
+    int? completed,
+    int? total,
+    String? itemLabel,
+  }) => SyncUiState(
+    isSyncing: isSyncing ?? this.isSyncing,
+    isInitialSync: isInitialSync ?? this.isInitialSync,
+    message: message ?? this.message,
+    completed: completed ?? this.completed,
+    total: total ?? this.total,
+    itemLabel: itemLabel ?? this.itemLabel,
+  );
 }
+
+/// Kind of sync chrome shown over the home UI. Progress is snackbar-only so
+/// Daily, All, Meetings, People, Search, and Todos stay interactive.
+enum SyncHomeProgressKind { none, snackbar, blockingOverlay }
+
+/// Whether sync may cover the home UI with a blocking overlay.
+///
+/// Historical first-sync used `isSyncing && isInitialSync` as a full-screen
+/// scrim for the entire GitHub pull. That hid notes as they arrived. Never
+/// block once any local note exists, and do not block an empty library either
+/// — screens can show a lightweight importing empty state instead.
+bool syncBlocksHomeUi(SyncUiState sync, {required bool hasLocalNotes}) {
+  if (!sync.isSyncing) return false;
+  if (hasLocalNotes) return false;
+  if (sync.isInitialSync) return false;
+  return false;
+}
+
+bool syncShowsProgressSnackbar(
+  SyncUiState sync, {
+  required bool hasLocalNotes,
+}) =>
+    sync.isSyncing &&
+    !syncBlocksHomeUi(sync, hasLocalNotes: hasLocalNotes);
+
+SyncHomeProgressKind syncHomeProgressKind(
+  SyncUiState sync, {
+  required bool hasLocalNotes,
+}) {
+  if (!sync.isSyncing) return SyncHomeProgressKind.none;
+  if (syncBlocksHomeUi(sync, hasLocalNotes: hasLocalNotes)) {
+    return SyncHomeProgressKind.blockingOverlay;
+  }
+  return SyncHomeProgressKind.snackbar;
+}
+
+/// Full-screen loading is only for a first load with no previous value.
+/// Invalidate, refresh, and reload must keep prior notes or to-dos visible.
+bool asyncValueWipesContent<T>(AsyncValue<T> value) =>
+    value.isLoading && !value.hasValue;
+
+/// Shared gate for Daily, All, Meetings, People, and other note lists.
+bool shouldShowNotesLoadingSpinner({
+  required AsyncValue<List<Note>> notes,
+  bool preferencesLoaded = true,
+}) => !preferencesLoaded || asyncValueWipesContent(notes);
+
+/// Search uses a StreamBuilder. Keep prior hits while a new stream is waiting.
+bool shouldShowSearchLoadingSpinner({
+  required bool isWaiting,
+  required bool hasPreviousResults,
+}) => isWaiting && !hasPreviousResults;
 
 /// Gives foreground syncs one consistent visual state. Background work stays
 /// intentionally quiet: Android may run it while there is no app to present.
@@ -190,6 +258,7 @@ class SyncController extends ChangeNotifier {
   var _sharedSyncActive = false;
   var _diagnosticsEnabled = false;
   late final Timer _activityPoll;
+  StreamSubscription<List<Note>>? _incomingNotesWatch;
 
   SyncUiState get state => _state;
 
@@ -215,7 +284,7 @@ class SyncController extends ChangeNotifier {
     final hasCompletedInitialSync =
         await _storage.read(key: initialSyncCompletedStorageKey) == 'true';
     // Existing installs predate this UI flag but already have a local library.
-    // Only block the UI for a genuinely empty library's first sync.
+    // isInitialSync only affects empty-state copy; it must not cover the UI.
     final isInitialSync =
         !hasCompletedInitialSync && !await _repository.hasLocalNotes();
     _activeSyncs++;
@@ -224,6 +293,7 @@ class SyncController extends ChangeNotifier {
       isInitialSync: isInitialSync,
       message: isInitialSync ? 'Preparing your notes…' : 'Syncing with GitHub…',
     );
+    if (isInitialSync) _watchForIncomingNotes();
     notifyListeners();
     try {
       final result = await _engine.sync(
@@ -247,6 +317,8 @@ class SyncController extends ChangeNotifier {
       _activeSyncs--;
       await _refreshSharedSyncActivity(notify: false);
       if (_activeSyncs == 0) {
+        await _incomingNotesWatch?.cancel();
+        _incomingNotesWatch = null;
         _state = _sharedSyncActive
             ? const SyncUiState(
                 isSyncing: true,
@@ -256,6 +328,17 @@ class SyncController extends ChangeNotifier {
         notifyListeners();
       }
     }
+  }
+
+  void _watchForIncomingNotes() {
+    unawaited(_incomingNotesWatch?.cancel());
+    _incomingNotesWatch = _repository.watchNotes().listen((notes) {
+      if (notes.isEmpty || !state.isInitialSync) return;
+      // Notes landed mid-pull. Drop the first-sync flag so no overlay or
+      // empty-library treatment can keep hiding an already-usable library.
+      _state = state.copyWith(isInitialSync: false);
+      notifyListeners();
+    });
   }
 
   void _updateProgress(SyncProgress progress) {
@@ -318,6 +401,7 @@ class SyncController extends ChangeNotifier {
   @override
   void dispose() {
     _activityPoll.cancel();
+    unawaited(_incomingNotesWatch?.cancel());
     super.dispose();
   }
 }
@@ -528,9 +612,12 @@ class _SpecularAppState extends ConsumerState<SpecularApp> {
           child: Stack(
             children: [
               child ?? const SizedBox.shrink(),
-              if (syncState.isSyncing && syncState.isInitialSync)
-                _InitialSyncOverlay(state: syncState),
-              if (syncState.isSyncing && !syncState.isInitialSync)
+              // Snackbar-only, including first sync. hasLocalNotes: true keeps
+              // the shell from ever choosing a blocking overlay.
+              if (syncShowsProgressSnackbar(
+                syncState,
+                hasLocalNotes: true,
+              ))
                 _SyncProgressSnackbar(state: syncState),
             ],
           ),
@@ -891,63 +978,6 @@ class _SpecularWordmarkState extends State<SpecularWordmark>
             child: child,
           );
         },
-      ),
-    );
-  }
-}
-
-class _InitialSyncOverlay extends StatelessWidget {
-  const _InitialSyncOverlay({required this.state});
-
-  final SyncUiState state;
-
-  @override
-  Widget build(BuildContext context) {
-    final progress = state.total == null || state.total == 0
-        ? null
-        : state.completed! / state.total!;
-    final detail = state.total == null
-        ? null
-        : '${state.completed ?? 0} of ${state.total}';
-    return Material(
-      color: Theme.of(context).colorScheme.scrim.withValues(alpha: .52),
-      child: Center(
-        child: Semantics(
-          liveRegion: true,
-          label: 'Initial sync in progress. ${state.message}',
-          child: Container(
-            width: 300,
-            margin: const EdgeInsets.all(24),
-            padding: const EdgeInsets.all(24),
-            decoration: BoxDecoration(
-              color: Theme.of(context).colorScheme.surface,
-              borderRadius: BorderRadius.circular(24),
-            ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(
-                  Icons.auto_awesome,
-                  color: Theme.of(context).colorScheme.primary,
-                  size: 32,
-                ),
-                const SizedBox(height: 16),
-                Text(
-                  'Setting up Specular',
-                  style: Theme.of(context).textTheme.titleLarge,
-                ),
-                const SizedBox(height: 8),
-                Text(state.message, textAlign: TextAlign.center),
-                const SizedBox(height: 20),
-                LinearProgressIndicator(value: progress),
-                if (detail != null) ...[
-                  const SizedBox(height: 8),
-                  Text(detail, style: Theme.of(context).textTheme.labelMedium),
-                ],
-              ],
-            ),
-          ),
-        ),
       ),
     );
   }
