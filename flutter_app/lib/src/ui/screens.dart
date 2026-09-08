@@ -297,6 +297,22 @@ List<Note> sortAndFilterNotes(
   return visible;
 }
 
+/// Empty-library copy for All / Meetings / People. A sync in flight on an
+/// empty library is an importing state, not a missing-library error.
+String emptyNotesLibraryMessage({
+  required NoteListView view,
+  required bool hasAnyNotes,
+  required bool isSearching,
+  required bool isSyncing,
+}) {
+  if (isSearching) return 'No matching notes.';
+  if (!hasAnyNotes && isSyncing) return 'Importing notes from GitHub…';
+  if (!hasAnyNotes) {
+    return 'No notes yet. Open Daily to start today\'s note.';
+  }
+  return 'No ${view.name} yet.';
+}
+
 /// Filters an already-sorted note list with the shared search syntax while
 /// preserving the list's current order.
 List<Note> filterNotesBySearch(Iterable<Note> notes, NoteSearchQuery search) {
@@ -448,7 +464,7 @@ class _DailyNotesScreenState extends ConsumerState<DailyNotesScreen> {
                       ref.read(homeSelectedViewProvider.notifier).state = view,
                 ),
                 Expanded(
-                  child: state.isLoading
+                  child: shouldShowNotesLoadingSpinner(notes: state)
                       ? const Center(child: CircularProgressIndicator())
                       : wideLayout
                       ? _buildDesktopTimeline(dailyByDate, scheduledByDate)
@@ -1154,7 +1170,8 @@ class _NoteListScreenState extends ConsumerState<NoteListScreen> {
 
     // The database watch normally updates the list after a pull. Invalidating
     // also makes a completed refresh visibly re-check the stream when the
-    // remote contained no changes.
+    // remote contained no changes. Home views keep prior AsyncValue data
+    // instead of replacing the list with a full-screen spinner.
     ref.invalidate(notesProvider);
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
@@ -1275,6 +1292,7 @@ class _NoteListScreenState extends ConsumerState<NoteListScreen> {
     final selectedView = ref.watch(homeSelectedViewProvider);
     if (selectedView == NoteListView.daily) return const DailyNotesScreen();
     final backupStatus = ref.watch(backupStatusProvider).asData?.value;
+    final isSyncing = ref.watch(syncControllerProvider).state.isSyncing;
     final notesState = ref.watch(notesProvider);
     final allNotes = notesState.asData?.value ?? const <Note>[];
     if (notesState.hasValue) unawaited(_generateMissingSummaries(allNotes));
@@ -1347,7 +1365,11 @@ class _NoteListScreenState extends ConsumerState<NoteListScreen> {
           ),
         ],
       ),
-      body: !_loadedPreferences || notesState.isLoading
+      body:
+          shouldShowNotesLoadingSpinner(
+            notes: notesState,
+            preferencesLoaded: _loadedPreferences,
+          )
           ? const Center(child: CircularProgressIndicator())
           : Center(
               child: ConstrainedBox(
@@ -1378,6 +1400,8 @@ class _NoteListScreenState extends ConsumerState<NoteListScreen> {
                         child: RefreshIndicator(
                           onRefresh: _refresh,
                           child: notesState.when(
+                            skipLoadingOnReload: true,
+                            skipLoadingOnRefresh: true,
                             data: (_) {
                               if (allNotes.isEmpty && !_onboardingComplete) {
                                 return _FirstRunWelcome(
@@ -1392,12 +1416,14 @@ class _NoteListScreenState extends ConsumerState<NoteListScreen> {
                               }
                               if (notes.isEmpty) {
                                 return _RefreshableMessage(
-                                  selectedView == NoteListView.all &&
-                                          !allSearch.isEmpty
-                                      ? 'No matching notes.'
-                                      : allNotes.isEmpty
-                                      ? 'No notes yet. Open Daily to start today\'s note.'
-                                      : 'No ${selectedView.name} yet.',
+                                  emptyNotesLibraryMessage(
+                                    view: selectedView,
+                                    hasAnyNotes: allNotes.isNotEmpty,
+                                    isSearching:
+                                        selectedView == NoteListView.all &&
+                                        !allSearch.isEmpty,
+                                    isSyncing: isSyncing,
+                                  ),
                                 );
                               }
                               return _HomeNoteList(
@@ -2192,7 +2218,8 @@ class NoteDetailScreen extends ConsumerWidget {
       future: ref.read(noteRepositoryProvider).get(id),
       builder: (context, snapshot) {
         final note = snapshot.data;
-        if (!snapshot.hasData) {
+        if (snapshot.connectionState == ConnectionState.waiting &&
+            !snapshot.hasData) {
           return const Scaffold(
             body: Center(child: CircularProgressIndicator()),
           );
@@ -3885,7 +3912,10 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
       stream: ref.read(noteRepositoryProvider).searchResults(_search),
       builder: (_, snapshot) {
         final results = snapshot.data ?? const <NoteSearchResult>[];
-        if (snapshot.connectionState == ConnectionState.waiting) {
+        if (shouldShowSearchLoadingSpinner(
+          isWaiting: snapshot.connectionState == ConnectionState.waiting,
+          hasPreviousResults: snapshot.hasData,
+        )) {
           return const Center(child: CircularProgressIndicator());
         }
         if (results.isEmpty && !_search.isEmpty) {
@@ -3991,30 +4021,43 @@ class _TodoListState extends ConsumerState<_TodoList> {
   }
 
   @override
-  Widget build(BuildContext context) => RefreshIndicator(
-    onRefresh: _refresh,
-    child: ref
-        .watch(todosProvider(widget.filter))
-        .when(
-          loading: () => const Center(child: CircularProgressIndicator()),
-          error: (error, _) =>
-              _RefreshableMessage('Unable to load to-dos: $error'),
-          data: (todos) {
-            final orderedTodos = preserveTodoOrder(todos, _previousOrder);
-            _previousOrder = orderedTodos;
-            return ListView(
+  Widget build(BuildContext context) {
+    final todosState = ref.watch(todosProvider(widget.filter));
+    return RefreshIndicator(
+      onRefresh: _refresh,
+      child: asyncValueWipesContent(todosState)
+          ? ListView(
               physics: const AlwaysScrollableScrollPhysics(),
-              children: [
-                for (final todosForNote in groupTodosByNote(orderedTodos))
-                  _TodoNoteGroup(
-                    key: ValueKey(todosForNote.first.noteId),
-                    todos: todosForNote,
-                  ),
+              children: const [
+                SizedBox(
+                  height: 240,
+                  child: Center(child: CircularProgressIndicator()),
+                ),
               ],
-            );
-          },
-        ),
-  );
+            )
+          : todosState.when(
+              skipLoadingOnReload: true,
+              skipLoadingOnRefresh: true,
+              loading: () => const Center(child: CircularProgressIndicator()),
+              error: (error, _) =>
+                  _RefreshableMessage('Unable to load to-dos: $error'),
+              data: (todos) {
+                final orderedTodos = preserveTodoOrder(todos, _previousOrder);
+                _previousOrder = orderedTodos;
+                return ListView(
+                  physics: const AlwaysScrollableScrollPhysics(),
+                  children: [
+                    for (final todosForNote in groupTodosByNote(orderedTodos))
+                      _TodoNoteGroup(
+                        key: ValueKey(todosForNote.first.noteId),
+                        todos: todosForNote,
+                      ),
+                  ],
+                );
+              },
+            ),
+    );
+  }
 }
 
 class _TodoNoteGroup extends StatelessWidget {
